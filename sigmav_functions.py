@@ -48,7 +48,8 @@ def sigmav_DT_BoschHale(ion_temp_profile: NDArray[float64]) -> NDArray[float64]:
         :math:`\langle \sigma v \rangle` in cm^3/s.
 
     """
-    ion_temp_profile = ion_temp_profile.magnitude
+    if hasattr(ion_temp_profile, "magnitude"):
+        ion_temp_profile = ion_temp_profile.magnitude
     # Bosch Hale coefficients for DT reaction
     C = [0.0, 1.173e-9, 1.514e-2, 7.519e-2, 4.606e-3, 1.35e-2, -1.068e-4, 1.366e-5]
     B_G = 34.3827
@@ -78,7 +79,9 @@ def sigmav_DD_Hively(ion_temp_profile: NDArray[float64]) -> tuple[NDArray[float6
     Returns:
         :math:`\langle \sigma v \rangle` tuple (total, D(d,p)T, D(d,n)3He) in cm^3/s.
     """
-    ion_temp_profile = ion_temp_profile.magnitude
+    if hasattr(ion_temp_profile, "magnitude"):
+        ion_temp_profile = ion_temp_profile.magnitude
+
     a_1 = [
         -15.511891,
         -35.318711,
@@ -140,7 +143,8 @@ def sigmav_DD_BoschHale(ion_temp_profile: NDArray[float64]) -> tuple[NDArray[flo
     Returns:
         :math:`\langle \sigma v \rangle` tuple (total, D(d,p)T, D(d,n)3He) in cm^3/s.
     """
-    ion_temp_profile = ion_temp_profile.magnitude
+    if hasattr(ion_temp_profile, "magnitude"):
+        ion_temp_profile = ion_temp_profile.magnitude
     # For D(d,n)3He
     cBH_1 = [((31.3970**2) / 4.0) ** (1.0 / 3.0), 5.65718e-12, 3.41e-03, 1.99e-03, 0, 1.05e-05, 0, 0]  # 3.72e-16,
 
@@ -197,7 +201,8 @@ def sigmav_DHe3_BoschHale(ion_temp_profile: NDArray[float64]) -> NDArray[float64
     Returns:
         :math:`\langle \sigma v \rangle` in cm^3/s.
     """
-    ion_temp_profile = ion_temp_profile.magnitude
+    if hasattr(ion_temp_profile, "magnitude"):
+        ion_temp_profile = ion_temp_profile.magnitude
     # For He3(d,p)4He
     cBH_1 = [
         ((68.7508**2) / 4.0) ** (1.0 / 3.0),

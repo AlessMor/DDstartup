@@ -28,7 +28,6 @@ def calculate_P_e_net_Paux(Pf:float, P_aux:float, eta_th:float) -> float:
         P_e_net: Net electrical power produced by the reactor [W]
     """
     Q = (Pf - P_aux)/P_aux 
-    # P_aux = Pf / (Q + 1) # [W] is the auxiliary heating power needed to maintain the plasma temperature
     P_e_net = eta_th * Pf - P_aux # [W] is the net electrical power produced by the reactor
     return P_e_net, Q
 
