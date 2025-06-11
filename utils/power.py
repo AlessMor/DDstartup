@@ -1,4 +1,5 @@
-from sigmav_functions import sigmav_DT_BoschHale
+from .sigmav_functions import sigmav_DT_BoschHale
+import numpy as np
 
 def calculate_P_e_net_Q(Pf:float, Q:float, eta_th:float) -> float:
     r"""Calculate the net electrical power produced by the reactor.
@@ -50,3 +51,4 @@ def fusion_power_50D50T(n_e_avg, T_e_avg, E_DT, V_plasma):
     sigmav_DT = sigmav_DT_BoschHale(T_e_avg) # Reactivity for DT reactions [m^3/s]
     Pf_DT = (n_e_avg / 2)**2 * sigmav_DT * E_DT * V_plasma  # Fusion power [W]
     return Pf_DT
+

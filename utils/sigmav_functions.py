@@ -1,7 +1,7 @@
 import numpy as np
 from numpy import float64
 from numpy.typing import NDArray
-from units_and_constants import unit
+from .units_and_constants import unit
 
 # <sigmav> formulas (from cfspopcon)
 

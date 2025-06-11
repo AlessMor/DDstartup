@@ -2,8 +2,8 @@ import numpy as np
 from numpy import float64
 from numpy.typing import NDArray
 
-from sigmav_functions import *
-from units_and_constants import unit
+from .sigmav_functions import *
+from .units_and_constants import unit
 
 
 def calculate_reaction_rates_DD(
@@ -127,3 +127,35 @@ def calculate_reaction_rates_DT(
     return dictionary
 
     
+    
+def pedestal_profile(x, value_center=1, value_ped=0.5, value_edge=0, transition_ratio=0.95):
+    """
+    Generate a position-dependent profile for a tokamak (e.g., density or temperature).
+
+    Parameters:
+    - x: Position array (e.g., along the minor radius, normalized 0 to 1).
+    - value_center: Value at the center (x=0).
+    - value_ped: Value at the pedestal/transition point.
+    - value_edge: Value at the edge (x=1).
+    - transition_ratio: Fraction of the minor radius where the transition occurs (0 < transition_ratio < 1).
+
+    Returns:
+    - Profile as a numpy array.
+    """
+    transition_point = transition_ratio * np.max(x)
+    profile = np.zeros_like(x)* value_center
+
+    # Parabolic region (x <= transition_point)
+    parabola_mask = x <= transition_point
+    profile[parabola_mask] = value_center - (value_center - value_ped) * (x[parabola_mask] / transition_point) ** 2
+
+    # Linear region (x > transition_point)
+    linear_mask = x > transition_point
+    profile[linear_mask] = value_ped + (value_edge - value_ped) * (x[linear_mask] - transition_point) / (np.max(x) - transition_point)
+
+    # Compute the volume-averaged value of the profile
+    numerator = np.trapz(profile * x, x)
+    denominator = np.trapz(x, x)
+    profile_avg = numerator / denominator
+
+    return profile, profile_avg
