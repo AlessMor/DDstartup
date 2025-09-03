@@ -1,7 +1,7 @@
 import numpy as np
 from numpy import float64
 from numpy.typing import NDArray
-from .units_and_constants import u
+from .units_and_constants import unit
 
 # <sigmav> formulas (from cfspopcon)
 
@@ -62,7 +62,7 @@ def sigmav_DT_BoschHale(ion_temp_profile: NDArray[float64]) -> NDArray[float64]:
     )
     eta = (B_G**2 / (4 * theta)) ** (1 / 3)
     sigmav = C[1] * theta * np.sqrt(eta / (mr_c2 * ion_temp_profile**3)) * np.exp(-3 * eta)
-    sigmav = sigmav * u.cm**3 / u.second  # Reactivity for DT reactions [cm^3/s]
+    sigmav = sigmav * unit.cm**3 / unit.second  # Reactivity for DT reactions [cm^3/s]
     return sigmav.to('m**3/s')  # type: ignore[no-any-return] # [m^3/s]
 
 
@@ -118,9 +118,9 @@ def sigmav_DD_Hively(ion_temp_profile: NDArray[float64]) -> tuple[NDArray[float6
         + a_2[5] * ion_temp_profile**4.0
     )
     sigmav_tot: NDArray[float64] = sigmav_1 + sigmav_2
-    sigmav_1 = sigmav_1 * u.cm**3 / u.second  # Reactivity for D(d,p)T reactions [cm^3/s]
-    sigmav_2 = sigmav_2 * u.cm**3 / u.second  # Reactivity for D(d,n)3He reactions [cm^3/s]
-    sigmav_tot = sigmav_tot * u.cm**3 / u.second  # Reactivity for DD reactions [cm^3/s]    
+    sigmav_1 = sigmav_1 * unit.cm**3 / unit.second  # Reactivity for D(d,p)T reactions [cm^3/s]
+    sigmav_2 = sigmav_2 * unit.cm**3 / unit.second  # Reactivity for D(d,n)3He reactions [cm^3/s]
+    sigmav_tot = sigmav_tot * unit.cm**3 / unit.second  # Reactivity for DD reactions [cm^3/s]    
     
     return sigmav_tot.to('m**3/s'), sigmav_1.to('m**3/s'), sigmav_2.to('m**3/s')  # [m^3/s]
 
@@ -178,9 +178,9 @@ def sigmav_DD_BoschHale(ion_temp_profile: NDArray[float64]) -> tuple[NDArray[flo
     sigmav_2: NDArray[float64] = cBH_2[1] * thetaBH_2 * np.sqrt(etaBH_2 / (mc2_2 * (ion_temp_profile**3.0))) * np.exp(-3.0 * etaBH_2)
     sigmav_tot: NDArray[float64] = sigmav_1 + sigmav_2
 
-    sigmav_1 = sigmav_1 * u.cm**3 / u.second  # Reactivity for D(d,p)T reactions [cm^3/s]
-    sigmav_2 = sigmav_2 * u.cm**3 / u.second  # Reactivity for D(d,n)3He reactions [cm^3/s]
-    sigmav_tot = sigmav_tot * u.cm**3 / u.second  # Reactivity for DD reactions [cm^3/s]
+    sigmav_1 = sigmav_1 * unit.cm**3 / unit.second  # Reactivity for D(d,p)T reactions [cm^3/s]
+    sigmav_2 = sigmav_2 * unit.cm**3 / unit.second  # Reactivity for D(d,n)3He reactions [cm^3/s]
+    sigmav_tot = sigmav_tot * unit.cm**3 / unit.second  # Reactivity for DD reactions [cm^3/s]
     
     return sigmav_tot.to('m**3/s'), sigmav_1.to('m**3/s'), sigmav_2.to('m**3/s')  # [m^3/s]
 
@@ -228,5 +228,5 @@ def sigmav_DHe3_BoschHale(ion_temp_profile: NDArray[float64]) -> NDArray[float64
     etaBH_1: float = cBH_1[0] / (thetaBH_1 ** (1.0 / 3.0))
 
     sigmav: NDArray[float64] = cBH_1[1] * thetaBH_1 * np.sqrt(etaBH_1 / (mc2_1 * (ion_temp_profile**3.0))) * np.exp(-3.0 * etaBH_1)
-    sigmav = sigmav * u.cm**3 / u.second  # Reactivity for DHe3 reactions [cm^3/s]
+    sigmav = sigmav * unit.cm**3 / unit.second  # Reactivity for DHe3 reactions [cm^3/s]
     return sigmav.to('m**3/s')  # [m^3/s]
