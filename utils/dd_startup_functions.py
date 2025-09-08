@@ -1,9 +1,6 @@
 from .sigmav_functions import sigmav_DT_BoschHale
 import numpy as np
-from utils.units_and_constants import (
-    E_DDp, E_DDn, E_DT, E_DHe3,
-    N_A, molecular_weight_T, u
-)
+from utils.units_and_constants import *
 from scipy.integrate import solve_ivp
 
 def calculate_P_e_net_Q(Pf:float, Q:float, eta_th:float, P_rad = 0) -> float:
@@ -166,4 +163,31 @@ def compute_startup_inventory(N_T_burn, tau_ifc, tau_ofc, TBR, TBE):
     # Initial inventory minus inventory at the minimum point
     return I_startup  # time and all inventories
 
+
+####################################################################################################################################################
+
+def calculate_P_e_net(P_fus_tot, P_aux=0, P_rad=0, eta_th=1.0, plant_avail=1.0):
+    r"""Calculate the net electrical power produced by the reactor.
+
+    Args:
+        P_fus_tot: Total fusion power [W]
+        P_aux: Auxiliary heating power [W]
+        eta_th: Thermal efficiency of the reactor [-]
+        plant_avail: Plant availability factor [-]
+
+    Returns:
+        P_e_net: Net electrical power produced by the reactor [W]
+    """
+    Q = (P_fus_tot - P_aux)/P_aux if P_aux > 0 else np.inf
+    P_e_net = plant_avail * (eta_th * (P_fus_tot - P_rad) - P_aux)  # [W] is the net electrical power produced by the reactor
+    return P_e_net, Q
+
+
+def injection_rate_fun(N_ifc, N_st, tau_ifc=12*u.h, N_st_min = 0.001*tritium_mass.to('kg').magnitude, injection_rate_max=1e20/u.s):
+    if N_st < N_st_min:
+        # if the inventory in the storage is below the minimum, do not inject
+        return 0 * u.s**(-1)
+    else:
+        # tries to inject all the T that enters the storage, limit to injection_rate_max
+        return min((N_ifc/tau_ifc - lambda_T*N_st), injection_rate_max).to('1/s')
 
