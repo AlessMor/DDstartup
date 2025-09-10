@@ -189,5 +189,5 @@ def injection_rate_fun(N_ifc, N_st, tau_ifc=12*u.h, N_st_min = 0.001*tritium_mas
         return 0 * u.s**(-1)
     else:
         # tries to inject all the T that enters the storage, limit to injection_rate_max
-        return min((N_ifc/tau_ifc - lambda_T*N_st), injection_rate_max).to('1/s')
+        return min(max((N_ifc/tau_ifc - lambda_T*N_st),0/u.s), injection_rate_max).to('1/s')
 
