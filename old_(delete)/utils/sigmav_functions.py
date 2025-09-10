@@ -1,7 +1,10 @@
 import numpy as np
 from numpy import float64
 from numpy.typing import NDArray
-from .units_and_constants import unit
+try:
+    from .units_and_constants import unit
+except ImportError:
+    from utils.units_and_constants import u as unit
 
 # <sigmav> formulas (from cfspopcon)
 
