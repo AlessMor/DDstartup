@@ -59,4 +59,19 @@ The following parameters have been selected for the analysis (suggested maximum 
 | Plant availability | A | - | 0.5 - 0.9 |
 | Cost of electricity | C<sub>el</sub> | $/kWh | 0.15 - 0.5 |
 
+## Tritium production model
+This section details the steps necessary to evaluate the tritium produced. Since two different methods have been considered, some steps may be explained for both methods.
+
+1. Define the ranges for the parameters used in the selected method, using the custom class [ParameterField](utils/custom_classes).  
+The code will then build the iterator element by creating all possible combinations
+2. The code will then evaluate the reactivities ($<\sigma v >$) for each reaction type, by using the correlations defined by Bosch and Hale and implemented in the cfspopcon Python package
+3. Depending on the method selected a different approach will be taken:
+
+| Case 1: Analysis up to $I_{target}$ | Case 2: Analysis up to D-T operation |
+| --- | --- |
+| The code will calculate the tritium production rates due to D - D and D - T neutrons breeding, as well as tritium diffusion. The startup time (time needed to reach the target inventory) will then be calculated taking into account trtium decay, with the formula: $t_{st} = -\frac{1}{\lambda} ln \left( 1-\frac{\lambda N_{target} }{ \dot{}_{tot} } \right) $  | The code will solve a system of equations using *solve_ivp* until a 50D-50T mixture is reached. The time value at which this mixture is achieved will be $t_{st}$|
+
+4. Once the time needed to reach the inventory target (for case 1) or to reach D-T operation (case 2) is known, the code will evaluate the net electric energy produced during operation, taking into account auxiliary heating, power loss due to radiation, thermal efficiency and availability.
+5. The resulting energy will be compared with the power that the same reactor would have produced if it was operated using a 50D-50T mixture from the beginning of operation. In this case different valeus for the power lossess due to radiation and auxiliary heating will be used.
+6. The economic losses are calculated by multiplying the cost of electricity by the energy lost by operating with a D-D startup rather than D-T.
 
