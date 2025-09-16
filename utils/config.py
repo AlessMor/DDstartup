@@ -6,7 +6,7 @@ total_time = 10*365*24*3600  # total operation time [s] - 10 years
 
 V_plasma_field = ParameterField(
     parametrization_type="normal", mean=150, std=15, unit=u.m**3, 
-    param_points=1, name="plasma_volume"
+    param_points=3, name="plasma_volume"
 )
 
 T_i_field = ParameterField(
@@ -20,8 +20,8 @@ n_tot_field = ParameterField(
 )
 
 tau_p_T_field = ParameterField(
-    parametrization_type="linear", min_val = 0.1, max_val=0.1, unit=u.s,
-    param_points=1, name="tau_p_T"
+    parametrization_type="linear", min_val = 0.1, max_val=5, unit=u.s,
+    param_points=5, name="tau_p_T"
 )
 
 tau_p_He3_field = ParameterField(

@@ -3,7 +3,7 @@ from tqdm import tqdm
 from scipy.integrate import solve_ivp
 
 # Configuration selector - set to True for test, False for full run
-USE_TEST = True  # Change this to False for full 24,300 combination run
+USE_TEST = False  # Change this to False for full 24,300 combination run
 
 verbose = True
 from utils.physics import sigmav_DT_BoschHale, sigmav_DD_BoschHale, sigmav_DHe3_BoschHale
