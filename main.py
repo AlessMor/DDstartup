@@ -136,7 +136,6 @@ def solve_ode_system(V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_lost_rad
         
         return [dN_ofc_dt, dN_ifc_dt, dN_stor_dt, dnT_dt]
         
-        return [dN_ofc_dt, dN_ifc_dt, dN_stor_dt, dnT_dt]
     
     # Event functions
     def DT_reached_event(t, y):
