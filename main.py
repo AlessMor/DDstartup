@@ -56,24 +56,24 @@ if verbose:
 # build iterator
 from itertools import product
 input_data = [
-    V_plasma_field.data.to_base_units().magnitude,
+    V_plasma_field.data.to('m^3').magnitude,
     T_i_field.data.to('keV').magnitude,
-    n_tot_field.data.to_base_units().magnitude,
-    tau_p_T_field.data.to_base_units().magnitude, 
-    tau_p_He3_field.data.to_base_units().magnitude,
-    P_aux_field.data.to_base_units().magnitude,
-    P_lost_rad_field.data.to_base_units().magnitude,
-    P_aux_all_DT_field.data.to_base_units().magnitude,
-    P_lost_rad_all_DT_field.data.to_base_units().magnitude,
+    n_tot_field.data.to('1/m^3').magnitude,
+    tau_p_T_field.data.to('s').magnitude, 
+    tau_p_He3_field.data.to('s').magnitude,
+    P_aux_field.data.to('W').magnitude,
+    P_lost_rad_field.data.to('W').magnitude,
+    P_aux_all_DT_field.data.to('W').magnitude,
+    P_lost_rad_all_DT_field.data.to('W').magnitude,
         
     TBR_DT_field.data.to_base_units().magnitude,
     TBR_DDn_field.data.to_base_units().magnitude,
-    tau_ifc_field.data.to_base_units().magnitude,
-    tau_ofc_field.data.to_base_units().magnitude,
+    tau_ifc_field.data.to('s').magnitude,
+    tau_ofc_field.data.to('s').magnitude,
     
     eta_th_field.data.to_base_units().magnitude,
     plant_avail_field.data.to_base_units().magnitude,
-    Cost_per_kWh_field.data.to_base_units().magnitude,
+    Cost_per_kWh_field.data.to('1/J').magnitude,
 ]
 
 # Create parameter ranges and calculate total combinations
@@ -255,64 +255,59 @@ def solve_ode_system(V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_lost_rad
     # Extract solution
     n_T = sol.y[3]  # Tritium density evolution
     n_D = n_tot - n_T  # Deuterium density
+    # Pre-compute common terms to avoid redundant calculations
+    n_D_squared = n_D * n_D  # Compute once, use multiple times
+    n_D_n_T = n_D * n_T      # Compute once for DT reactions
+    V_E_DDn = V_plasma * E_DDn  # Pre-compute scalar products
+    V_E_DDp = V_plasma * E_DDp
+    V_E_DT = V_plasma * E_DT
     
     # Calculate fusion powers (all in Watts)
-    P_DDn = n_D * n_D * sigmav_DD_n / 2 * V_plasma * E_DDn
-    P_DDp = n_D * n_D * sigmav_DD_p / 2 * V_plasma * E_DDp  
-    P_DT = n_D * n_T * sigmav_DT * V_plasma * E_DT
-    P_DT_full = n_tot/2 * n_tot/2 * sigmav_DT * V_plasma * E_DT  # Equivalent if always DT
+    P_DDn = n_D_squared * sigmav_DD_n / 2 * V_E_DDn
+    P_DDp = n_D_squared * sigmav_DD_p / 2 * V_E_DDp
+    P_DT = n_D_n_T * sigmav_DT * V_E_DT
+    P_DT_full = n_tot/2 * n_tot/2 * sigmav_DT * V_E_DT  # Equivalent if always DT
     
     # Determine integration time
     t_end = t_startup if np.isfinite(t_startup) else total_time
-    mask = sol.t <= t_end
     
-    # Calculate net energies (integrate up to startup time) - TOTAL ENERGY APPROACH
-    if np.sum(mask) > 1:
-         # Total fusion energies by integration
-        E_fusion_DDn = np.trapz(P_DDn[mask], sol.t[mask])
-        E_fusion_DDp = np.trapz(P_DDp[mask], sol.t[mask])
-        E_fusion_DT = np.trapz(P_DT[mask], sol.t[mask])
-        E_fusion_total_DD = E_fusion_DDn + E_fusion_DDp + E_fusion_DT
-        E_fusion_DT_full = P_DT_full * t_end  # Constant power * time
-        
-        # Total auxiliary energies (constant power * time)
-        E_aux_DD = P_aux * t_end
-        E_aux_DT_full = P_aux_all_DT * t_end
-        
-        # Total radiation losses (constant power * time)
-        E_rad_DD = P_lost_rad * t_end
-        E_rad_DT_full = P_lost_rad_all_DT * t_end
-        
-        # Net electrical energies (with thermal efficiency and plant availability)
-        E_e_net_DD = plant_avail * (eta_th * (E_fusion_total_DD - E_rad_DD) - E_aux_DD)
-        E_e_net_DT_full = plant_avail * (eta_th * (E_fusion_DT_full - E_rad_DT_full) - E_aux_DT_full)
-        
-        # Q factors based on total energy
-        Q_DD_total = E_fusion_total_DD / E_aux_DD if E_aux_DD > 0 else np.inf
-        Q_DT_full_total = E_fusion_DT_full / E_aux_DT_full if E_aux_DT_full > 0 else np.inf
-        
-        # Average powers for reference (divide total energy by time)
-        time_duration = t_end  # Use actual time duration, not sol.t[mask][-1]
-        P_fusion_DD_avg = E_fusion_total_DD / time_duration if time_duration > 0 else 0.0
-        P_e_net_DD_avg = E_e_net_DD / time_duration if time_duration > 0 else 0.0
-        P_e_net_DT_full_avg = E_e_net_DT_full / time_duration if time_duration > 0 else 0.0
-        
-    else:
-        E_fusion_total_DD = 0.0
-        E_fusion_DT_full = 0.0
-        E_e_net_DD = 0.0
-        E_e_net_DT_full = 0.0
-        Q_DD_total = 0.0
-        Q_DT_full_total = 0.0
-        P_fusion_DD_avg = 0.0
-        P_e_net_DD_avg = 0.0
-        P_e_net_DT_full_avg = 0.0
+    """
+    THIS APPROACH CAN BE PROBLEMATIC IF END CRITERIA IS DEACTIVATED
+    """
+    # Total fusion energies by integration
+    E_fusion_DDn = np.trapezoid(P_DDn, sol.t)
+    E_fusion_DDp = np.trapezoid(P_DDp, sol.t)
+    E_fusion_DT = np.trapezoid(P_DT, sol.t)
+    E_fusion_total_DD = E_fusion_DDn + E_fusion_DDp + E_fusion_DT
+    E_fusion_DT_full = P_DT_full * t_end  # Constant power * time
+    
+    # Pre-compute auxiliary and radiation energies (scalar operations)
+    E_aux_DD = P_aux * t_end
+    E_aux_DT_full = P_aux_all_DT * t_end
+    E_rad_DD = P_lost_rad * t_end
+    E_rad_DT_full = P_lost_rad_all_DT * t_end
+
+    # Net electrical energies (with thermal efficiency and plant availability)
+    E_e_net_DD = plant_avail * (eta_th * (E_fusion_total_DD - E_rad_DD) - E_aux_DD)
+    E_e_net_DT_full = plant_avail * (eta_th * (E_fusion_DT_full - E_rad_DT_full) - E_aux_DT_full)
+    
+    # Q factors based on total energy
+    Q_DD_total = E_fusion_total_DD / E_aux_DD if E_aux_DD > 0 else np.inf
+    Q_DT_full_total = E_fusion_DT_full / E_aux_DT_full if E_aux_DT_full > 0 else np.inf
+    
+    # Average powers for reference (divide total energy by time)
+    P_fusion_DD_avg = E_fusion_total_DD / t_end
+    P_e_net_DD_avg = E_e_net_DD / t_end
+    P_e_net_DT_full_avg = E_e_net_DT_full / t_end
+    
+    E_lost = E_e_net_DT_full - E_e_net_DD
+    Dollar_lost = E_lost * Cost_per_kWh  # Cost in dollars (NB Cost is in 1/J)
     
     return {
         't_startup': t_startup,
-        'P_DT': np.mean(P_DT[mask]) if np.sum(mask) > 0 else 0.0,
-        'P_DDn': np.mean(P_DDn[mask]) if np.sum(mask) > 0 else 0.0,
-        'P_DDp': np.mean(P_DDp[mask]) if np.sum(mask) > 0 else 0.0,
+        'P_DT': P_DT,
+        'P_DDn': P_DDn,
+        'P_DDp': P_DDp,
         'P_DT_full': P_DT_full,  # Constant scalar value
         'P_fusion_DD_avg': P_fusion_DD_avg,  # Average fusion power during startup
         'P_e_net_DD_avg': P_e_net_DD_avg,    # Average net electrical power
@@ -323,8 +318,8 @@ def solve_ode_system(V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_lost_rad
         'E_fusion_DT_full': E_fusion_DT_full,        # Total DT-equivalent fusion energy
         'E_e_net_DD': E_e_net_DD,                    # Total net electrical energy (DD startup)
         'E_e_net_DT_full': E_e_net_DT_full,          # Total net electrical energy (DT full)
-        'E_lost': E_e_net_DT_full - E_e_net_DD,      # Energy difference
-        'Dollar_Lost': (E_e_net_DT_full - E_e_net_DD) * Cost_per_kWh,  # Cost in dollars
+        'E_lost': E_lost,      # Energy difference
+        'Dollar_Lost': Dollar_lost,  # Cost in dollars
         'n_T_final': n_T[-1] if len(n_T) > 0 else 0.0,
         'sol_success': sol.success
     }
