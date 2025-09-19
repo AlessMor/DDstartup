@@ -19,6 +19,7 @@ class ParameterField:
         std: Optional[float] = None,           # For normal
         min_val: Optional[float] = None,       # For linear
         max_val: Optional[float] = None,       # For linear
+        vector: Optional[Sequence[float]] = None,  # For scalar
         # Spatial options
         spatial_profile: Optional[str] = None,  # None, "uniform", or "pedestal"
         space_points: int = 1,
@@ -40,8 +41,8 @@ class ParameterField:
         self.value_edge = value_edge
         
         # Validate parametrization type
-        if parametrization_type not in ["normal", "linear", "scalar"]:
-            raise ValueError(f"parametrization_type must be 'normal', 'linear', or 'scalar', got {parametrization_type}")
+        if parametrization_type not in ["normal", "linear", "scalar", "vector"]:
+            raise ValueError(f"parametrization_type must be 'normal', 'linear', 'scalar', or 'vector', got {parametrization_type}")
         
         # check mean, std, min_val, max_val - they should be floats
               # if they are pint quantities, convert to float and use the pint quantity for self.unit
@@ -95,6 +96,13 @@ class ParameterField:
             if mean is None:
                 raise ValueError("mean is required for scalar parametrization")
             param_values = np.full(param_points, mean)
+        
+        elif parametrization_type == "vector":
+            if vector is None:
+                raise ValueError("vector is required for vector parametrization")
+            if len(vector) != param_points:
+                raise ValueError("Length of vector must match param_points")
+            param_values = np.array(vector)
         
         # Fix the broadcasting issue
         base_data = param_values  # param_values is already shape (param_points,)

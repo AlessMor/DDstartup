@@ -436,7 +436,7 @@ result_fields = [
 ]
 
 # Create HDF5 file and pre-allocate datasets
-chunk_size = 10000 if USE_TEST else 1000 
+chunk_size = 10000 if USE_TEST else 10000 
 write_chunk_size = min(chunk_size, n_combinations)
 
 with h5py.File(output_filename, 'w') as h5_file:
@@ -506,7 +506,19 @@ with h5py.File(output_filename, 'w') as h5_file:
                     if field == 'sol_success':
                         datasets[field][abs_idx] = bool(value)
                     else:
-                        datasets[field][abs_idx] = float(value) if np.isfinite(value) else float(value)
+                        # Ensure value is scalar before checking if finite
+                        if hasattr(value, '__len__') and not isinstance(value, str):
+                            # If it's an array, take the last value or mean
+                            if field in ['P_DT', 'P_DDn', 'P_DDp']:
+                                # For power arrays, take the final value
+                                scalar_value = float(value[-1]) if len(value) > 0 else np.inf
+                            else:
+                                # For other arrays, take mean or first value
+                                scalar_value = float(np.mean(value)) if len(value) > 0 else np.inf
+                        else:
+                            scalar_value = float(value)
+                        
+                        datasets[field][abs_idx] = scalar_value if np.isfinite(scalar_value) else scalar_value
                 else:
                     # Default values for missing fields
                     if field == 'sol_success':
