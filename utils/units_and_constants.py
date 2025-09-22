@@ -12,15 +12,15 @@ except Exception:
     pass
 
 # constants
-N_A = const.N_A * u.mol**-1  # Avogadro's number [mol^-1]
+N_A = (const.N_A * u.mol**-1).to('1/mol').magnitude  # Avogadro's number [mol^-1]
 
 # Energy released by fusion reactions
-E_DDp = 4.03*u("MeV").to("J") # [J] energy released by DDp reactions
-E_DDn = 3.46*u("MeV").to("J") # [J] energy released by DDn reactions
-E_DT = 17.6*u("MeV").to("J") # [J] energy released by DT reactions
-E_DHe3 = 18.0153*u("MeV").to("J") # [J] energy released by DHe3 reactions
+E_DDp = 4.03*u("MeV").to("J").magnitude # [J] energy released by DDp reactions
+E_DDn = 3.46*u("MeV").to("J").magnitude # [J] energy released by DDn reactions
+E_DT = 17.6*u("MeV").to("J").magnitude # [J] energy released by DT reactions
+E_DHe3 = 18.0153*u("MeV").to("J").magnitude # [J] energy released by DHe3 reactions
 
 # quantities related to Tritium
-molecular_weight_T = 3.016 * u.gram / u.mol  # Molecular weight of ATOMIC tritium [g/mol]
-tritium_mass = molecular_weight_T/N_A
-lambda_T = np.log(2) / ((12.32 * u.year).to('s'))
+molecular_weight_T = (3.016 * u.gram / u.mol).to('kg/mol').magnitude  # Molecular weight of ATOMIC tritium [g/mol]
+tritium_mass = (molecular_weight_T/N_A)  # Mass of a tritium atom [kg]
+lambda_T = (np.log(2) / ((12.32 * u.year).to('s'))).magnitude
