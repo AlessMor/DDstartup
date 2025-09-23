@@ -14,13 +14,13 @@ from pathlib import Path
 # =============================================================================
 
 # File selection - Choose which HDF5 file to analyze
-SELECTED_FILE = "dd_startup_results_20250919_152037.h5"  # Set to None for automatic selection, or specify filename
+SELECTED_FILE = "dd_startup_20250923_112937_parametric_lumped.h5"  # Set to None for automatic selection, or specify filename
 
 # Target variable selection - Choose which output metric to visualize
-TARGET_VARIABLE = 't_startup'    
+TARGET_VARIABLE = 't_startup'  # Example: 'Dollar_Lost', 't_startup', 'P_e_net_DD_avg', etc.
 
 # Filter (sets the maximum value for color scaling)
-FILTER = None        # Set to threshold value or None
+FILTER = None       # Set to threshold value or None
 
 # Color and styling options
 N_COLOR_CHUNKS = 6           # Number of discrete color levels (None sets to gradient)
@@ -71,10 +71,24 @@ with h5py.File(selected_file, 'r') as f:
 if not data:
     raise ValueError("No valid 1D datasets found in the HDF5 file.")
 
+# print minimum and maximum of target variable
+if TARGET_VARIABLE in data:
+    target_values = data[TARGET_VARIABLE]
+    finite_target_values = target_values[np.isfinite(target_values)]
+    if finite_target_values.size > 0:
+        print(f"Target variable '{TARGET_VARIABLE}' stats: min={finite_target_values.min()}, max={finite_target_values.max()}")
+    else:
+        print(f"Target variable '{TARGET_VARIABLE}' contains no finite values.")
+else:
+    raise KeyError(f"Target variable '{TARGET_VARIABLE}' not found in the data.")
+
 # =============================================================================
 # 3. DataFrame Creation and Filtering
 # =============================================================================
 df = pd.DataFrame(data)
+# Convert Cost_per_kWh from 1/J to 1/kWh if present
+if 'Cost_per_kWh' in df.columns:
+    df['Cost_per_kWh'] = df['Cost_per_kWh'] * 3.6e6
 
 # Filter out infinite/NaN target values
 finite_mask = np.isfinite(df[TARGET_VARIABLE])
@@ -93,23 +107,98 @@ output_like = [
     'P_DT', 'P_DDn', 'P_DDp', 'P_DT_full', 'P_fusion_DD_avg', 'P_e_net_DD_avg',
     'P_e_net_DT_full_avg', 'Q_DD_total', 'Q_DT_full_total', 'E_fusion_total_DD',
     'E_fusion_DT_full', 'E_e_net_DD', 'E_e_net_DT_full', 'E_lost', 'Dollar_Lost',
-    'n_T_final', 'sol_success', 't_startup', 'tau_ifc', 'tau_ofc'
+    'n_T_final', 'sol_success', 't_startup', 'tau_ifc', 'tau_ofc', 'I_target'
 ]
-input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
 
+# Determine input axes based on file name
+selected_file_str = str(selected_file.name)
+if 'T_seeded' in selected_file_str:
+    # Exclude tau_p_He3, include tau_ifc and tau_ofc
+    input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
+    # Remove tau_p_He3 if present, add tau_ifc and tau_ofc if present and not already included
+    input_parameters = [p for p in input_parameters if p != 'tau_p_He3']
+    for p in ['tau_ifc', 'tau_ofc']:
+        if p in df_filtered.columns and p not in input_parameters:
+            input_parameters.append(p)
+elif 'lumped' in selected_file_str:
+    # Exclude tau_ifc and tau_ofc, include tau_p_He3 and I_target
+    input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
+    # Remove tau_ifc and tau_ofc if present, add tau_p_He3 and I_target if present and not already included
+    input_parameters = [p for p in input_parameters if p not in ['tau_ifc', 'tau_ofc']]
+    for p in ['tau_p_He3', 'I_target']:
+        if p in df_filtered.columns and p not in input_parameters:
+            input_parameters.append(p)
+else:
+    # Default: all columns except outputs and target
+    input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
+
+# Define units for parameters (add as needed)
+PARAM_UNITS = {
+    'V_plasma': 'm³',
+    'n_tot': 'm⁻³',
+    'T_i': 'keV',
+    'P_aux': 'W',
+    'P_aux_all_DT': 'W',
+    'P_lost_rad': 'W',
+    'P_lost_rad_all_DT': 'W',
+    'tau_p_T': 's',
+    'tau_p_He3': 's',
+    'I_target': 'A',
+    'Cost_per_kWh': '1/kWh',
+    'Dollar_Lost': '$',
+    't_startup': 's',
+    'P_e_net_DD_avg': 'W',
+    'P_e_net_DT_full_avg': 'W',
+    'P_DT': 'W',
+    'P_DDn': 'W',
+    'P_DDp': 'W',
+    'P_DT_full': 'W',
+    'P_fusion_DD_avg': 'W',
+    'Q_DD_total': 'J',
+    'Q_DT_full_total': 'J',
+    'E_fusion_total_DD': 'J',
+    'E_fusion_DT_full': 'J',
+    'E_e_net_DD': 'J',
+    'E_e_net_DT_full': 'J',
+    'E_lost': 'J',
+    'n_T_final': 'm⁻³',
+    'tau_ifc': 's',
+    'tau_ofc': 's',
+    'sigmav_DT': 'm³/s',
+    'sigmav_DD_p': 'm³/s',
+    'sigmav_DD_n': 'm³/s',
+    'injection_rate_max': 's⁻¹',
+    # Add more as needed
+}
 # =============================================================================
 # 5. Color Mapping (Green to Red, Discrete Chunks)
 # =============================================================================
 def get_discrete_colorscale(n_chunks):
     # Green (low) to Red (high)
-    base_colors = ['#2E8B57', '#32CD32', '#FFD700', '#FF8C00', '#FF4500', '#8B0000']
+    # Vibrant green to red (no dull/dark colors)
+    base_colors = [
+        '#00FF00',  # bright green
+        '#7FFF00',  # chartreuse
+        '#FFFF00',  # yellow
+        '#FFD700',  # gold
+        '#FF9900',  # orange
+        '#FF4500',  # orange-red
+        '#FF0000',  # bright red
+    ]
     if n_chunks > len(base_colors):
-        # Interpolate if more chunks needed
         from matplotlib import cm
         cmap = cm.get_cmap('RdYlGn_r', n_chunks)
-        return [[i/(n_chunks-1), f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}'] for i, (r,g,b,_) in enumerate(cmap(np.linspace(0,1,n_chunks)))]
+        color_list = [f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}' for r,g,b,_ in cmap(np.linspace(0,1,n_chunks))]
     else:
-        return [[i/(n_chunks-1), base_colors[i]] for i in range(n_chunks)]
+        color_list = base_colors[:n_chunks]
+    # Repeat each color for its full interval
+    colorscale = []
+    for i, color in enumerate(color_list):
+        frac0 = i / n_chunks
+        frac1 = (i + 1) / n_chunks
+        colorscale.append([frac0, color])
+        colorscale.append([frac1, color])
+    return colorscale
 
 if N_COLOR_CHUNKS:
     # Discretize target variable
@@ -126,10 +215,17 @@ if N_COLOR_CHUNKS:
     color_data = color_indices
     colorscale = get_discrete_colorscale(N_COLOR_CHUNKS)
     cmin, cmax = 0, N_COLOR_CHUNKS-1
+
+    # Prepare colorbar tickvals and ticktext
+    tickvals = list(range(N_COLOR_CHUNKS))
+    # Show intervals as [low, high)
+    ticktext = [f"{chunk_bounds[i]:.2e} – {chunk_bounds[i+1]:.2e}" for i in range(N_COLOR_CHUNKS)]
 else:
     color_data = df_filtered[TARGET_VARIABLE]
     colorscale = 'RdYlGn_r'
     cmin, cmax = color_data.min(), color_data.max()
+    tickvals = None
+    ticktext = None
 
 # =============================================================================
 # 6. Parallel Coordinates Plot
@@ -138,8 +234,13 @@ dimensions = []
 for param in input_parameters:
     values = df_filtered[param]
     unique_vals = np.sort(np.unique(values))
+    # Split label on two lines if units exist
+    if param in PARAM_UNITS:
+        label = f"{param}<br>[{PARAM_UNITS[param]}]"
+    else:
+        label = param
     dim = dict(
-        label=param,
+        label=label,
         values=values,
         range=[values.min(), values.max()]
     )
@@ -148,8 +249,12 @@ for param in input_parameters:
     dimensions.append(dim)
 # Add target variable as last axis
 values = df_filtered[TARGET_VARIABLE]
+if TARGET_VARIABLE in PARAM_UNITS:
+    target_label = f"{TARGET_VARIABLE}<br>[{PARAM_UNITS[TARGET_VARIABLE]}]"
+else:
+    target_label = TARGET_VARIABLE
 dimensions.append(dict(
-    label=TARGET_VARIABLE,
+    label=target_label,
     values=values,
     range=[values.min(), values.max()]
 ))
@@ -162,9 +267,13 @@ fig = go.Figure(data=go.Parcoords(
         cmin=cmin,
         cmax=cmax,
         colorbar=dict(
-            title=TARGET_VARIABLE,
+            title=f"{TARGET_VARIABLE} [{PARAM_UNITS[TARGET_VARIABLE]}]" if TARGET_VARIABLE in PARAM_UNITS else TARGET_VARIABLE,
             thickness=20,
-            len=0.8
+            len=0.8,
+            tickvals=tickvals,
+            ticktext=ticktext,
+            tickmode='array',
+            dtick=1
         )
     ),
     dimensions=dimensions

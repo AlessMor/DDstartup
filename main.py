@@ -10,8 +10,8 @@ from utils.tools import profile_system
 
 verbose = True
 input_file_name = "config"  # or any other config file name (without .py)
-analysis_type = 'T_seeded'               # 'T_seeded'/'lumped'
-analysis_method = 'parametric'          # 'parametric'/'sobol'
+analysis_type = 'lumped'               # 'T_seeded'/'lumped'
+analysis_method = 'sobol'          # 'parametric'/'sobol'
 
 
 
@@ -166,14 +166,15 @@ if analysis_method == 'sobol':
     else:
 
         poly_expansion = cp.generate_expansion(order, joint_dist)
-        print("Fitting PCE surrogate model...")
+        print("Fitting PCE surrogate model...") if verbose else None
         pce_model = cp.fit_regression(poly_expansion, valid_samples.T, valid_dollars)
-        print("Computing Sobol indices...")
+        print("Computing first order Sobol indices...") if verbose else None
         sobol_first = cp.Sens_m(pce_model, joint_dist)
+        print("Computing total order Sobol indices...") if verbose else None
         sobol_total = cp.Sens_t(pce_model, joint_dist)
-        print("\nSensitivity Analysis Results:")
-        print("Parameter\t\tFirst-order\tTotal-order")
-        print("------------------------------------------------")
+        print("\nSensitivity Analysis Results:") if verbose else None
+        print("Parameter\t\tFirst-order\tTotal-order")  if verbose else None
+        print("------------------------------------------------") if verbose else None
         for i, param_name in enumerate(distr_params.keys()):
             print(f"{param_name:15s}\t{sobol_first[i]:.6f}\t{sobol_total[i]:.6f}")
         plt.figure(figsize=(10, 6))
