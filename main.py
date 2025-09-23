@@ -1,18 +1,25 @@
 import os, time, h5py
 import numpy as np
 from tqdm import tqdm
-
+import importlib
+import warnings
+warnings.filterwarnings("ignore", module="scipy.integrate")
 # --- Custom modules ---
-from utils.tools import choose_batch_size
+from utils.tools import profile_system
 # ======================== SETUP ========================
 
-from inputs.config_test import *            # input fields and parameters
 verbose = True
-analysis_type = 'T_seeded'               # 'T_seeded' or 'lumped'
+input_file_name = "config"  # or any other config file name (without .py)
+analysis_type = 'T_seeded'               # 'T_seeded'/'lumped'
+analysis_method = 'parametric'          # 'parametric'/'sobol'
 
 
+
+config_module = importlib.import_module(f"inputs.{input_file_name}")
+for k, v in config_module.__dict__.items():
+    if not k.startswith("_"):
+        globals()[k] = v
 # ======================== INPUT PREPARATION ========================
-
 
 # Select input_data and param_names based on analysis_type
 if analysis_type == 'T_seeded':
@@ -63,10 +70,143 @@ elif analysis_type == 'lumped':
         'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'plant_avail', 'Cost_per_kWh', 
     ]
 
+
 if verbose:
     print("Input parameter fields:")
     for name, arr in zip(param_names, input_data):
         print(f" - {name}: {arr.shape[0]} points, range [{arr.min():.3e}, {arr.max():.3e}]")
+
+chunk_size, batch_size, n_jobs, N_SAMPLES, order = profile_system()
+if verbose:
+    print(f"System profile suggests chunk_size={chunk_size}, batch_size={batch_size}, n_jobs={n_jobs}, N_SAMPLES={N_SAMPLES}, order={order}")
+
+
+# ======================== SOBOL/CHAOSPY BRANCH ========================
+if analysis_method == 'sobol':
+    import chaospy as cp
+    from joblib import Parallel, delayed
+    import matplotlib.pyplot as plt
+    if analysis_type == 'T_seeded':
+        from utils.Tseeded_functions import compute_single_combination
+    elif analysis_type == 'lumped':
+        from utils.lump_functions import compute_single_combination
+    else:
+        print(f"Error: Unknown analysis type: {analysis_type}")
+        exit()
+    # Define parameter distributions (adjust as needed)
+    param_bounds = [(arr.min(), arr.max()) for arr in input_data]
+    print("Parameter bounds for Sobol analysis:")
+    for name, (low, high) in zip(param_names, param_bounds):
+        print(f"  {name}: min={low}, max={high}")
+
+    # Separate variable and constant parameters
+    variable_params = [(i, name, low, high) for i, (name, (low, high)) in enumerate(zip(param_names, param_bounds)) if high > low]
+    constant_params = [(i, name, low) for i, (name, (low, high)) in enumerate(zip(param_names, param_bounds)) if high == low]
+
+    if constant_params:
+        print("The following parameters are constants in Sobol analysis:")
+        for i, name, val in constant_params:
+            print(f"  {name}: {val}")
+
+    if not variable_params:
+        raise ValueError("No parameters with a valid range for Sobol analysis.")
+
+    # Build distributions for variable parameters
+    sobol_param_names = [name for i, name, low, high in variable_params]
+    distr_params = {name: cp.Uniform(low, high) for i, name, low, high in variable_params}
+    joint_dist = cp.J(*distr_params.values())
+
+    # Generate Sobol samples for variable parameters
+
+    samples_var = joint_dist.sample(N_SAMPLES, rule='sobol').T  # shape: (N_SAMPLES, n_var_params)
+
+    # For each sample, build the full parameter vector (variable + constants)
+    def build_full_sample(sample_var):
+        full = []
+        var_iter = iter(sample_var)
+        for i in range(len(param_names)):
+            if any(i == idx for idx, _, _, _ in variable_params):
+                full.append(next(var_iter))
+            else:
+                # Find the constant value
+                val = [val for idx, _, val in constant_params if idx == i][0]
+                full.append(val)
+        return np.array(full)
+
+    samples_full = np.array([build_full_sample(sample_var) for sample_var in samples_var])
+
+    # Prepare for parallel evaluation
+    def run_sample(idx, sample):
+        try:
+            input_arrays_flat_sample = [np.array([val]) for val in sample]
+            param_shapes_array_sample = np.array([1]*len(sample), dtype=np.int64)
+            if analysis_type == 'T_seeded':
+                result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample, total_time)
+            else:
+                result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample)
+            return result
+        except Exception as e:
+            return {'error': str(e)}
+
+    print(f"Evaluating {N_SAMPLES} Sobol samples in parallel...")
+    results = Parallel(n_jobs=-1, verbose=0)(delayed(run_sample)(i, sample) for i, sample in enumerate(samples_full))
+
+    # Extract output metric (Dollar_Lost)
+    dollar_lost = np.array([
+        r['Dollar_Lost'] if (r is not None and 'Dollar_Lost' in r and np.isfinite(r['Dollar_Lost'])) else np.nan
+        for r in results
+    ])
+    valid_mask = np.isfinite(dollar_lost)
+    valid_samples = samples_full[valid_mask]
+    valid_dollars = dollar_lost[valid_mask]
+
+    print(f"Valid results: {np.sum(valid_mask)}/{N_SAMPLES}")
+    if np.sum(valid_mask) < 10:
+        print("Not enough valid samples for Sobol analysis.")
+    else:
+
+        poly_expansion = cp.generate_expansion(order, joint_dist)
+        print("Fitting PCE surrogate model...")
+        pce_model = cp.fit_regression(poly_expansion, valid_samples.T, valid_dollars)
+        print("Computing Sobol indices...")
+        sobol_first = cp.Sens_m(pce_model, joint_dist)
+        sobol_total = cp.Sens_t(pce_model, joint_dist)
+        print("\nSensitivity Analysis Results:")
+        print("Parameter\t\tFirst-order\tTotal-order")
+        print("------------------------------------------------")
+        for i, param_name in enumerate(distr_params.keys()):
+            print(f"{param_name:15s}\t{sobol_first[i]:.6f}\t{sobol_total[i]:.6f}")
+        plt.figure(figsize=(10, 6))
+        x = np.arange(len(distr_params))
+        width = 0.35
+        plt.bar(x - width/2, sobol_first, width, label='First-order')
+        plt.bar(x + width/2, sobol_total, width, label='Total-order')
+        plt.xlabel('Parameters')
+        plt.ylabel('Sobol Indices')
+        plt.title('Sensitivity Analysis (Dollar_Lost)')
+        plt.xticks(x, list(distr_params.keys()), rotation=45)
+        plt.legend()
+        plt.tight_layout()
+
+        # Save plot to outputs/ with timestamp and analysis info
+        import time
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        plot_filename = f"outputs/sobol_indices_{timestamp}_{analysis_method}_{analysis_type}.png"
+        plt.savefig(plot_filename, dpi=200)
+        print(f"Sobol indices plot saved to {plot_filename}")
+        plt.close()
+
+        # Save Sobol indices to txt file
+        txt_filename = f"outputs/sobol_indices_{timestamp}_{analysis_method}_{analysis_type}.txt"
+        with open(txt_filename, 'w') as ftxt:
+            ftxt.write("Parameter\tFirst-order\tTotal-order\n")
+            for i, param_name in enumerate(distr_params.keys()):
+                ftxt.write(f"{param_name}\t{sobol_first[i]:.6f}\t{sobol_total[i]:.6f}\n")
+        print(f"Sobol indices saved to {txt_filename}")
+    exit()
+
+# ======================== PARAMETRIC ANALYSIS BRANCH ========================
+# (rest of your code remains unchanged)
 
 # Compute parameter space size
 param_shapes = [arr.shape[0] for arr in input_data]
@@ -85,7 +225,7 @@ param_shapes_array = np.array(param_shapes, dtype=np.int64)
 
 # Timestamped filename
 timestamp = time.strftime("%Y%m%d_%H%M%S")
-output_filename = f"outputs/dd_startup_results_{timestamp}.h5"
+output_filename = f"outputs/dd_startup_{timestamp}_{analysis_method}_{analysis_type}.h5"
 
 if verbose:
     print(f"Streaming results to {output_filename}...")
@@ -102,9 +242,7 @@ result_fields = [
     'E_lost', 'Dollar_Lost', 'n_T_final', 'sol_success'
 ]
 
-chunk_size = min(10_000, n_combinations)  
-batch_size = choose_batch_size(n_combinations)
-n_jobs = -1             # use all available cores
+
 
 
 
@@ -166,7 +304,7 @@ with h5py.File(output_filename, 'w') as h5_file:
             task_args = [(idx, input_arrays_flat, param_shapes_array, total_time) for idx in chunk_indices]
             task_func = compute_single_combination
         else: 
-            print("Error: Unknown analysis type.")
+            print(f"Error: Unknown analysis type: {analysis_type}")
             break
 
         chunk_results = [None] * (chunk_end - chunk_start)
