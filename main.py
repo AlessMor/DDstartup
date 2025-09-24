@@ -26,8 +26,8 @@ if analysis_type == 'T_seeded':
     input_data = [
         V_plasma_field.data.to('m^3').magnitude,
         T_i_field.data.to('keV').magnitude,
-        # n_tot_field.data.to('1/m^3').magnitude,
-        # tau_p_T_field.data.to('s').magnitude,
+        n_tot_field.data.to('1/m^3').magnitude,
+        tau_p_T_field.data.to('s').magnitude,
         P_aux_field.data.to('W').magnitude,
         P_lost_rad_field.data.to('W').magnitude,
         P_aux_all_DT_field.data.to('W').magnitude,
@@ -50,8 +50,8 @@ elif analysis_type == 'lumped':
     input_data = [
         V_plasma_field.data.to('m^3').magnitude,
         T_i_field.data.to('keV').magnitude,
-        # n_tot_field.data.to('1/m^3').magnitude,
-        # tau_p_T_field.data.to('s').magnitude,
+        n_tot_field.data.to('1/m^3').magnitude,
+        tau_p_T_field.data.to('s').magnitude,
         tau_p_He3_field.data.to('s').magnitude,
         P_aux_field.data.to('W').magnitude,
         P_lost_rad_field.data.to('W').magnitude,
@@ -233,14 +233,19 @@ if verbose:
 
 # Fields to be saved in HDF5
 result_fields = [
-    'linear_index', 'V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3', 
-    'P_aux', 'P_lost_rad', 'P_aux_all_DT', 'P_lost_rad_all_DT',
-    'TBR_DT', 'TBR_DDn', 'tau_ifc', 'tau_ofc', 'eta_th', 'plant_avail', 'Cost_per_kWh',
-    'injection_rate_max', 'sigmav_DT', 'sigmav_DD_p', 'sigmav_DD_n',
-    't_startup', 'P_DT', 'P_DDn', 'P_DDp', 'P_DT_full', 'P_fusion_DD_avg',
-    'P_e_net_DD_avg', 'P_e_net_DT_full_avg', 'Q_DD_total', 'Q_DT_full_total',
-    'E_fusion_total_DD', 'E_fusion_DT_full', 'E_e_net_DD', 'E_e_net_DT_full',
-    'E_lost', 'Dollar_Lost', 'n_T_final', 'sol_success'
+    # INPUTS
+    'V_plasma', 'n_tot', 'T_i', 'tau_p_T', 'tau_p_He3', 
+    'P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT',
+    'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn',
+    'eta_th', 'plant_avail', 'Cost_per_kWh', 'I_target',
+    
+
+    # OUTPUTS
+    't_startup', 'Dollar_Lost', 'E_e_net_DD', 'E_e_net_DT_full', 'E_fusion_DT_full',
+    'E_fusion_total_DD', 'E_lost', 'I_target', 'Q_DD_total', 'Q_DT_full_total',
+    'P_DT', 'P_DT_full', 'P_DDn', 'P_DDp', 'P_e_net_DD_avg', 'P_e_net_DT_full_avg',
+    'P_fusion_DD_avg', 'injection_rate_max', 'linear_index', 'n_T_final',
+    'sigmav_DD_n', 'sigmav_DD_p', 'sigmav_DT', 'sol_success', 
 ]
 
 
