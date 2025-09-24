@@ -26,8 +26,8 @@ if analysis_type == 'T_seeded':
     input_data = [
         V_plasma_field.data.to('m^3').magnitude,
         T_i_field.data.to('keV').magnitude,
-        n_tot_field.data.to('1/m^3').magnitude,
-        tau_p_T_field.data.to('s').magnitude,
+        # n_tot_field.data.to('1/m^3').magnitude,
+        # tau_p_T_field.data.to('s').magnitude,
         P_aux_field.data.to('W').magnitude,
         P_lost_rad_field.data.to('W').magnitude,
         P_aux_all_DT_field.data.to('W').magnitude,
@@ -50,8 +50,8 @@ elif analysis_type == 'lumped':
     input_data = [
         V_plasma_field.data.to('m^3').magnitude,
         T_i_field.data.to('keV').magnitude,
-        n_tot_field.data.to('1/m^3').magnitude,
-        tau_p_T_field.data.to('s').magnitude,
+        # n_tot_field.data.to('1/m^3').magnitude,
+        # tau_p_T_field.data.to('s').magnitude,
         tau_p_He3_field.data.to('s').magnitude,
         P_aux_field.data.to('W').magnitude,
         P_lost_rad_field.data.to('W').magnitude,
