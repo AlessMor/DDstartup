@@ -14,10 +14,10 @@ from pathlib import Path
 # =============================================================================
 
 # File selection - Choose which HDF5 file to analyze
-SELECTED_FILE = "dd_startup_20250923_112937_parametric_lumped.h5"  # Set to None for automatic selection, or specify filename
+SELECTED_FILE = "dd_startup_20250924_142215_parametric_lump.h5"  # Set to None for automatic selection, or specify filename
 
 # Target variable selection - Choose which output metric to visualize
-TARGET_VARIABLE = 't_startup'  # Example: 'Dollar_Lost', 't_startup', 'P_e_net_DD_avg', etc.
+TARGET_VARIABLE = 'Dollar_Lost'  # Example: 'Dollar_Lost', 't_startup', 'P_e_net_DD_avg', etc.
 
 # Filter (sets the maximum value for color scaling)
 FILTER = None      # Set to threshold value or None
@@ -121,7 +121,7 @@ input_parameters = [p for p in DESIRED_ORDER if p in base_inputs] + [p for p in 
 REMOVE_PARAMS = []
 if 'T_seeded' in selected_file_str:
     REMOVE_PARAMS = ['tau_p_He3', 'I_target']
-elif 'lumped' in selected_file_str:
+elif 'lump' in selected_file_str:
     REMOVE_PARAMS = ['tau_ifc', 'tau_ofc']
 # Additional removal for t_startup target
 if TARGET_VARIABLE == 't_startup':
@@ -307,9 +307,11 @@ fig.update_layout(
     paper_bgcolor='white',
     plot_bgcolor='white'
 )
-
-fig.write_html(outputs_dir / f"paracoords_plot_{TARGET_VARIABLE}_{selected_file.name.strip('dd_startup_')}.html")
-print(f"Plot saved as {outputs_dir / f'paracoords_plot_{TARGET_VARIABLE}_{selected_file.name.strip('dd_startup_')}.html'}")
-
-
-print("Columns in filtered DataFrame:", df_filtered.columns.tolist())
+if FILTER is not None:
+    filter_str = f"{FILTER:.2e}"
+    plot_name = f"paracoords_plot_{TARGET_VARIABLE}_{selected_file.name.strip('dd_startup_')}_FILTER={filter_str}.html"
+else:
+    plot_name = f"paracoords_plot_{selected_file.name.strip('dd_startup_')}_{TARGET_VARIABLE}.html"
+# Save plot as HTML
+fig.write_html(outputs_dir / plot_name)
+print(f"Plot saved as {outputs_dir / plot_name}")

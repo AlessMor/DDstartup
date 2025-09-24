@@ -9,7 +9,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
 
     idx = index_to_params(linear_index, param_shapes_array)
 
-    # Extract parameters in the same order as main.py expects for lumped
+    # Extract parameters in the same order as main.py expects for lump
     V_plasma = input_arrays_flat[0][idx[0]]
     T_i = input_arrays_flat[1][idx[1]]
     n_tot = input_arrays_flat[2][idx[2]]
@@ -34,7 +34,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
     sigmav_DHe3 = sigmav_DHe3_BoschHale(T_i_array)[0]  # Extract scalar from array result
     
     # Call the core solver
-    core_results = lumped_core_solver(
+    core_results = lump_core_solver(
         V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_lost_rad, P_aux_all_DT, P_lost_rad_all_DT,
         TBR_DT, TBR_DDn, I_target, eta_th, plant_avail, Cost_per_kWh,  sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3
     )
@@ -66,7 +66,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
     return result
 
 
-def lumped_core_solver(V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_lost_rad, P_aux_all_DT, P_lost_rad_all_DT, TBR_DT, TBR_DDn, I_target, eta_th, plant_avail, Cost_per_kWh, sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3):
+def lump_core_solver(V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_lost_rad, P_aux_all_DT, P_lost_rad_all_DT, TBR_DT, TBR_DDn, I_target, eta_th, plant_avail, Cost_per_kWh, sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3):
 
     n_D = n_tot
     # --- Startup tritium balance as in parametric_analysis_I_startup.py ---
