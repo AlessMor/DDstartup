@@ -1,9 +1,0 @@
-Parameter	First-order	Total-order
-tau_p_T	0.000000	0.000000
-TBR_DT	0.000000	0.000000
-TBR_DDn	1.000000	1.000000
-tau_ifc	0.000000	-0.000000
-tau_ofc	0.000000	0.000000
-eta_th	0.000000	-0.000000
-plant_avail	0.000000	0.000000
-Cost_per_kWh	0.000000	0.000000
