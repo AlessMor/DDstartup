@@ -1,0 +1,10 @@
+Parameter	First-order	Total-order
+V_plasma	0.000000	-0.000000
+T_i	0.000000	0.000000
+TBR_DT	0.999976	1.000000
+TBR_DDn	0.000000	0.000000
+tau_ifc	0.000000	0.000010
+tau_ofc	0.000000	0.000022
+eta_th	0.000000	0.000011
+plant_avail	0.000000	0.000000
+Cost_per_kWh	0.000000	0.000000
