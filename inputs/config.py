@@ -25,8 +25,8 @@ tau_p_T_field = ParameterField(
 )
 
 tau_p_He3_field = ParameterField(
-    parametrization_type="normal", mean=1, std=0.5, unit=u.s,
-    param_points=1, name="tau_p_He3"
+    parametrization_type="vector", vector=[0.1, 0.5, 1, 2.5, 5], unit=u.s,
+    param_points=5, name="tau_p_He3"
 )
 
 P_aux_field = ParameterField(

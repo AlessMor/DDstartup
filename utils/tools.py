@@ -111,9 +111,9 @@ def optimal_N_SAMPLES(sysinfo=None):
     n_cores = sysinfo['n_cores']
     total_gb = sysinfo['total_gb']
     if n_cores >= 16:
-        n = 4096
+        n = 100e3
     elif n_cores >= 8:
-        n = 2048
+        n = 100e3
     elif n_cores >= 4:
         n = 1024
     else:
@@ -127,7 +127,7 @@ def optimal_sobol_order(sysinfo=None):
         sysinfo = system_profiler()
     n_cores = sysinfo['n_cores']
     if n_cores >= 16:
-        return 4
+        return 3
     elif n_cores >= 8:
         return 3
     else:
