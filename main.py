@@ -10,8 +10,8 @@ from utils.tools import profile_system
 
 verbose = True
 input_file_name = "config"  # or any other config file name (without .py)
-analysis_type = 'lumped'               # 'T_seeded'/'lumped'
-analysis_method = 'sobol'          # 'parametric'/'sobol'
+analysis_type = 'lump'               # 'T_seeded'/'lump'
+analysis_method = 'parametric'          # 'parametric'/'sobol'
 
 
 
@@ -46,7 +46,7 @@ if analysis_type == 'T_seeded':
         'TBR_DT','TBR_DDn','tau_ifc', 'tau_ofc',
         'eta_th', 'plant_avail', 'Cost_per_kWh'
     ]
-elif analysis_type == 'lumped':
+elif analysis_type == 'lump':
     input_data = [
         V_plasma_field.data.to('m^3').magnitude,
         T_i_field.data.to('keV').magnitude,
@@ -88,7 +88,7 @@ if analysis_method == 'sobol':
     import matplotlib.pyplot as plt
     if analysis_type == 'T_seeded':
         from utils.Tseeded_functions import compute_single_combination
-    elif analysis_type == 'lumped':
+    elif analysis_type == 'lump':
         from utils.lump_functions import compute_single_combination
     else:
         print(f"Error: Unknown analysis type: {analysis_type}")
@@ -242,7 +242,7 @@ result_fields = [
 
     # OUTPUTS
     't_startup', 'Dollar_Lost', 'E_e_net_DD', 'E_e_net_DT_full', 'E_fusion_DT_full',
-    'E_fusion_total_DD', 'E_lost', 'I_target', 'Q_DD_total', 'Q_DT_full_total',
+    'E_fusion_total_DD', 'E_lost', 'Q_DD_total', 'Q_DT_full_total',
     'P_DT', 'P_DT_full', 'P_DDn', 'P_DDp', 'P_e_net_DD_avg', 'P_e_net_DT_full_avg',
     'P_fusion_DD_avg', 'injection_rate_max', 'linear_index', 'n_T_final',
     'sigmav_DD_n', 'sigmav_DD_p', 'sigmav_DT', 'sol_success', 
@@ -259,6 +259,8 @@ with h5py.File(output_filename, 'w') as h5_file:
         'total_combinations': n_combinations,
         'computation_start_time': time.time(),
         'parameter_shapes': param_shapes,
+        'method': analysis_method,
+        'analysis_type': analysis_type,
     })
 
     # --- Pre-allocate datasets ---
@@ -301,7 +303,7 @@ with h5py.File(output_filename, 'w') as h5_file:
         chunk_pbar.reset(total=chunk_end - chunk_start)
 
         # Prepare tasks for concurrent.futures
-        if analysis_type == 'lumped':
+        if analysis_type == 'lump':
             from utils.lump_functions import compute_single_combination
             task_args = [(idx, input_arrays_flat, param_shapes_array) for idx in chunk_indices]
             task_func = compute_single_combination
