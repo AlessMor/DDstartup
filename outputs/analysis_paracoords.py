@@ -20,7 +20,7 @@ SELECTED_FILE = "dd_startup_20250923_112937_parametric_lumped.h5"  # Set to None
 TARGET_VARIABLE = 't_startup'  # Example: 'Dollar_Lost', 't_startup', 'P_e_net_DD_avg', etc.
 
 # Filter (sets the maximum value for color scaling)
-FILTER = None       # Set to threshold value or None
+FILTER = None      # Set to threshold value or None
 
 # Color and styling options
 N_COLOR_CHUNKS = 6           # Number of discrete color levels (None sets to gradient)
@@ -107,30 +107,27 @@ output_like = [
     'P_DT', 'P_DDn', 'P_DDp', 'P_DT_full', 'P_fusion_DD_avg', 'P_e_net_DD_avg',
     'P_e_net_DT_full_avg', 'Q_DD_total', 'Q_DT_full_total', 'E_fusion_total_DD',
     'E_fusion_DT_full', 'E_e_net_DD', 'E_e_net_DT_full', 'E_lost', 'Dollar_Lost',
-    'n_T_final', 'sol_success', 't_startup', 'tau_ifc', 'tau_ofc', 'I_target'
+    'n_T_final', 'sol_success', 't_startup'
 ]
 
 # Determine input axes based on file name
 selected_file_str = str(selected_file.name)
+base_inputs = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
+DESIRED_ORDER = [
+    'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'plant_avail', 'Cost_per_kWh',  'I_target',
+]
+input_parameters = [p for p in DESIRED_ORDER if p in base_inputs] + [p for p in base_inputs if p not in DESIRED_ORDER]
+
+REMOVE_PARAMS = []
 if 'T_seeded' in selected_file_str:
-    # Exclude tau_p_He3, include tau_ifc and tau_ofc
-    input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
-    # Remove tau_p_He3 if present, add tau_ifc and tau_ofc if present and not already included
-    input_parameters = [p for p in input_parameters if p != 'tau_p_He3']
-    for p in ['tau_ifc', 'tau_ofc']:
-        if p in df_filtered.columns and p not in input_parameters:
-            input_parameters.append(p)
+    REMOVE_PARAMS = ['tau_p_He3', 'I_target']
 elif 'lumped' in selected_file_str:
-    # Exclude tau_ifc and tau_ofc, include tau_p_He3 and I_target
-    input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
-    # Remove tau_ifc and tau_ofc if present, add tau_p_He3 and I_target if present and not already included
-    input_parameters = [p for p in input_parameters if p not in ['tau_ifc', 'tau_ofc']]
-    for p in ['tau_p_He3', 'I_target']:
-        if p in df_filtered.columns and p not in input_parameters:
-            input_parameters.append(p)
-else:
-    # Default: all columns except outputs and target
-    input_parameters = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
+    REMOVE_PARAMS = ['tau_ifc', 'tau_ofc']
+# Additional removal for t_startup target
+if TARGET_VARIABLE == 't_startup':
+    REMOVE_PARAMS += ['eta_th', 'plant_avail', 'Cost_per_kWh','P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT']
+
+input_parameters = [p for p in input_parameters if p not in REMOVE_PARAMS]
 
 # Define units for parameters (add as needed)
 PARAM_UNITS = {
@@ -170,6 +167,28 @@ PARAM_UNITS = {
     'injection_rate_max': 's⁻¹',
     # Add more as needed
 }
+
+if TARGET_VARIABLE == 't_startup':
+    max_val = df_filtered[TARGET_VARIABLE].max()
+    scale = 1
+    unit = "s"
+    if max_val > 2*365*24*3600:
+        scale = 1/(365*24*3600)
+        unit = "years"
+    elif max_val > 365*24*3600:
+        scale = 1/(30*24*3600)
+        unit = "months"
+    elif max_val > 30*24*3600:
+        scale = 1/(24*3600)
+        unit = "days"
+    elif max_val > 24*3600:
+        scale = 1/3600
+        unit = "hours"
+    # Apply scaling
+    df_filtered[TARGET_VARIABLE] = df_filtered[TARGET_VARIABLE] * scale
+    PARAM_UNITS[TARGET_VARIABLE] = unit
+
+
 # =============================================================================
 # 5. Color Mapping (Green to Red, Discrete Chunks)
 # =============================================================================
@@ -291,3 +310,6 @@ fig.update_layout(
 
 fig.write_html(outputs_dir / f"paracoords_plot_{TARGET_VARIABLE}_{selected_file.name.strip('dd_startup_')}.html")
 print(f"Plot saved as {outputs_dir / f'paracoords_plot_{TARGET_VARIABLE}_{selected_file.name.strip('dd_startup_')}.html'}")
+
+
+print("Columns in filtered DataFrame:", df_filtered.columns.tolist())
