@@ -1,38 +1,39 @@
-import h5py
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from pathlib import Path
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import sys
+# --- Custom modules ---
+sys.path.append("..")
+from utils.postprocess import load_h5_to_dataframe, filter_finite, get_input_parameters, scale_target
 
-# List your HDF5 files here (relative to this script or absolute paths)
-h5_files = [
-    "dd_startup_20250923_112837_parametric_T_seeded.h5",
-    "dd_startup_20250924_142215_parametric_lump.h5",
-    # Add more file names as needed
-]
 
-outputs_dir = Path(__file__).parent
+# ======================== SETUP ========================
+# File selection - Choose one or more HDF5 file to analyze
+SELECTED_FILES = ["dd_startup_20250927_182615_parametric_T_seeded.h5"]  # Set to None for automatic selection, or specify filename
 
-def load_vars_from_h5(h5_path, variables):
-    data = {}
-    with h5py.File(h5_path, 'r') as f:
-        for var in variables:
-            if var in f:
-                arr = f[var][:]
-            elif 'parameter_fields' in f and var in f['parameter_fields']:
-                arr = f['parameter_fields'][var][:]
-            else:
-                arr = None
-            if arr is not None and arr.ndim == 1:
-                data[var] = arr
-    return data
-
+# Target variable selection - Choose which output metrics to visualize
+TARGET_VARIABLES = ['unrealized_gains', 't_startup']  
 
 # Optional: set min/max filters for each variable (None means no filter)
 FILTERS = {
-    't_startup': {'min': None, 'max': None},  # 3 years in seconds
-    'Dollar_Lost': {'min': None, 'max': None},
+    't_startup': {'min': 1e6, 'max': None},  # 3 years in seconds
+    'unrealized_gains': {'min': None, 'max': 2e9},
 }
+
+
+# ======================== CREATE df FROM h5m ========================
+dataframes = {}
+for selected_file in SELECTED_FILES:
+    file_data = {}
+    df = load_h5_to_dataframe(selected_file)
+    for target in TARGET_VARIABLES:
+        filter_dict = FILTERS.get(target, {})
+        df_filtered = filter_finite(df, target, filter_dict)
+        file_data[target] = df_filtered
+    dataframes[selected_file] = file_data
+
 
 def plot_pdf(data_list, var, label_list):
     vmin = FILTERS.get(var, {}).get('min', None)
@@ -68,25 +69,14 @@ def plot_pdf(data_list, var, label_list):
     plt.tight_layout()
     plt.show()
 
+
 # Main
 variables = ['t_startup', 'Dollar_Lost']
 
-data_list = []
 # Set custom labels for the legend
 custom_labels = ['T seeded startup', 'lump startup']
-label_list = []
-for i, fname in enumerate(h5_files):
-    fpath = outputs_dir / fname
-    if fpath.exists():
-        data = load_vars_from_h5(fpath, variables)
-        data_list.append(data)
-        # Use custom label if available, else fallback to filename
-        if i < len(custom_labels):
-            label_list.append(custom_labels[i])
-        else:
-            label_list.append(fname)
-    else:
-        print(f"File not found: {fpath}")
+label_list = custom_labels[:len(dataframes)]
 
 for var in variables:
+    data_list = [df for df in dataframes]
     plot_pdf(data_list, var, label_list)

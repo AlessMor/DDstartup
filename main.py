@@ -14,14 +14,13 @@ verbose = True
 input_file_name = "config_test"  # or any other config file name (without .py)
 analysis_type = 'T_seeded'               # 'T_seeded'/'lump'
 analysis_method = 'parametric'          # 'parametric'/'sobol'
-STORE_TBE = True  # Set to True to enable TBE storage
 vector_length = 100 # length of vectors to be stored if T_seeded
-
 
 config_module = importlib.import_module(f"inputs.{input_file_name}")
 for k, v in config_module.__dict__.items():
     if not k.startswith("_"):
         globals()[k] = v
+        
 # ======================== INPUT PREPARATION ========================
 
 # Select input_data and param_names based on analysis_type
@@ -63,133 +62,32 @@ if verbose:
     for name, arr in input_data.items():
         print(f" - {name}: {arr.shape[0]} points, range [{arr.min():.3e}, {arr.max():.3e}]")
 
+
+if analysis_type == 'T_seeded':
+    from utils.Tseeded_functions import compute_single_combination
+elif analysis_type == 'lump':
+    from utils.lump_functions import compute_single_combination
+else:
+    print(f"Error: Unknown analysis type: {analysis_type}")
+    exit()
 # ======================== SYSTEM PROFILER ========================
 chunk_size, batch_size, n_jobs, N_SAMPLES, order = profile_system()
 
 
 # ======================== SOBOL/CHAOSPY BRANCH ========================
 if analysis_method == 'sobol':
-    import chaospy as cp
-    from joblib import Parallel, delayed
-    import matplotlib.pyplot as plt
-    if analysis_type == 'T_seeded':
-        from utils.Tseeded_functions import compute_single_combination
-    elif analysis_type == 'lump':
-        from utils.lump_functions import compute_single_combination
-    else:
-        print(f"Error: Unknown analysis type: {analysis_type}")
-        exit()
-    # Define parameter distributions (adjust as needed)
-    param_bounds = [(arr.min(), arr.max()) for arr in input_data.values()]
-    print("Parameter bounds for Sobol analysis:")
-    for name, (low, high) in zip(param_names, param_bounds):
-        print(f"  {name}: min={low}, max={high}")
+    from utils.sobol_functions import sobol_analysis
 
-    # Separate variable and constant parameters
-    variable_params = [(i, name, low, high) for i, (name, (low, high)) in enumerate(zip(param_names, param_bounds)) if high > low]
-    constant_params = [(i, name, low) for i, (name, (low, high)) in enumerate(zip(param_names, param_bounds)) if high == low]
-
-    if constant_params:
-        print("The following parameters are constants in Sobol analysis:")
-        for i, name, val in constant_params:
-            print(f"  {name}: {val}")
-
-    if not variable_params:
-        raise ValueError("No parameters with a valid range for Sobol analysis.")
-
-    # Build distributions for variable parameters
-    sobol_param_names = [name for i, name, low, high in variable_params]
-    distr_params = {name: cp.Uniform(low, high) for i, name, low, high in variable_params}
-    joint_dist = cp.J(*distr_params.values())
-
-    # Generate Sobol samples for variable parameters
-
-    samples_var = joint_dist.sample(N_SAMPLES, rule='sobol').T  # shape: (N_SAMPLES, n_var_params)
-
-    # For each sample, build the full parameter vector (variable + constants)
-    def build_full_sample(sample_var):
-        full = []
-        var_iter = iter(sample_var)
-        for i in range(len(param_names)):
-            if any(i == idx for idx, _, _, _ in variable_params):
-                full.append(next(var_iter))
-            else:
-                # Find the constant value
-                val = [val for idx, _, val in constant_params if idx == i][0]
-                full.append(val)
-        return np.array(full)
-
-    samples_full = np.array([build_full_sample(sample_var) for sample_var in samples_var])
-
-    # Prepare for parallel evaluation
-    def run_sample(idx, sample):
-        try:
-            input_arrays_flat_sample = [np.array([val]) for val in sample]
-            param_shapes_array_sample = np.array([1]*len(sample), dtype=np.int64)
-            if analysis_type == 'T_seeded':
-                result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample, total_time, STORE_TBE=False)
-            else:
-                result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample)
-            return result
-        except Exception as e:
-            return {'error': str(e)}
-
-    print(f"Evaluating {N_SAMPLES} Sobol samples in parallel...")
-    results = Parallel(n_jobs=-1, verbose=0)(delayed(run_sample)(i, sample) for i, sample in enumerate(samples_full))
-
-    # Extract output metric (unrealized_gains)
-    unrealized_gains = np.array([
-        r['unrealized_gains'] if (r is not None and 'unrealized_gains' in r and np.isfinite(r['unrealized_gains'])) else np.nan
-        for r in results
-    ])
-    valid_mask = np.isfinite(unrealized_gains)
-    valid_samples = samples_full[valid_mask]
-    valid_dollars = unrealized_gains[valid_mask]
-
-    print(f"Valid results: {np.sum(valid_mask)}/{N_SAMPLES}")
-    if np.sum(valid_mask) < 10:
-        print("Not enough valid samples for Sobol analysis.")
-    else:
-
-        poly_expansion = cp.generate_expansion(order, joint_dist)
-        print("Fitting PCE surrogate model...") if verbose else None
-        pce_model = cp.fit_regression(poly_expansion, valid_samples.T, valid_dollars)
-        print("Computing first order Sobol indices...") if verbose else None
-        sobol_first = cp.Sens_m(pce_model, joint_dist)
-        print("Computing total order Sobol indices...") if verbose else None
-        sobol_total = cp.Sens_t(pce_model, joint_dist)
-        print("\nSensitivity Analysis Results:") if verbose else None
-        print("Parameter\t\tFirst-order\tTotal-order")  if verbose else None
-        print("------------------------------------------------") if verbose else None
-        for i, param_name in enumerate(distr_params.keys()):
-            print(f"{param_name:15s}\t{sobol_first[i]:.6f}\t{sobol_total[i]:.6f}")
-        plt.figure(figsize=(10, 6))
-        x = np.arange(len(distr_params))
-        width = 0.35
-        plt.bar(x - width/2, sobol_first, width, label='First-order')
-        plt.bar(x + width/2, sobol_total, width, label='Total-order')
-        plt.xlabel('Parameters')
-        plt.ylabel('Sobol Indices')
-        plt.title('Sensitivity Analysis (unrealized_gains)')
-        plt.xticks(x, list(distr_params.keys()), rotation=45)
-        plt.legend()
-        plt.tight_layout()
-
-        # Save plot to outputs/ with timestamp and analysis info
-        import time
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        plot_filename = f"outputs/sobol_indices_{timestamp}_{analysis_method}_{analysis_type}.png"
-        plt.savefig(plot_filename, dpi=200)
-        print(f"Sobol indices plot saved to {plot_filename}")
-        plt.close()
-
-        # Save Sobol indices to txt file
-        txt_filename = f"outputs/sobol_indices_{timestamp}_{analysis_method}_{analysis_type}.txt"
-        with open(txt_filename, 'w') as ftxt:
-            ftxt.write("Parameter\tFirst-order\tTotal-order\n")
-            for i, param_name in enumerate(distr_params.keys()):
-                ftxt.write(f"{param_name}\t{sobol_first[i]:.6f}\t{sobol_total[i]:.6f}\n")
-        print(f"Sobol indices saved to {txt_filename}")
+    sobol_analysis(
+        input_data=input_data,
+        param_names=param_names,
+        N_SAMPLES=int(N_SAMPLES),
+        order=order,
+        analysis_type=analysis_type,
+        total_time=10*365*24*3600,
+        compute_single_combination=compute_single_combination,
+        verbose=True
+    )
     exit()
 
 # ======================== PARAMETRIC ANALYSIS BRANCH ========================
@@ -275,12 +173,10 @@ with h5py.File(output_filename, 'w') as h5_file:
 
         # Prepare tasks for concurrent.futures
         if analysis_type == 'lump':
-            from utils.lump_functions import compute_single_combination
             task_args = [(idx, input_arrays_flat, param_shapes_array) for idx in chunk_indices]
             task_func = compute_single_combination
         elif analysis_type == 'T_seeded':
-            from utils.Tseeded_functions import compute_single_combination
-            task_args = [(idx, input_arrays_flat, param_shapes_array, total_time, STORE_TBE, vector_length) for idx in chunk_indices]
+            task_args = [(idx, input_arrays_flat, param_shapes_array, total_time, vector_length) for idx in chunk_indices]
             task_func = compute_single_combination
         else: 
             print(f"Error: Unknown analysis type: {analysis_type}")
@@ -306,24 +202,35 @@ with h5py.File(output_filename, 'w') as h5_file:
 
                 # --- For each result, save all its fields (inputs, outputs) into the correct HDF5 datasets.
                 for field in data_fields:
-                    print(f"{datasets[field][abs_idx]}")
                     value = result.get(field, None)
                                     
                     if field == 'error':
                         # Always convert to string before saving
-                        if value is None:
+                        if value is None or (isinstance(value, float) and not np.isfinite(value)):
                             datasets[field][abs_idx] = ""
                         else:
                             datasets[field][abs_idx] = str(value)
-                        continue  # Skip further processing for 'error' field
-
-                    if field == 'sol_success':
+                    elif field == 'sol_success':
                         datasets[field][abs_idx] = bool(value)
                     elif field in vector_fields:
-                        datasets[field][abs_idx, :] = value
+                        arr = np.asarray(value)
+                        if arr.ndim == 0 or arr.size == 0:
+                            # Fill with scalar value if not a valid vector
+                            scalar = float(value) if value is not None else np.nan
+                            padded = np.full(vector_length, scalar)
+                            datasets[field][abs_idx, :] = padded
+                        elif arr.shape[0] == vector_length:
+                            datasets[field][abs_idx, :] = arr
+                        else:
+                            # Pad or truncate to vector_length
+                            padded = np.full(vector_length, arr[-1] if arr.size > 0 else np.nan)
+                            padded[:min(vector_length, arr.size)] = arr[:vector_length]
+                            datasets[field][abs_idx, :] = padded
+                            datasets['error'][abs_idx] += f"Warning: {field} length {arr.size} != expected {vector_length}, padded with NaN"
                     else:
-                        if isinstance(value, str):
-                            # Should not happen for non-error fields, but just in case
+                        if value is None or (isinstance(value, float) and not np.isfinite(value)):
+                            datasets[field][abs_idx] = np.inf
+                        elif isinstance(value, str):
                             datasets[field][abs_idx] = np.nan
                         elif hasattr(value, "__len__") and not isinstance(value, str):
                             try:
@@ -388,9 +295,15 @@ if os.path.exists(output_filename):
     with h5py.File(output_filename, 'r') as f:
         if 'error' in f:
             error_msgs = f['error'][:]
-            if len(error_msgs) > 0:
+            # Decode bytes and skip empty errors
+            error_msgs_str = [
+                msg.decode('utf-8') if isinstance(msg, bytes) else str(msg)
+                for msg in error_msgs
+            ]
+            non_empty_errors = [(i, msg) for i, msg in enumerate(error_msgs_str) if msg]
+            if non_empty_errors:
                 print("\n❌ Errors encountered during computation:")
-                for i, msg in enumerate(error_msgs):
+                for i, msg in non_empty_errors:
                     print(f"  [{i}] {msg}")
 
 # Reload results for quick statistics
@@ -426,4 +339,3 @@ with h5py.File(output_filename, 'r') as f:
                             print(f"  {field}: {value}")
 
 print(f"\n🎉 Streaming HDF5 save completed! Results are in {output_filename}")
-

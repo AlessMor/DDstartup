@@ -54,6 +54,7 @@ def lump_numba(
         E_lost = E_e_net_DT_eq - E_e_net_DD
         unrealized_gains = E_lost * cost_of_electricity
         
+        
         return (n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, True)
         
     

@@ -3,7 +3,7 @@ from utils.custom_classes import ParameterField
 
 total_time = 10*365*24*3600  # total operation time [s] - 10 years
 
-param_points = 1
+param_points = 2
 
 V_plasma_field = ParameterField(
     parametrization_type="normal", mean=150, std=15, unit=u.m**3, 

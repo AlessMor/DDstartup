@@ -1,0 +1,9 @@
+Parameter	First-order	Total-order
+tau_p_T	0.000000	0.000000
+tau_p_He3	0.000000	0.000000
+TBR_DT	1.000029	1.000000
+TBR_DDn	0.000000	0.000000
+I_target	0.000000	0.000000
+eta_th	0.000000	-0.000011
+capacity_factor	0.000000	-0.000003
+cost_of_electricity	0.000000	0.000000

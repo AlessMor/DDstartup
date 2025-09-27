@@ -166,7 +166,20 @@ outputs_names = [
     'sol_success', 'linear_index', 'error'
     ]
 
-
+PARAM_UNITS = {
+    'V_plasma': 'm³','T_i': 'keV', 'n_tot': 'm⁻³',
+    'tau_p_T': 's', 'tau_p_He3': 's',
+    'P_aux': 'W', 'P_aux_DT_eq': 'W',
+    'TBR_DT': '-', 'TBR_DDn': '-', 'tau_ifc': 's', 'tau_ofc': 's',
+    'I_target': 'kg', 'eta_th': '-', 'capacity_factor': '-', 'cost_of_electricity': '1/J',
+    'n_T': 'm⁻³', 'n_D': 'm⁻³', 'n_He3': 'm⁻³',
+    'N_ofc': 'kg', 'N_ifc': 'kg', 'N_stor': 'kg',
+    'P_DDn': 'W', 'P_DDp': 'W', 'P_DT': 'W', 'P_DT_eq': 'W',    
+    't_startup': 's',
+    'Q_DD': '-', 'Q_DT_eq': '-', 'TBE': '-',
+    'E_lost': 'J', 'unrealized_gains': 'J',
+    # Add more as needed
+}
 
 def make_output_dict(actual_results):
     """
@@ -189,9 +202,10 @@ def make_input_dict(actual_results):
 
 def fix_vector_length(vec, target_length=100):
     vec = np.asarray(vec)
-    if vec.size == 0:
-        # Return all nan if empty
-        return np.full(target_length, np.nan)
+    if vec.ndim == 0 or vec.size == 0:
+        # If scalar or empty, fill with scalar value or nan
+        scalar = float(vec) if vec.size == 1 or vec.ndim == 0 else np.nan
+        return np.full(target_length, scalar)
     if vec.size == 1:
         # Repeat the single value
         return np.full(target_length, vec[0])

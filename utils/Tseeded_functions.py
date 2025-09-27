@@ -50,7 +50,7 @@ def solve_ode_system(total_time,
                      TBR_DT, TBR_DDn, tau_ifc, tau_ofc,
                      eta_th, capacity_factor, cost_of_electricity,
                      sigmav_DD_p, sigmav_DD_n, sigmav_DT, 
-                     injection_rate_max, N_st_min=0.001/tritium_mass, STORE_TBE=False):
+                     injection_rate_max, N_st_min=0.001/tritium_mass):
     # Units-free ODE function
     
     def tritium_inventory_odes_unitless(t, y):
@@ -233,7 +233,7 @@ def solve_ode_system(total_time,
                 'Q_DT_eq': Q_DT_eq,
                 'E_lost': E_lost,
                 'unrealized_gains': unrealized_gains,
-                'TBE': TBE_vector if STORE_TBE else np.nan,
+                'TBE': TBE_vector,
                 'sol_success': True
             })
             
@@ -262,7 +262,7 @@ def solve_ode_system(total_time,
         })
     
        
-def compute_single_combination(linear_index, input_arrays_flat, param_shapes_array, total_time = 10*365*24*3600, STORE_TBE=False, vector_length = 100):
+def compute_single_combination(linear_index, input_arrays_flat, param_shapes_array, total_time = 10*365*24*3600, vector_length = 100):
 
     # Get parameter indices from linear index
     param_indices = index_to_params(linear_index, param_shapes_array)
@@ -297,6 +297,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         'eta_th': eta_th,
         'capacity_factor': capacity_factor,
         'cost_of_electricity': cost_of_electricity,
+        'error': ""
     })
     
     
@@ -318,7 +319,6 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         eta_th, capacity_factor, cost_of_electricity, 
         sigmav_DD_p, sigmav_DD_n, sigmav_DT, 
         injection_rate_max,
-        STORE_TBE=STORE_TBE,  
     )
     
     # Package results (combine input parameters and ODE outputs)
@@ -328,7 +328,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         **ode_results
     }
     result_dict.update(result)
-    print(f"results dictionary: {result_dict}")
+    
     result_dict['N_ofc'] = fix_vector_length(result_dict['N_ofc'], vector_length)
     result_dict['N_ifc'] = fix_vector_length(result_dict['N_ifc'], vector_length)
     result_dict['N_stor'] = fix_vector_length(result_dict['N_stor'], vector_length)
@@ -337,8 +337,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
     result_dict['P_DDn'] = fix_vector_length(result_dict['P_DDn'], vector_length)
     result_dict['P_DDp'] = fix_vector_length(result_dict['P_DDp'], vector_length)
     result_dict['P_DT']  = fix_vector_length(result_dict['P_DT'], vector_length)
-    if STORE_TBE:
-        result_dict['TBE']   = fix_vector_length(result_dict['TBE'], vector_length)
+    result_dict['TBE']   = fix_vector_length(result_dict['TBE'], vector_length)
 
                 
     return result_dict

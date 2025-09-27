@@ -1,39 +1,41 @@
-import h5py
 import numpy as np
 import pandas as pd
 from pathlib import Path
 import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+import sys
+# --- Custom modules ---
+sys.path.append("..")
+from utils.postprocess import load_h5_to_dataframe, filter_finite, get_input_parameters, scale_target
 
-SELECTED_FILE = "dd_startup_20250923_112837_parametric_T_seeded.h5"  # Change as needed
 
-# Set the maximum Dollar_Lost value to filter for the plot (in $)
-MAX_DOLLAR_LOST = 2e9  # Change as needed, e.g. 2e9 for 2 billion dollars
+# ======================== SETUP ========================
+# File selection - Choose one or more HDF5 file to analyze
+SELECTED_FILES = ["dd_startup_20250927_182615_parametric_T_seeded.h5"]  # Set to None for automatic selection, or specify filename
 
-outputs_dir = Path(__file__).parent
-h5_path = outputs_dir / SELECTED_FILE
+# Target variable selection - Choose which output metrics to visualize
+TARGET_VARIABLES = ['unrealized_gains', 't_startup']  
 
-# Load data from HDF5
-def load_data(h5_path):
-    data = {}
-    expected_length = None
-    with h5py.File(h5_path, 'r') as f:
-        for key in f.keys():
-            if isinstance(f[key], h5py.Dataset):
-                arr = f[key][:]
-                if arr.ndim == 1:
-                    if expected_length is None:
-                        expected_length = len(arr)
-                    if len(arr) == expected_length:
-                        data[key] = arr
-        if 'parameter_fields' in f:
-            param_group = f['parameter_fields']
-            for subkey in param_group.keys():
-                arr = param_group[subkey][:]
-                if arr.ndim == 1 and len(arr) == expected_length:
-                    data[subkey] = arr
-    return pd.DataFrame(data)
+# Optional: set min/max filters for each variable (None means no filter)
+FILTERS = {
+    't_startup': {'min': 1e6, 'max': None},  # 3 years in seconds
+    'unrealized_gains': {'min': None, 'max': 2e9},
+}
 
-df = load_data(h5_path)
+
+# ======================== CREATE df FROM h5m ========================
+dataframes = {}
+for selected_file in SELECTED_FILES:
+    file_data = {}
+    df = load_h5_to_dataframe(selected_file)
+    for target in TARGET_VARIABLES:
+        filter_dict = FILTERS.get(target, {})
+        df_filtered = filter_finite(df, target, filter_dict)
+        file_data[target] = df_filtered
+    dataframes[selected_file] = file_data
+
+
+
 
 # Define which columns are outputs and which are inputs
 output_like = [
