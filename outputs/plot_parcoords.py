@@ -14,13 +14,13 @@ from pathlib import Path
 # =============================================================================
 
 # File selection - Choose which HDF5 file to analyze
-SELECTED_FILE = "dd_startup_20250924_142215_parametric_lump.h5"  # Set to None for automatic selection, or specify filename
+SELECTED_FILE = "dd_startup_20250923_112837_parametric_T_seeded.h5"  # Set to None for automatic selection, or specify filename
 
 # Target variable selection - Choose which output metric to visualize
 TARGET_VARIABLE = 'Dollar_Lost'  # Example: 'Dollar_Lost', 't_startup', 'P_e_net_DD_avg', etc.
 
 # Filter (sets the maximum value for color scaling)
-FILTER = None      # Set to threshold value or None
+FILTER = 500e6      # Set to threshold value or None
 
 # Color and styling options
 N_COLOR_CHUNKS = 6           # Number of discrete color levels (None sets to gradient)
@@ -97,6 +97,14 @@ df_filtered = df[finite_mask].copy()
 # Apply filter threshold if specified
 if FILTER is not None:
     df_filtered = df_filtered[df_filtered[TARGET_VARIABLE] <= FILTER]
+        
+        # Randomly sample up to 1e6 rows for plotting
+max_plot_rows = int(1e6)
+if len(df_filtered) > max_plot_rows:
+    df_filtered = df_filtered.sample(n=max_plot_rows, random_state=42)
+    print(f"Sampled {max_plot_rows} rows for plotting (out of {len(df[finite_mask])} finite rows)")
+else:
+    print(f"Plotting all {len(df_filtered)} finite rows")
 
 # =============================================================================
 # 4. Identify Input Parameters
@@ -114,7 +122,7 @@ output_like = [
 selected_file_str = str(selected_file.name)
 base_inputs = [col for col in df_filtered.columns if col not in output_like and col != TARGET_VARIABLE]
 DESIRED_ORDER = [
-    'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'plant_avail', 'Cost_per_kWh',  'I_target',
+    'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_all_DT', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'plant_avail', 'Cost_per_kWh',  'I_target',
 ]
 input_parameters = [p for p in DESIRED_ORDER if p in base_inputs] + [p for p in base_inputs if p not in DESIRED_ORDER]
 
@@ -125,7 +133,7 @@ elif 'lump' in selected_file_str:
     REMOVE_PARAMS = ['tau_ifc', 'tau_ofc']
 # Additional removal for t_startup target
 if TARGET_VARIABLE == 't_startup':
-    REMOVE_PARAMS += ['eta_th', 'plant_avail', 'Cost_per_kWh','P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT']
+    REMOVE_PARAMS += ['eta_th', 'plant_avail', 'Cost_per_kWh','P_aux', 'P_aux_all_DT']
 
 input_parameters = [p for p in input_parameters if p not in REMOVE_PARAMS]
 
@@ -136,8 +144,6 @@ PARAM_UNITS = {
     'T_i': 'keV',
     'P_aux': 'W',
     'P_aux_all_DT': 'W',
-    'P_lost_rad': 'W',
-    'P_lost_rad_all_DT': 'W',
     'tau_p_T': 's',
     'tau_p_He3': 's',
     'I_target': 'A',

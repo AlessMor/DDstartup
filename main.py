@@ -3,16 +3,19 @@ import numpy as np
 from tqdm import tqdm
 import importlib
 import warnings
+import concurrent.futures
 warnings.filterwarnings("ignore", module="scipy.integrate")
 # --- Custom modules ---
 from utils.tools import profile_system
+from utils.tools import inputs_names, outputs_names
 # ======================== SETUP ========================
 
 verbose = True
-input_file_name = "config"  # or any other config file name (without .py)
-analysis_type = 'lump'               # 'T_seeded'/'lump'
+input_file_name = "config_test"  # or any other config file name (without .py)
+analysis_type = 'T_seeded'               # 'T_seeded'/'lump'
 analysis_method = 'parametric'          # 'parametric'/'sobol'
-
+STORE_TBE = True  # Set to True to enable TBE storage
+vector_length = 100 # length of vectors to be stored if T_seeded
 
 
 config_module = importlib.import_module(f"inputs.{input_file_name}")
@@ -23,62 +26,45 @@ for k, v in config_module.__dict__.items():
 
 # Select input_data and param_names based on analysis_type
 if analysis_type == 'T_seeded':
-    input_data = [
-        V_plasma_field.data.to('m^3').magnitude,
-        T_i_field.data.to('keV').magnitude,
-        n_tot_field.data.to('1/m^3').magnitude,
-        tau_p_T_field.data.to('s').magnitude,
-        P_aux_field.data.to('W').magnitude,
-        P_lost_rad_field.data.to('W').magnitude,
-        P_aux_all_DT_field.data.to('W').magnitude,
-        P_lost_rad_all_DT_field.data.to('W').magnitude,
-        TBR_DT_field.data.to_base_units().magnitude,
-        TBR_DDn_field.data.to_base_units().magnitude,
-        tau_ifc_field.data.to('s').magnitude,
-        tau_ofc_field.data.to('s').magnitude,
-        eta_th_field.data.to_base_units().magnitude,
-        plant_avail_field.data.to_base_units().magnitude,
-        Cost_per_kWh_field.data.to('1/J').magnitude
-    ]
-    param_names = [
-        'V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'P_aux',
-        'P_lost_rad', 'P_aux_all_DT', 'P_lost_rad_all_DT', 
-        'TBR_DT','TBR_DDn','tau_ifc', 'tau_ofc',
-        'eta_th', 'plant_avail', 'Cost_per_kWh'
-    ]
+    input_data = {
+        'V_plasma': V_plasma_field.data.to('m^3').magnitude,
+        'T_i': T_i_field.data.to('keV').magnitude,
+        'n_tot': n_tot_field.data.to('1/m^3').magnitude,
+        'tau_p_T': tau_p_T_field.data.to('s').magnitude,
+        'P_aux': P_aux_field.data.to('W').magnitude,
+        'P_aux_DT_eq': P_aux_DT_eq_field.data.to('W').magnitude,
+        'TBR_DT': TBR_DT_field.data.to_base_units().magnitude,
+        'TBR_DDn': TBR_DDn_field.data.to_base_units().magnitude,
+        'tau_ifc': tau_ifc_field.data.to('s').magnitude,
+        'tau_ofc': tau_ofc_field.data.to('s').magnitude,
+        'eta_th': eta_th_field.data.to_base_units().magnitude,
+        'capacity_factor': capacity_factor_field.data.to_base_units().magnitude,
+        'cost_of_electricity': cost_of_electricity_field.data.to('1/J').magnitude
+    }
 elif analysis_type == 'lump':
-    input_data = [
-        V_plasma_field.data.to('m^3').magnitude,
-        T_i_field.data.to('keV').magnitude,
-        n_tot_field.data.to('1/m^3').magnitude,
-        tau_p_T_field.data.to('s').magnitude,
-        tau_p_He3_field.data.to('s').magnitude,
-        P_aux_field.data.to('W').magnitude,
-        P_lost_rad_field.data.to('W').magnitude,
-        P_aux_all_DT_field.data.to('W').magnitude,
-        P_lost_rad_all_DT_field.data.to('W').magnitude,
-        TBR_DT_field.data.to_base_units().magnitude,
-        TBR_DDn_field.data.to_base_units().magnitude,
-        I_target_field.data.to('kg').magnitude,
-        eta_th_field.data.to_base_units().magnitude,
-        plant_avail_field.data.to_base_units().magnitude,
-        Cost_per_kWh_field.data.to('1/J').magnitude,
-    ]
-    param_names = [
-        'V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3',
-        'P_aux', 'P_lost_rad', 'P_aux_all_DT', 'P_lost_rad_all_DT',
-        'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'plant_avail', 'Cost_per_kWh', 
-    ]
-
-
+    input_data = {
+        'V_plasma': V_plasma_field.data.to('m^3').magnitude,
+        'T_i': T_i_field.data.to('keV').magnitude,
+        'n_tot': n_tot_field.data.to('1/m^3').magnitude,
+        'tau_p_T': tau_p_T_field.data.to('s').magnitude,
+        'tau_p_He3': tau_p_He3_field.data.to('s').magnitude,
+        'P_aux': P_aux_field.data.to('W').magnitude,
+        'P_aux_DT_eq': P_aux_DT_eq_field.data.to('W').magnitude,
+        'TBR_DT': TBR_DT_field.data.to_base_units().magnitude,
+        'TBR_DDn': TBR_DDn_field.data.to_base_units().magnitude,
+        'I_target': I_target_field.data.to('kg').magnitude,
+        'eta_th': eta_th_field.data.to_base_units().magnitude,
+        'capacity_factor': capacity_factor_field.data.to_base_units().magnitude,
+        'cost_of_electricity': cost_of_electricity_field.data.to('1/J').magnitude
+    }
+param_names = list(input_data.keys())
 if verbose:
     print("Input parameter fields:")
-    for name, arr in zip(param_names, input_data):
+    for name, arr in input_data.items():
         print(f" - {name}: {arr.shape[0]} points, range [{arr.min():.3e}, {arr.max():.3e}]")
 
+# ======================== SYSTEM PROFILER ========================
 chunk_size, batch_size, n_jobs, N_SAMPLES, order = profile_system()
-if verbose:
-    print(f"System profile suggests chunk_size={chunk_size}, batch_size={batch_size}, n_jobs={n_jobs}, N_SAMPLES={N_SAMPLES}, order={order}")
 
 
 # ======================== SOBOL/CHAOSPY BRANCH ========================
@@ -94,7 +80,7 @@ if analysis_method == 'sobol':
         print(f"Error: Unknown analysis type: {analysis_type}")
         exit()
     # Define parameter distributions (adjust as needed)
-    param_bounds = [(arr.min(), arr.max()) for arr in input_data]
+    param_bounds = [(arr.min(), arr.max()) for arr in input_data.values()]
     print("Parameter bounds for Sobol analysis:")
     for name, (low, high) in zip(param_names, param_bounds):
         print(f"  {name}: min={low}, max={high}")
@@ -141,7 +127,7 @@ if analysis_method == 'sobol':
             input_arrays_flat_sample = [np.array([val]) for val in sample]
             param_shapes_array_sample = np.array([1]*len(sample), dtype=np.int64)
             if analysis_type == 'T_seeded':
-                result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample, total_time)
+                result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample, total_time, STORE_TBE=False)
             else:
                 result = compute_single_combination(0, input_arrays_flat_sample, param_shapes_array_sample)
             return result
@@ -151,14 +137,14 @@ if analysis_method == 'sobol':
     print(f"Evaluating {N_SAMPLES} Sobol samples in parallel...")
     results = Parallel(n_jobs=-1, verbose=0)(delayed(run_sample)(i, sample) for i, sample in enumerate(samples_full))
 
-    # Extract output metric (Dollar_Lost)
-    dollar_lost = np.array([
-        r['Dollar_Lost'] if (r is not None and 'Dollar_Lost' in r and np.isfinite(r['Dollar_Lost'])) else np.nan
+    # Extract output metric (unrealized_gains)
+    unrealized_gains = np.array([
+        r['unrealized_gains'] if (r is not None and 'unrealized_gains' in r and np.isfinite(r['unrealized_gains'])) else np.nan
         for r in results
     ])
-    valid_mask = np.isfinite(dollar_lost)
+    valid_mask = np.isfinite(unrealized_gains)
     valid_samples = samples_full[valid_mask]
-    valid_dollars = dollar_lost[valid_mask]
+    valid_dollars = unrealized_gains[valid_mask]
 
     print(f"Valid results: {np.sum(valid_mask)}/{N_SAMPLES}")
     if np.sum(valid_mask) < 10:
@@ -184,7 +170,7 @@ if analysis_method == 'sobol':
         plt.bar(x + width/2, sobol_total, width, label='Total-order')
         plt.xlabel('Parameters')
         plt.ylabel('Sobol Indices')
-        plt.title('Sensitivity Analysis (Dollar_Lost)')
+        plt.title('Sensitivity Analysis (unrealized_gains)')
         plt.xticks(x, list(distr_params.keys()), rotation=45)
         plt.legend()
         plt.tight_layout()
@@ -207,20 +193,18 @@ if analysis_method == 'sobol':
     exit()
 
 # ======================== PARAMETRIC ANALYSIS BRANCH ========================
-# (rest of your code remains unchanged)
 
 # Compute parameter space size
-param_shapes = [arr.shape[0] for arr in input_data]
-n_combinations = np.prod(param_shapes)
+param_shapes = [arr.shape[0] for arr in input_data.values()] # Shape of each parameter array
+n_combinations = np.prod(param_shapes) # Total number of combinations
 
 if verbose:
     print(f"Total number of parameter combinations: {n_combinations}")
 
 # Flatten arrays for easier indexing later
-input_arrays = [np.asarray(arr) for arr in input_data]
+input_arrays = [np.asarray(arr) for arr in input_data.values()]
 input_arrays_flat = [arr.flatten() for arr in input_arrays]
 param_shapes_array = np.array(param_shapes, dtype=np.int64)
-
 
 # ======================== OUTPUT SETUP ========================
 
@@ -232,29 +216,11 @@ if verbose:
     print(f"Streaming results to {output_filename}...")
 
 # Fields to be saved in HDF5
-result_fields = [
-    # INPUTS
-    'V_plasma', 'n_tot', 'T_i', 'tau_p_T', 'tau_p_He3', 
-    'P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT',
-    'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn',
-    'eta_th', 'plant_avail', 'Cost_per_kWh', 'I_target',
-    
-
-    # OUTPUTS
-    't_startup', 'Dollar_Lost', 'E_e_net_DD', 'E_e_net_DT_full', 'E_fusion_DT_full',
-    'E_fusion_total_DD', 'E_lost', 'Q_DD_total', 'Q_DT_full_total',
-    'P_DT', 'P_DT_full', 'P_DDn', 'P_DDp', 'P_e_net_DD_avg', 'P_e_net_DT_full_avg',
-    'P_fusion_DD_avg', 'injection_rate_max', 'linear_index', 'n_T_final',
-    'sigmav_DD_n', 'sigmav_DD_p', 'sigmav_DT', 'sol_success', 
-]
-
-
-
-
+data_fields = list(dict.fromkeys(inputs_names + outputs_names)) # creates a unique list preserving order and avoiding duplicates
 
 # ======================== MAIN COMPUTATION ========================
 with h5py.File(output_filename, 'w') as h5_file:
-    # --- Metadata ---
+    # --- Metadata of h5 file ---
     h5_file.attrs.update({
         'total_combinations': n_combinations,
         'computation_start_time': time.time(),
@@ -263,16 +229,25 @@ with h5py.File(output_filename, 'w') as h5_file:
         'analysis_type': analysis_type,
     })
 
+    vector_fields = ['N_ofc', 'N_ifc', 'N_stor', 'n_T', 'n_D', 'P_DDn', 'P_DDp', 'P_DT', 'TBE_vector']  # Add any other fields that should store vectors
+    vlen_dtype = h5py.special_dtype(vlen=np.float64)
+
     # --- Pre-allocate datasets ---
+    vector_length = 100
     datasets = {
         field: h5_file.create_dataset(
             field,
-            (n_combinations,),
-            dtype=bool if field == 'sol_success' else np.float64,
-            chunks=(min(chunk_size, n_combinations),),
+            (n_combinations, vector_length) if field in vector_fields else (n_combinations,),
+            # Use string dtype for 'error', bool for 'sol_success', float64 otherwise
+            dtype=(
+                h5py.string_dtype(encoding='utf-8') if field == 'error'
+                else (bool if field == 'sol_success' else np.float64)
+                if field not in vector_fields else np.float64
+            ),
+            chunks=(min(chunk_size, n_combinations), vector_length) if field in vector_fields else (min(chunk_size, n_combinations),),
             compression='lzf',
         )
-        for field in result_fields
+        for field in data_fields
     }
 
     # --- Save parameter grids ---
@@ -280,22 +255,18 @@ with h5py.File(output_filename, 'w') as h5_file:
     for name, arr in zip(param_names, input_arrays):
         param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
 
-    # --- Track errors/events ---
+    # --- initiate errors/events tracking ---
     error_indices, error_messages = [], []
-    negative_event_indices, negative_event_times = [], []
-
+    
+    # --- initialize progress bars ---
     processed_count, successful_count = 0, 0
     total_chunks = (n_combinations + chunk_size - 1) // chunk_size
-
-
-    # Progress bars
     overall_pbar = tqdm(total=n_combinations, desc="Total computation", unit="comb", position=0)
     chunk_pbar = tqdm(total=chunk_size, desc="Current batch", unit="comb", position=1, leave=False)
 
     # --- Process parameter space in chunks ---
     for chunk_start in range(0, n_combinations, chunk_size):
 
-        import concurrent.futures
         chunk_end = min(chunk_start + chunk_size, n_combinations)
         chunk_indices = np.arange(chunk_start, chunk_end)
 
@@ -309,7 +280,7 @@ with h5py.File(output_filename, 'w') as h5_file:
             task_func = compute_single_combination
         elif analysis_type == 'T_seeded':
             from utils.Tseeded_functions import compute_single_combination
-            task_args = [(idx, input_arrays_flat, param_shapes_array, total_time) for idx in chunk_indices]
+            task_args = [(idx, input_arrays_flat, param_shapes_array, total_time, STORE_TBE, vector_length) for idx in chunk_indices]
             task_func = compute_single_combination
         else: 
             print(f"Error: Unknown analysis type: {analysis_type}")
@@ -317,8 +288,12 @@ with h5py.File(output_filename, 'w') as h5_file:
 
         chunk_results = [None] * (chunk_end - chunk_start)
         chunk_successes = 0
+        
+        # --- Concurrent execution ---
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs if n_jobs > 0 else None) as executor:
             future_to_idx = {executor.submit(task_func, *args): i for i, args in enumerate(task_args)}
+            
+            # --- As tasks (parameter combinations) finish in the process pool, this loop collects their results. ---
             for future in concurrent.futures.as_completed(future_to_idx):
                 i = future_to_idx[future]
                 abs_idx = chunk_start + i
@@ -327,32 +302,44 @@ with h5py.File(output_filename, 'w') as h5_file:
                 except Exception as exc:
                     result = {'error': str(exc)}
                 chunk_results[i] = result
+                
 
-                # Fill datasets with results (handle arrays vs scalars)
-                for field in result_fields:
-                    value = result.get(field, np.inf if field != 'sol_success' else False)
+                # --- For each result, save all its fields (inputs, outputs) into the correct HDF5 datasets.
+                for field in data_fields:
+                    print(f"{datasets[field][abs_idx]}")
+                    value = result.get(field, None)
+                                    
+                    if field == 'error':
+                        # Always convert to string before saving
+                        if value is None:
+                            datasets[field][abs_idx] = ""
+                        else:
+                            datasets[field][abs_idx] = str(value)
+                        continue  # Skip further processing for 'error' field
 
                     if field == 'sol_success':
                         datasets[field][abs_idx] = bool(value)
+                    elif field in vector_fields:
+                        datasets[field][abs_idx, :] = value
                     else:
-                        if hasattr(value, "__len__") and not isinstance(value, str):
-                            if field in ['P_DT', 'P_DDn', 'P_DDp']:
-                                scalar_value = float(value[-1]) if len(value) else np.inf
-                            else:
-                                scalar_value = float(np.mean(value)) if len(value) else np.inf
+                        if isinstance(value, str):
+                            # Should not happen for non-error fields, but just in case
+                            datasets[field][abs_idx] = np.nan
+                        elif hasattr(value, "__len__") and not isinstance(value, str):
+                            try:
+                                if len(value) > 0:
+                                    scalar_value = float(value[-1])
+                                else:
+                                    scalar_value = np.inf
+                            except Exception:
+                                scalar_value = float(value)
+                            datasets[field][abs_idx] = scalar_value if np.isfinite(scalar_value) else np.inf
                         else:
-                            scalar_value = float(value)
-
-                        datasets[field][abs_idx] = scalar_value if np.isfinite(scalar_value) else np.inf
-
-                # Track errors and special events
-                if 'error' in result:
-                    error_indices.append(abs_idx)
-                    error_messages.append(result['error'])
-                if 'negative_event_time' in result:
-                    negative_event_indices.append(abs_idx)
-                    negative_event_times.append(result['negative_event_time'])
-
+                            try:
+                                scalar_value = float(value)
+                            except Exception:
+                                scalar_value = np.inf
+                            datasets[field][abs_idx] = scalar_value if np.isfinite(scalar_value) else np.inf
                 # Count successes
                 if np.isfinite(result.get('t_startup', np.inf)):
                     successful_count += 1
@@ -380,16 +367,6 @@ with h5py.File(output_filename, 'w') as h5_file:
     chunk_pbar.close()
     overall_pbar.close()
 
-    # --- Save error/event data ---
-    if error_indices:
-        h5_file.create_dataset('error_indices', data=np.array(error_indices), compression='gzip')
-        dt = h5py.special_dtype(vlen=str)
-        h5_file.create_dataset('error_messages', data=error_messages, dtype=dt, compression='gzip')
-
-    if negative_event_indices:
-        h5_file.create_dataset('negative_event_indices', data=np.array(negative_event_indices), compression='gzip')
-        h5_file.create_dataset('negative_event_times', data=np.array(negative_event_times), compression='gzip')
-
     # --- Final metadata ---
     h5_file.attrs.update({
         'successful_startups': successful_count,
@@ -409,8 +386,8 @@ if verbose:
 # Print error messages if present
 if os.path.exists(output_filename):
     with h5py.File(output_filename, 'r') as f:
-        if 'error_messages' in f:
-            error_msgs = f['error_messages'][:]
+        if 'error' in f:
+            error_msgs = f['error'][:]
             if len(error_msgs) > 0:
                 print("\n❌ Errors encountered during computation:")
                 for i, msg in enumerate(error_msgs):
@@ -419,7 +396,7 @@ if os.path.exists(output_filename):
 # Reload results for quick statistics
 with h5py.File(output_filename, 'r') as f:
     t_startup_array = f['t_startup'][:]
-    dollar_lost_array = f['Dollar_Lost'][:]
+    unrealized_gains_array = f['unrealized_gains'][:]
 
     finite_mask = np.isfinite(t_startup_array)
     successful_startups = np.sum(finite_mask)
@@ -430,29 +407,23 @@ with h5py.File(output_filename, 'r') as f:
 
         if successful_startups:
             finite_startups = t_startup_array[finite_mask] / (3600 * 24)  # convert to days
-            finite_dollars = dollar_lost_array[finite_mask] / 1e6         # convert to million $
+            finite_dollars = unrealized_gains_array[finite_mask] / 1e6         # convert to million $
             print(f"⏱️ Startup times: min={finite_startups.min():.1f} days, "
                   f"max={finite_startups.max():.1f} days, mean={finite_startups.mean():.1f} days")
             print(f"💰 Dollar losses: min=M${finite_dollars.min():.2e}, max=M${finite_dollars.max():.2e}")
             
             # print the list of input parameters that led to the minimum startup time
             min_index = np.where(t_startup_array == t_startup_array[finite_mask].min())[0][0]
-            print(f"\n🏆 Fastest startup at index {min_index}:")
-            for param_name, arr in zip(param_names, input_arrays_flat):
-
-                if min_index < len(arr):
-                    param_value = arr[min_index]
-                else:
-                    param_value = arr[-1]
-                print(f"  {param_name}: {param_value}")
-
-            # Print the entire row for all result fields
-            print("\nFull result row for fastest startup:")
+            print(f"\n⚡ Fastest startup [SI units]:")
             with h5py.File(output_filename, 'r') as f:
-                for field in result_fields:
+                for field in data_fields:
                     if field in f:
                         value = f[field][min_index]
-                        print(f"  {field}: {value}")
+                        # If value is a vector, print the last value
+                        if isinstance(value, np.ndarray) and value.ndim > 0 and value.size > 1:
+                            print(f"  {field}: {value[-1]} (last value of array)")
+                        else:
+                            print(f"  {field}: {value}")
 
 print(f"\n🎉 Streaming HDF5 save completed! Results are in {output_filename}")
 

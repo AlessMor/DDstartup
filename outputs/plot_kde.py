@@ -4,8 +4,6 @@ PARAM_UNITS = {
     'T_i': 'keV',
     'P_aux': 'W',
     'P_aux_all_DT': 'W',
-    'P_lost_rad': 'W',
-    'P_lost_rad_all_DT': 'W',
     'tau_p_T': 's',
     'tau_p_He3': 's',
     'I_target': 'A',
@@ -47,8 +45,8 @@ from pathlib import Path
 # =============================================================================
 # CONFIGURATION OPTIONS
 # =============================================================================
-SELECTED_FILE = ["dd_startup_20250924_142215_parametric_lump.h5"] # Can be a string or list of filenames, or None for auto-selection
-TARGET_VARIABLES = ['t_startup']
+SELECTED_FILE = ["dd_startup_20250923_112837_parametric_T_seeded.h5"] # Can be a string or list of filenames, or None for auto-selection
+TARGET_VARIABLES = ['Dollar_Lost']
 outputs_dir = Path(__file__).parent
 
 # =============================================================================
@@ -104,7 +102,7 @@ def get_input_parameters(df, filename, target):
         'n_T_final', 'sol_success', 't_startup'
     ]
     DESIRED_ORDER = [
-        'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'plant_avail', 'Cost_per_kWh',  'I_target',
+        'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_all_DT', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'plant_avail', 'Cost_per_kWh',  'I_target',
     ]
     base_inputs = [col for col in df.columns if col not in output_like and col != target]
     input_parameters = [p for p in DESIRED_ORDER if p in base_inputs] + [p for p in base_inputs if p not in DESIRED_ORDER]
@@ -114,7 +112,7 @@ def get_input_parameters(df, filename, target):
     elif 'lump' in filename:
         REMOVE_PARAMS = ['tau_ifc', 'tau_ofc']
     if target == 't_startup':
-        REMOVE_PARAMS += ['eta_th', 'plant_avail', 'Cost_per_kWh','P_aux', 'P_aux_all_DT', 'P_lost_rad', 'P_lost_rad_all_DT']
+        REMOVE_PARAMS += ['eta_th', 'plant_avail', 'Cost_per_kWh','P_aux', 'P_aux_all_DT']
     input_parameters = [p for p in input_parameters if p not in REMOVE_PARAMS]
     return input_parameters
 
@@ -152,7 +150,7 @@ for h5_path in get_h5_files():
         df_filtered, target_unit = scale_target(df_filtered, target)
         input_parameters = get_input_parameters(df_filtered, h5_path.name, target)
         n_inputs = len(input_parameters)
-        ncols = min(4, n_inputs)
+        ncols = min(3, n_inputs)
         nrows = int(np.ceil(n_inputs / ncols))
         fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(4*ncols, 3*nrows), sharey=False)
         axes = axes.flatten()

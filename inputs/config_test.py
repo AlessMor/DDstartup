@@ -3,7 +3,7 @@ from utils.custom_classes import ParameterField
 
 total_time = 10*365*24*3600  # total operation time [s] - 10 years
 
-param_points = 2
+param_points = 1
 
 V_plasma_field = ParameterField(
     parametrization_type="normal", mean=150, std=15, unit=u.m**3, 
@@ -35,20 +35,12 @@ P_aux_field = ParameterField(
     param_points=1, name="P_aux"
 )
 
-P_lost_rad_field = ParameterField(
-    parametrization_type="linear", min_val=0, max_val=20, unit=u.MW,
-    param_points=1, name="P_lost_rad"
-)
 
-P_aux_all_DT_field = ParameterField(
+P_aux_DT_eq_field = ParameterField(
     parametrization_type="linear", min_val=20, max_val=100, unit=u.MW,
-    param_points=1, name="P_aux_all_DT"
+    param_points=1, name="P_aux_DT_eq"
 )
 
-P_lost_rad_all_DT_field = ParameterField(
-    parametrization_type="linear", min_val=0, max_val=20, unit=u.MW,
-    param_points=1, name="P_lost_rad_all_DT"
-)
 
 TBR_DT_field = ParameterField(
     parametrization_type="linear", min_val=1.05, max_val=1.15,
@@ -76,14 +68,14 @@ eta_th_field = ParameterField(
     param_points=param_points, name="eta_th"
 )
 
-plant_avail_field = ParameterField(
+capacity_factor_field = ParameterField(
     parametrization_type="linear", min_val=0.5, max_val=0.9,
-    param_points=param_points, name="plant_availability"
+    param_points=param_points, name="capacity_factor"
 )
 
-Cost_per_kWh_field = ParameterField(
+cost_of_electricity_field = ParameterField(
     parametrization_type="normal", mean=0.25, std=0.1, unit=1/u.kWh,
-    param_points=param_points, name="Cost_per_kWh"
+    param_points=param_points, name="cost_of_electricity"
 )
 
 I_target_field = ParameterField(

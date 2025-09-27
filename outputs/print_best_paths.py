@@ -103,7 +103,7 @@ def plot_3d_subplots(df, outputs_dir, max_dollar_lost, input_parameters, z_param
     # Only keep pairs where both parameters are present in df_filtered
     pairs = [(x, y) for x, y in user_pairs if x in df_filtered.columns and y in df_filtered.columns]
     n_plots = len(pairs)
-    ncols = min(2, n_plots)
+    ncols = 3
     nrows = int(np.ceil(n_plots / ncols))
     fig = plt.figure(figsize=(7*ncols, 6*nrows))
     for idx, (x_param, y_param) in enumerate(pairs):

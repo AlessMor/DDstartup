@@ -23,7 +23,7 @@ def check_analysis_field(analysis_type, input_data):
     # Common required fields
     required_fields = [
         'V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'P_aux', 'P_aux_all_DT',
-        'P_lost_rad', 'P_lost_rad_all_DT', 'TBR_DT', 'TBR_DDn',
+        'TBR_DT', 'TBR_DDn',
         'eta_th', 'plant_avail', 'Cost_per_kWh'
     ]
     # Add analysis-specific fields
@@ -71,7 +71,7 @@ def optimal_n_jobs(sysinfo=None):
         sysinfo = system_profiler()
     n_cores = sysinfo['n_cores']
     if n_cores >= 16:
-        return 16
+        return 2*n_cores
     elif n_cores >= 8:
         return 8
     elif n_cores >= 4:
@@ -148,3 +148,57 @@ def profile_system():
     print(f"[System profiling] Cores: {sysinfo['n_cores']}, RAM: {sysinfo['total_gb']:.1f} GB")
     print(f"[System profiling] n_jobs={n_jobs}, chunk_size={chunk_size}, batch_size={batch_size}, N_SAMPLES={N_SAMPLES}, order={order}")
     return chunk_size, batch_size, n_jobs, N_SAMPLES, order
+
+inputs_names = [
+    'V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_He3',
+    'P_aux', 'P_aux_DT_eq', 
+    'TBR_DT', 'TBR_DDn', 'tau_ifc', 'tau_ofc',
+    'I_target', 'eta_th', 'capacity_factor', 'cost_of_electricity'
+]
+
+outputs_names = [
+    'n_T', 'n_D', 'n_He3', 
+    'N_ofc', 'N_ifc', 'N_stor',
+    'P_DDn', 'P_DDp', 'P_DT', 'P_DT_eq', 
+    't_startup', 
+    'Q_DD', 'Q_DT_eq', 'TBE',
+    'E_lost', 'unrealized_gains',
+    'sol_success', 'linear_index', 'error'
+    ]
+
+
+
+def make_output_dict(actual_results):
+    """
+    Returns a dictionary with all outputs_names as keys.
+    Fills with np.nan (or np.inf) by default, then updates with actual_results.
+    """
+    # Use np.nan or np.inf as default, depending on your convention
+    output_dict = {k: np.nan for k in outputs_names}
+    output_dict.update(actual_results)
+    return output_dict
+def make_input_dict(actual_results):
+    """
+    Returns a dictionary with all inputs_names as keys.
+    Fills with np.nan (or np.inf) by default, then updates with actual_results.
+    """
+    # Use np.nan or np.inf as default, depending on your convention
+    output_dict = {k: np.nan for k in inputs_names}
+    output_dict.update(actual_results)
+    return output_dict
+
+def fix_vector_length(vec, target_length=100):
+    vec = np.asarray(vec)
+    if vec.size == 0:
+        # Return all nan if empty
+        return np.full(target_length, np.nan)
+    if vec.size == 1:
+        # Repeat the single value
+        return np.full(target_length, vec[0])
+    if vec.size == target_length:
+        return vec
+    # Interpolate to target length, preserving first and last value
+    x_old = np.linspace(0, 1, vec.size)
+    x_new = np.linspace(0, 1, target_length)
+    vec_interp = np.interp(x_new, x_old, vec)
+    return vec_interp
