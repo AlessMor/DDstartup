@@ -3,9 +3,70 @@ from scipy.integrate import solve_ivp
 from .units_and_constants import *
 from utils.physics import sigmav_DT_BoschHale, sigmav_DD_BoschHale
 from numba import njit
+from numba import prange
+@njit(cache=True)
+def postprocess_fusion_results(N_ofc, N_ifc, N_st, n_T, n_tot, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, TBR_DT, TBR_DDn, tau_ifc, eta_th, capacity_factor, cost_of_electricity, P_aux, P_aux_DT_eq, E_DDn, E_DDp, E_DT, injection_rate_max, N_st_min, vector_length):
+    n_D = n_tot - n_T
+    n_D_squared = n_D ** 2
+    n_D_n_T = n_D * n_T
+    V_E_DDn = V_plasma * E_DDn
+    V_E_DDp = V_plasma * E_DDp
+    V_E_DT = V_plasma * E_DT
+
+    P_DDn = n_D_squared * sigmav_DD_n / 2 * V_E_DDn
+    P_DDp = n_D_squared * sigmav_DD_p / 2 * V_E_DDp
+    P_DT = n_D_n_T * sigmav_DT * V_E_DT
+    P_DT_eq = n_tot/2 * n_tot/2 * sigmav_DT * V_E_DT
+
+    # Integrate fusion powers
+    # Use trapezoidal rule (Numba-compatible)
+    def trapz_numba(y, x):
+        s = 0.0
+        for i in range(1, len(x)):
+            s += 0.5 * (y[i] + y[i-1]) * (x[i] - x[i-1])
+        return s
+
+    # Assume time vector is monotonic and same length as N_ofc
+    t_vec = np.linspace(0, vector_length-1, vector_length)  # Placeholder, should be replaced by actual time vector if available
+    # If time vector is available, pass it as argument
+    # For now, assume uniform spacing
+    dt = 1.0
+    t_vec = np.arange(vector_length) * dt
+
+    E_fusion_DDn = trapz_numba(P_DDn, t_vec)
+    E_fusion_DDp = trapz_numba(P_DDp, t_vec)
+    E_fusion_DT = trapz_numba(P_DT, t_vec)
+    E_fusion_total_DD = E_fusion_DDn + E_fusion_DDp + E_fusion_DT
+    E_fusion_DT_eq = P_DT_eq * t_vec[-1]
+
+    E_aux_DD = P_aux * t_vec[-1]
+    E_aux_DT_eq = P_aux_DT_eq * t_vec[-1]
+
+    E_e_net_DD = capacity_factor * (eta_th * (E_fusion_total_DD) - E_aux_DD)
+    E_e_net_DT_eq = capacity_factor * (eta_th * (E_fusion_DT_eq) - E_aux_DT_eq)
+
+    Q_DD = E_fusion_total_DD / E_aux_DD if E_aux_DD > 0 else np.inf
+    Q_DT_eq = E_fusion_DT_eq / E_aux_DT_eq if E_aux_DT_eq > 0 else np.inf
+
+    E_lost = E_e_net_DT_eq - E_e_net_DD
+    unrealized_gains = E_lost * cost_of_electricity
+
+    mask = N_st > N_st_min
+    inj_rate = np.empty_like(N_ifc)
+    for i in prange(len(N_ifc)):
+        if mask[i]:
+            inj = N_ifc[i] / tau_ifc - lambda_T * N_st[i]
+            inj_rate[i] = min(max(inj, 0.0), injection_rate_max)
+        else:
+            inj_rate[i] = 0.0
+    TBE_vector = np.full_like(N_st, np.nan)
+    for i in prange(len(N_st)):
+        if mask[i] and inj_rate[i] > 0:
+            TBE_vector[i] = (n_D[i] * n_T[i] * sigmav_DT) / inj_rate[i]
+    return P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D
 from utils.tools import index_to_params, make_input_dict, make_output_dict, fix_vector_length
 
-@njit
+@njit(cache=True)
 def ode_system(t, y, 
                V_plasma, n_tot, tau_p_T, 
                TBR_DT, TBR_DDn, tau_ifc, tau_ofc,
@@ -320,7 +381,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         sigmav_DD_p, sigmav_DD_n, sigmav_DT, 
         injection_rate_max,
     )
-    
+
     # Package results (combine input parameters and ODE outputs)
     result = {
         'linear_index': linear_index,
@@ -328,17 +389,45 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         **ode_results
     }
     result_dict.update(result)
-    
-    result_dict['N_ofc'] = fix_vector_length(result_dict['N_ofc'], vector_length)
-    result_dict['N_ifc'] = fix_vector_length(result_dict['N_ifc'], vector_length)
-    result_dict['N_stor'] = fix_vector_length(result_dict['N_stor'], vector_length)
-    result_dict['n_T']   = fix_vector_length(result_dict['n_T'], vector_length)
-    result_dict['n_D']   = fix_vector_length(result_dict['n_D'], vector_length)
-    result_dict['P_DDn'] = fix_vector_length(result_dict['P_DDn'], vector_length)
-    result_dict['P_DDp'] = fix_vector_length(result_dict['P_DDp'], vector_length)
-    result_dict['P_DT']  = fix_vector_length(result_dict['P_DT'], vector_length)
-    result_dict['TBE']   = fix_vector_length(result_dict['TBE'], vector_length)
 
-                
+    # JIT-accelerated postprocessing for successful ODE results
+    # Only run if ODE was successful and t_startup is finite
+    if ode_results.get('sol_success', False) and np.isfinite(ode_results.get('t_startup', np.inf)):
+        # Fix vector lengths for ODE outputs
+        N_ofc = fix_vector_length(ode_results['N_ofc'], vector_length)
+        N_ifc = fix_vector_length(ode_results['N_ifc'], vector_length)
+        N_st = fix_vector_length(ode_results['N_stor'], vector_length)
+        n_T = fix_vector_length(ode_results['n_T'], vector_length)
+
+        # Call JIT postprocessing
+        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D = postprocess_fusion_results(
+            N_ofc, N_ifc, N_st, n_T, n_tot, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, TBR_DT, TBR_DDn, tau_ifc, eta_th, capacity_factor, cost_of_electricity, P_aux, P_aux_DT_eq, E_DDn, E_DDp, E_DT, injection_rate_max, 0.001/tritium_mass, vector_length
+        )
+        result_dict['N_ofc'] = N_ofc
+        result_dict['N_ifc'] = N_ifc
+        result_dict['N_stor'] = N_st
+        result_dict['n_T'] = n_T
+        result_dict['n_D'] = n_D
+        result_dict['P_DDn'] = P_DDn
+        result_dict['P_DDp'] = P_DDp
+        result_dict['P_DT'] = P_DT
+        result_dict['P_DT_eq'] = P_DT_eq
+        result_dict['Q_DD'] = Q_DD
+        result_dict['Q_DT_eq'] = Q_DT_eq
+        result_dict['E_lost'] = E_lost
+        result_dict['unrealized_gains'] = unrealized_gains
+        result_dict['TBE'] = TBE_vector
+    else:
+        # Fix vector lengths for error cases
+        result_dict['N_ofc'] = fix_vector_length(result_dict['N_ofc'], vector_length)
+        result_dict['N_ifc'] = fix_vector_length(result_dict['N_ifc'], vector_length)
+        result_dict['N_stor'] = fix_vector_length(result_dict['N_stor'], vector_length)
+        result_dict['n_T']   = fix_vector_length(result_dict['n_T'], vector_length)
+        result_dict['n_D']   = fix_vector_length(result_dict.get('n_D', np.full(vector_length, np.nan)), vector_length)
+        result_dict['P_DDn'] = fix_vector_length(result_dict.get('P_DDn', np.full(vector_length, np.nan)), vector_length)
+        result_dict['P_DDp'] = fix_vector_length(result_dict.get('P_DDp', np.full(vector_length, np.nan)), vector_length)
+        result_dict['P_DT']  = fix_vector_length(result_dict.get('P_DT', np.full(vector_length, np.nan)), vector_length)
+        result_dict['TBE']   = fix_vector_length(result_dict.get('TBE', np.full(vector_length, np.nan)), vector_length)
+
     return result_dict
 
