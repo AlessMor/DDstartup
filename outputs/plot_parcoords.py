@@ -6,16 +6,14 @@ import plotly.graph_objects as go
 import sys
 # --- Custom modules ---
 sys.path.append("..")
-from utils.postprocess import load_h5_to_dataframe, filter_finite, get_input_parameters, scale_target, get_discrete_colorscale
+from utils.postprocess import get_input_parameters, scale_target, get_discrete_colorscale, prepare_dataframes
 from utils.tools import PARAM_UNITS
 
 # ======================== SETUP ========================
 # File selection - Choose one or more HDF5 file to analyze
 SELECTED_FILES = ["dd_startup_20250927_182615_parametric_T_seeded.h5"]  # Set to None for automatic selection, or specify filename
-
 # Target variable selection - Choose which output metrics to visualize
 TARGET_VARIABLES = ['unrealized_gains', 't_startup']  
-
 # Optional: set min/max filters for each variable (None means no filter)
 FILTERS = {
     't_startup': {'min': 1e6, 'max': None},  # 3 years in seconds
@@ -27,19 +25,9 @@ N_COLOR_CHUNKS = 6           # Number of discrete color levels (None sets to gra
 
 
 
-# ======================== CREATE df FROM h5m ========================
-dataframes = {}
-for selected_file in SELECTED_FILES:
-    file_data = {}
-    df = load_h5_to_dataframe(selected_file)
-    for target in TARGET_VARIABLES:
-        filter_dict = FILTERS.get(target, {})
-        df_filtered = filter_finite(df, target, filter_dict)
-        if 'cost_of_electricity' in df_filtered.columns:
-            df_filtered['cost_of_electricity'] = df_filtered['cost_of_electricity'] * 3.6e6
-            PARAM_UNITS['cost_of_electricity'] = '1/kWh'
-        file_data[target] = df_filtered
-    dataframes[selected_file] = file_data
+# ======================== LOAD AND FILTER DATA ========================
+# Prepare filtered dataframes for each file and target variable
+dataframes = prepare_dataframes(SELECTED_FILES, TARGET_VARIABLES, FILTERS)
 
 
 # ======================== START PARCOORDS CREATION ========================

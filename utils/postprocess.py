@@ -77,21 +77,27 @@ def get_discrete_colorscale(n_chunks):
     """
     # Vibrant green to red
     base_colors = [
-        '#00FF00',  # bright green
-        '#7FFF00',  # chartreuse
+        "#D9FFD9",  # bright green
+        "#7BFF00",  # chartreuse
         '#FFFF00',  # yellow
-        '#FFD700',  # gold
+        "#D3B612",  # gold
         '#FF9900',  # orange
-        '#FF4500',  # orange-red
-        '#FF0000',  # bright red
+        "#FF2A00",  # orange-red
+        "#CA0032",  # bright red
     ]
+    import matplotlib.colors as mcolors
     if n_chunks > len(base_colors):
         # Use matplotlib for more colors if needed
         from matplotlib import cm
         cmap = cm.get_cmap('RdYlGn_r', n_chunks)
         color_list = [f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}' for r,g,b,_ in cmap(np.linspace(0,1,n_chunks))]
     else:
-        color_list = base_colors[:n_chunks]
+        # Interpolate between base_colors for smoother transitions
+        base_rgb = [mcolors.to_rgb(c) for c in base_colors]
+        positions = np.linspace(0, 1, len(base_rgb))
+        interp_positions = np.linspace(0, 1, n_chunks)
+        interp_rgb = np.array([np.interp(interp_positions, positions, [rgb[i] for rgb in base_rgb]) for i in range(3)]).T
+        color_list = [mcolors.to_hex(rgb) for rgb in interp_rgb]
     # Build Plotly colorscale: each color repeated for its interval
     colorscale = []
     for i, color in enumerate(color_list):
@@ -100,3 +106,19 @@ def get_discrete_colorscale(n_chunks):
         colorscale.append([frac0, color])
         colorscale.append([frac1, color])
     return colorscale
+
+def prepare_dataframes(selected_files, target_variables, filters):
+    """
+    Load and filter dataframes for each selected file and target variable.
+    Returns a nested dict: {filename: {target: filtered_df}}
+    """
+    dataframes = {}
+    for selected_file in selected_files:
+        file_data = {}
+        df = load_h5_to_dataframe(selected_file)
+        for target in target_variables:
+            filter_dict = filters.get(target, {})
+            df_filtered = filter_finite(df, target, filter_dict)
+            file_data[target] = df_filtered
+        dataframes[selected_file] = file_data
+    return dataframes

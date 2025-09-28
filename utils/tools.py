@@ -216,3 +216,4 @@ def fix_vector_length(vec, target_length=100):
     x_new = np.linspace(0, 1, target_length)
     vec_interp = np.interp(x_new, x_old, vec)
     return vec_interp
+

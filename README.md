@@ -44,10 +44,8 @@ The following parameters have been selected for the analysis (suggested maximum 
 | Ion temperature | T_i | keV | 10-100 |
 | Tritium confinement time | tau<sub>p,T</sub> | s | 0.1 - 5 |
 | Helium-3 confinement time | tau<sub>p,He3</sub> | s | 0.1 - 5 |
-| Auxiliary power (D-D operation) | P<sub>aux</sub> | MW | 0 - 200 |
-| Radiation losses (D-D operation) | P<sub>rad</sub> | MW | 0 - 100 |
-| Auxiliary power (D-T operation) | P<sub>aux,DT</sub> | MW | 0 - 200 |
-| Radiation losses (D-T operation) | P<sub>rad,DT</sub> | MW | 0 - 100 |
+| Auxiliary power (D-D operation) | P<sub>aux</sub> | MW | 20 - 60 |
+| Auxiliary power (D-T operation) | P<sub>aux,DTeq</sub> | MW | 20 - 60 |
 | <center>Fuel cycle parameters</center> |
 | Tritium Breeding Ratio for D-T neutrons | TBR <sub>DT</sub> | - | 1.05 - 1.2 |
 | Tritium Breeding Ratio for D-D neutrons | TBR <sub>DD</sub> | - | 0.5 - 1 |
@@ -56,8 +54,8 @@ The following parameters have been selected for the analysis (suggested maximum 
 | Target inventory | I<sub>target</sub> | kg | 0.1 - 5 |
 | <center>Plant and economic parameters</center> |
 | Thermal efficiency | $\eta_{th}$ | - | 0.3 - 0.5 |
-| Plant availability | A | - | 0.5 - 0.9 |
-| Cost of electricity | C<sub>el</sub> | $/kWh | 0.15 - 0.5 |
+| Capacity factor | C<sub>f</sub> | - | 0.5 - 0.9 |
+| Cost of electricity | C<sub>kWh</sub> | $/kWh | 0.1 - 0.4 |
 
 ## Tritium production model
 This section details the steps necessary to evaluate the tritium produced. Since two different methods have been considered, some steps may be explained for both methods.
@@ -71,7 +69,7 @@ The code will then build the iterator element by creating all possible combinati
 | --- | --- |
 | The code will calculate the tritium production rates due to D - D and D - T neutrons breeding, as well as tritium diffusion. The startup time (time needed to reach the target inventory) will then be calculated taking into account trtium decay, with the formula: $t_{st} = -\frac{1}{\lambda} ln \left( 1-\frac{\lambda N_{target} }{ \dot{}_{tot} } \right) $  | The code will solve a system of equations using *solve_ivp* until a 50D-50T mixture is reached. The time value at which this mixture is achieved will be $t_{st}$|
 
-4. Once the time needed to reach the inventory target (for case 1) or to reach D-T operation (case 2) is known, the code will evaluate the net electric energy produced during operation, taking into account auxiliary heating, power loss due to radiation, thermal efficiency and availability.
+4. Once the time needed to reach the inventory target (for case 1) or to reach D-T operation (case 2) is known, the code will evaluate the net electric energy produced during operation, taking into account auxiliary heating, thermal efficiency and availability.
 5. The resulting energy will be compared with the power that the same reactor would have produced if it was operated using a 50D-50T mixture from the beginning of operation. In this case different valeus for the power lossess due to radiation and auxiliary heating will be used.
 6. The economic losses are calculated by multiplying the cost of electricity by the energy lost by operating with a D-D startup rather than D-T.
 
