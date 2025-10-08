@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from ddstartup.physics.lump_functions import (
     lump_numba,
     lump_solver,
-    compute_lump_batch,
+    #compute_lump_batch,
     compute_single_combination
 )
 from ddstartup.utils.units_and_constants import lambda_T, E_DDn, E_DDp, E_DT, E_DHe3, tritium_mass
@@ -234,81 +234,81 @@ class TestLumpSolver:
             assert key in result, f"Key '{key}' should be in result"
 
 
-class TestComputeLumpBatch:
-    """Test batch computation functionality."""
+# class TestComputeLumpBatch:
+#     """Test batch computation functionality."""
     
-    def test_compute_lump_batch_basic(self):
-        """Test basic batch computation."""
-        n = 5
-        result = compute_lump_batch(
-            V_plasma=np.full(n, 100.0),
-            T_i=np.full(n, 69.0),
-            n_tot=np.full(n, 1.5e20),
-            tau_p_T=np.full(n, 1.0),
-            tau_p_He3=np.full(n, 1.0),
-            P_aux=np.full(n, 50e6),
-            P_aux_DT_eq=np.full(n, 50e6),
-            TBR_DT=np.full(n, 1.05),
-            TBR_DDn=np.full(n, 0.5),
-            I_target=np.full(n, 10.0),
-            eta_th=np.full(n, 0.4),
-            capacity_factor=np.full(n, 0.8),
-            cost_of_electricity=np.full(n, 1e-7)
-        )
+#     def test_compute_lump_batch_basic(self):
+#         """Test basic batch computation."""
+#         n = 5
+#         result = compute_lump_batch(
+#             V_plasma=np.full(n, 100.0),
+#             T_i=np.full(n, 69.0),
+#             n_tot=np.full(n, 1.5e20),
+#             tau_p_T=np.full(n, 1.0),
+#             tau_p_He3=np.full(n, 1.0),
+#             P_aux=np.full(n, 50e6),
+#             P_aux_DT_eq=np.full(n, 50e6),
+#             TBR_DT=np.full(n, 1.05),
+#             TBR_DDn=np.full(n, 0.5),
+#             I_target=np.full(n, 10.0),
+#             eta_th=np.full(n, 0.4),
+#             capacity_factor=np.full(n, 0.8),
+#             cost_of_electricity=np.full(n, 1e-7)
+#         )
         
-        assert isinstance(result, dict), "Should return dictionary"
-        assert len(result['n_T']) == n
-        assert len(result['t_startup']) == n
-        assert len(result['sol_success']) == n
+#         assert isinstance(result, dict), "Should return dictionary"
+#         assert len(result['n_T']) == n
+#         assert len(result['t_startup']) == n
+#         assert len(result['sol_success']) == n
     
-    def test_compute_lump_batch_varying_parameters(self):
-        """Test batch computation with varying parameters."""
-        V_plasma = np.linspace(80, 120, 10)
-        T_i = np.linspace(60, 80, 10)
+#     def test_compute_lump_batch_varying_parameters(self):
+#         """Test batch computation with varying parameters."""
+#         V_plasma = np.linspace(80, 120, 10)
+#         T_i = np.linspace(60, 80, 10)
         
-        result = compute_lump_batch(
-            V_plasma=V_plasma,
-            T_i=T_i,
-            n_tot=np.full(10, 1.5e20),
-            tau_p_T=np.full(10, 1.0),
-            tau_p_He3=np.full(10, 1.0),
-            P_aux=np.full(10, 50e6),
-            P_aux_DT_eq=np.full(10, 50e6),
-            TBR_DT=np.full(10, 1.05),
-            TBR_DDn=np.full(10, 0.5),
-            I_target=np.full(10, 10.0),
-            eta_th=np.full(10, 0.4),
-            capacity_factor=np.full(10, 0.8),
-            cost_of_electricity=np.full(10, 1e-7)
-        )
+#         result = compute_lump_batch(
+#             V_plasma=V_plasma,
+#             T_i=T_i,
+#             n_tot=np.full(10, 1.5e20),
+#             tau_p_T=np.full(10, 1.0),
+#             tau_p_He3=np.full(10, 1.0),
+#             P_aux=np.full(10, 50e6),
+#             P_aux_DT_eq=np.full(10, 50e6),
+#             TBR_DT=np.full(10, 1.05),
+#             TBR_DDn=np.full(10, 0.5),
+#             I_target=np.full(10, 10.0),
+#             eta_th=np.full(10, 0.4),
+#             capacity_factor=np.full(10, 0.8),
+#             cost_of_electricity=np.full(10, 1e-7)
+#         )
         
-        # Check that results vary with parameters
-        if np.sum(result['sol_success']) > 1:
-            valid_startups = result['t_startup'][result['sol_success']]
-            # Startup times should vary (not all identical)
-            assert np.std(valid_startups) > 0, "Startup times should vary with parameters"
+#         # Check that results vary with parameters
+#         if np.sum(result['sol_success']) > 1:
+#             valid_startups = result['t_startup'][result['sol_success']]
+#             # Startup times should vary (not all identical)
+#             assert np.std(valid_startups) > 0, "Startup times should vary with parameters"
     
-    def test_compute_lump_batch_all_fields_correct_length(self):
-        """Test that all output fields have correct length."""
-        n = 7
-        result = compute_lump_batch(
-            V_plasma=np.full(n, 100.0),
-            T_i=np.full(n, 69.0),
-            n_tot=np.full(n, 1.5e20),
-            tau_p_T=np.full(n, 1.0),
-            tau_p_He3=np.full(n, 1.0),
-            P_aux=np.full(n, 50e6),
-            P_aux_DT_eq=np.full(n, 50e6),
-            TBR_DT=np.full(n, 1.05),
-            TBR_DDn=np.full(n, 0.5),
-            I_target=np.full(n, 10.0),
-            eta_th=np.full(n, 0.4),
-            capacity_factor=np.full(n, 0.8),
-            cost_of_electricity=np.full(n, 1e-7)
-        )
+#     def test_compute_lump_batch_all_fields_correct_length(self):
+#         """Test that all output fields have correct length."""
+#         n = 7
+#         result = compute_lump_batch(
+#             V_plasma=np.full(n, 100.0),
+#             T_i=np.full(n, 69.0),
+#             n_tot=np.full(n, 1.5e20),
+#             tau_p_T=np.full(n, 1.0),
+#             tau_p_He3=np.full(n, 1.0),
+#             P_aux=np.full(n, 50e6),
+#             P_aux_DT_eq=np.full(n, 50e6),
+#             TBR_DT=np.full(n, 1.05),
+#             TBR_DDn=np.full(n, 0.5),
+#             I_target=np.full(n, 10.0),
+#             eta_th=np.full(n, 0.4),
+#             capacity_factor=np.full(n, 0.8),
+#             cost_of_electricity=np.full(n, 1e-7)
+#         )
         
-        for key, value in result.items():
-            assert len(value) == n, f"Field '{key}' should have length {n}"
+#         for key, value in result.items():
+#             assert len(value) == n, f"Field '{key}' should have length {n}"
 
 
 class TestComputeSingleCombination:

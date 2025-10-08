@@ -299,38 +299,62 @@ def scale_target(df, target_variable):
 def get_discrete_colorscale(n_chunks):
     """
     Returns a Plotly-compatible discrete colorscale from green to red.
+    
+    Logic:
+    - If n_chunks <= 7: Uses base colors with interpolation for smooth transitions
+    - If n_chunks > 7: Uses matplotlib's RdYlGn_r colormap for more colors
+    
+    Args:
+        n_chunks: Number of discrete color bins
+        
+    Returns:
+        List of [fraction, color] pairs for Plotly colorscale
     """
-    # Vibrant green to red
+    # Improved vibrant green to red (darker green for better visibility)
     base_colors = [
-        "#D9FFD9",  # bright green
-        "#7BFF00",  # chartreuse
-        '#FFFF00',  # yellow
-        "#D3B612",  # gold
-        '#FF9900',  # orange
-        "#FF2A00",  # orange-red
-        "#CA0032",  # bright red
+        "#66FF00",  # lime green
+        "#00CC00",  # vivid green
+        "#CCFF00",  # yellow-green
+        "#FFFF00",  # yellow
+        "#FFCC00",  # gold
+        "#FF6600",  # orange
+        "#FF0000",  # red
     ]
+    
     import matplotlib.colors as mcolors
+    
     if n_chunks > len(base_colors):
-        # Use matplotlib for more colors if needed
+        # Case 1: Need MORE colors than base palette
+        # Use matplotlib's RdYlGn_r (Red-Yellow-Green reversed) colormap
         import matplotlib
         cmap = matplotlib.colormaps.get_cmap('RdYlGn_r')
         color_values = cmap(np.linspace(0, 1, n_chunks))
-        color_list = [f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}' for r,g,b,_ in color_values]
+        color_list = [f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}' 
+                     for r, g, b, _ in color_values]
     else:
-        # Interpolate between base_colors for smoother transitions
+        # Case 2: Need FEWER or EQUAL colors than base palette
+        # Interpolate between base colors for smooth gradients
         base_rgb = [mcolors.to_rgb(c) for c in base_colors]
         positions = np.linspace(0, 1, len(base_rgb))
         interp_positions = np.linspace(0, 1, n_chunks)
-        interp_rgb = np.array([np.interp(interp_positions, positions, [rgb[i] for rgb in base_rgb]) for i in range(3)]).T
+        
+        # Interpolate R, G, B channels separately
+        interp_rgb = np.array([
+            np.interp(interp_positions, positions, [rgb[i] for rgb in base_rgb]) 
+            for i in range(3)
+        ]).T
+        
         color_list = [mcolors.to_hex(rgb) for rgb in interp_rgb]
-    # Build Plotly colorscale: each color repeated for its interval
+    
+    # Build Plotly colorscale: each color spans its interval
+    # Format: [[0.0, color0], [0.25, color0], [0.25, color1], [0.5, color1], ...]
     colorscale = []
     for i, color in enumerate(color_list):
-        frac0 = i / n_chunks
-        frac1 = (i + 1) / n_chunks
-        colorscale.append([frac0, color])
-        colorscale.append([frac1, color])
+        frac_start = i / n_chunks
+        frac_end = (i + 1) / n_chunks
+        colorscale.append([frac_start, color])
+        colorscale.append([frac_end, color])
+    
     return colorscale
 
 def prepare_dataframes(selected_files, target_variables, filters):

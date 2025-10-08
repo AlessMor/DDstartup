@@ -248,9 +248,9 @@ def solve_ode_system(total_time,
             P_DT_eq = n_tot/2 * n_tot/2 * sigmav_DT * V_E_DT  # Equivalent if always DT
         
             # Total fusion energies by integration (use interpolated time grid)
-            E_fusion_DDn = np.trapz(P_DDn, t_interp)
-            E_fusion_DDp = np.trapz(P_DDp, t_interp)
-            E_fusion_DT = np.trapz(P_DT, t_interp)
+            E_fusion_DDn = np.trapezoid(P_DDn, t_interp)
+            E_fusion_DDp = np.trapezoid(P_DDp, t_interp)
+            E_fusion_DT = np.trapezoid(P_DT, t_interp)
             E_fusion_total_DD = E_fusion_DDn + E_fusion_DDp + E_fusion_DT
             E_fusion_DT_eq = P_DT_eq * t_startup  # Constant power * time
             
