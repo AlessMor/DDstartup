@@ -197,7 +197,7 @@ outputs_names = [
     'P_DDn', 'P_DDp', 'P_DT', 'P_DT_eq', 
     't_startup', 
     'Q_DD', 'Q_DT_eq', 'TBE',
-    'E_lost', 'unrealized_gains',
+    'E_lost', 'unrealized_profits',
     'sol_success', 'linear_index', 'error'
     ]
 PARAM_KEYS = {
@@ -222,7 +222,7 @@ PARAM_UNITS = {
     'P_DDn': 'W', 'P_DDp': 'W', 'P_DT': 'W', 'P_DT_eq': 'W',    
     't_startup': 's',
     'Q_DD': '-', 'Q_DT_eq': '-', 'TBE': '-',
-    'E_lost': 'J', 'unrealized_gains': 'J',
+    'E_lost': 'J', 'unrealized_profits': 'J',
     # Add more as needed
 }
 

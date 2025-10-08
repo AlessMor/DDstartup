@@ -437,7 +437,7 @@ outputs/20241008_143015_parametric_T_seeded/
 
 **HDF5 File Structure:**
 - Input parameters: `V_plasma`, `n_tot`, `tau_p_T`, etc.
-- Output variables: `t_startup`, `unrealized_gains`, `E_lost`, etc.
+- Output variables: `t_startup`, `unrealized_profits`, `E_lost`, etc.
 - Time series (T-seeded): `N_ofc`, `N_ifc`, `N_stor`, `n_T`, `n_D`
 - Metadata: `sol_success`, `linear_index`
 

@@ -51,7 +51,7 @@ class TestLumpNumba:
         )
         
         assert len(result) == 13, "Should return 13 values"
-        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success = result
+        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success = result
         assert isinstance(sol_success, (bool, np.bool_)), "Last element should be boolean"
     
     def test_lump_numba_successful_case(self):
@@ -75,7 +75,7 @@ class TestLumpNumba:
             sigmav_DHe3=1e-22
         )
         
-        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success = result
+        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success = result
         
         if sol_success:
             assert n_T >= 0, "Tritium density should be non-negative"
@@ -108,7 +108,7 @@ class TestLumpNumba:
             sigmav_DHe3=1e-22
         )
         
-        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success = result
+        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success = result
         
         # With zero breeding, may still succeed due to DD proton reactions producing tritium
         # Just check that result is returned properly
@@ -137,7 +137,7 @@ class TestLumpNumba:
             sigmav_DHe3=1e-22
         )
         
-        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success = result
+        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success = result
         
         # Should either fail or have very long startup time
         if sol_success:
@@ -164,7 +164,7 @@ class TestLumpNumba:
             sigmav_DHe3=1e-22
         )
         
-        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success = result
+        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success = result
         
         # Total density should be conserved (approximately)
         # n_D starts at n_tot, n_T and n_He3 build up but stay small
@@ -226,7 +226,7 @@ class TestLumpSolver:
         expected_keys = [
             'n_T', 'n_D', 'n_He3', 't_startup',
             'P_DDn', 'P_DDp', 'P_DT', 'P_DT_eq',
-            'Q_DD', 'Q_DT_eq', 'E_lost', 'unrealized_gains',
+            'Q_DD', 'Q_DT_eq', 'E_lost', 'unrealized_profits',
             'sol_success'
         ]
         
@@ -418,7 +418,7 @@ class TestComputeSingleCombination:
         assert 'n_T' in result
         assert 't_startup' in result
         assert 'Q_DD' in result
-        assert 'unrealized_gains' in result
+        assert 'unrealized_profits' in result
 
 
 class TestPhysicalConstraints:
@@ -630,7 +630,7 @@ class TestConsistencyBetweenMethods:
         tuple_result = lump_numba(**params)
         
         # Unpack tuple
-        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success = tuple_result
+        n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success = tuple_result
         
         # Compare
         assert dict_result['n_T'] == n_T

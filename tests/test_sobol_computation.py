@@ -30,7 +30,7 @@ class TestRunSobolAnalysis:
     def test_basic_execution(self, temp_dir):
         """Test basic Sobol analysis execution"""
         # Mock the physics sobol function
-        with patch('physics.sobol_functions.sobol_analysis') as mock_sobol:
+        with patch('ddstartup.physics.sobol_functions.sobol_analysis') as mock_sobol:
             input_data = {
                 'V_plasma': np.array([100.0, 150.0]),
                 'T_i': np.array([15.0, 17.0]),
@@ -76,7 +76,7 @@ class TestRunSobolAnalysis:
     def test_import_error_handling(self, temp_dir):
         """Test handling of missing physics module"""
         # Mock import to fail
-        with patch('physics.sobol_functions.sobol_analysis', side_effect=ImportError("Module not found")):
+        with patch('ddstartup.physics.sobol_functions.sobol_analysis', side_effect=ImportError("Module not found")):
             input_data = {'V_plasma': np.array([100.0])}
             config = {
                 'analysis_type': 'T_seeded',
@@ -95,7 +95,7 @@ class TestRunSobolAnalysis:
     
     def test_computation_error_handling(self, temp_dir):
         """Test handling of computation errors"""
-        with patch('physics.sobol_functions.sobol_analysis',
+        with patch('ddstartup.physics.sobol_functions.sobol_analysis',
                   side_effect=RuntimeError("Computation failed")):
             input_data = {'V_plasma': np.array([100.0])}
             config = {
@@ -118,7 +118,7 @@ class TestRunSobolAnalysis:
         sample_sizes = [100, 1000, 10000]
         
         for n_samples in sample_sizes:
-            with patch('physics.sobol_functions.sobol_analysis') as mock_sobol:
+            with patch('ddstartup.physics.sobol_functions.sobol_analysis') as mock_sobol:
                 input_data = {'V_plasma': np.array([100.0])}
                 config = {
                     'analysis_type': 'lump',
@@ -142,7 +142,7 @@ class TestRunSobolAnalysis:
     def test_different_orders(self, temp_dir):
         """Test with different Sobol orders"""
         for order in [1, 2, 3]:
-            with patch('physics.sobol_functions.sobol_analysis') as mock_sobol:
+            with patch('ddstartup.physics.sobol_functions.sobol_analysis') as mock_sobol:
                 input_data = {'V_plasma': np.array([100.0])}
                 config = {
                     'analysis_type': 'T_seeded',
@@ -164,7 +164,7 @@ class TestRunSobolAnalysis:
     
     def test_verbose_output(self, temp_dir, capsys):
         """Test verbose output printing"""
-        with patch('physics.sobol_functions.sobol_analysis'):
+        with patch('ddstartup.physics.sobol_functions.sobol_analysis'):
             input_data = {'V_plasma': np.array([100.0]), 'T_i': np.array([15.0])}
             config = {
                 'analysis_type': 'T_seeded',
@@ -190,7 +190,7 @@ class TestRunSobolAnalysis:
     def test_analysis_type_passed_correctly(self, temp_dir):
         """Test that analysis_type is passed correctly to physics module"""
         for analysis_type in ['T_seeded', 'lump']:
-            with patch('physics.sobol_functions.sobol_analysis') as mock_sobol:
+            with patch('ddstartup.physics.sobol_functions.sobol_analysis') as mock_sobol:
                 input_data = {'V_plasma': np.array([100.0])}
                 config = {
                     'analysis_type': analysis_type,
@@ -221,7 +221,7 @@ class TestRunSobolAnalysis:
             return {
                 'linear_index': idx,
                 'sol_success': True,
-                'unrealized_gains': 1000.0,
+                'unrealized_profits': 1000.0,
                 't_startup': 3.156e7,
                 'error': ''
             }

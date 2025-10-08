@@ -41,7 +41,7 @@ def save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_lab
             csv_row = {"quartile": bin_label, "which": which, target: row[target]}
             for param in input_parameters:
                 csv_row[param] = row[param]
-            # Force t_startup column to be present for unrealized_gains
+            # Force t_startup column to be present for unrealized_profits
             if "t_startup" in df_filtered.columns:
                 csv_row["t_startup"] = row.get("t_startup", np.nan)
             quartile_csv_rows.append(csv_row)

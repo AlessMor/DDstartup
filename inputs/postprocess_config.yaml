@@ -34,13 +34,13 @@ files: "latest"  # Default: process files in the latest folder
 # Output metrics to analyze and visualize
 # Common options:
 #   - t_startup: Time to reach DT operation
-#   - unrealized_gains: Economic cost of DD startup
+#   - unrealized_profits: Economic cost of DD startup
 #   - Q_DD: Energy gain factor during DD phase
 #   - Q_DT_eq: Equivalent DT energy gain factor
 #   - E_lost: Lost energy during startup
 
 target_variables:
-  - unrealized_gains
+  - unrealized_profits
   - t_startup
 
 # Additional targets (uncomment to use):
@@ -128,7 +128,7 @@ output_filters:
     min: null      # Minimum startup time (s)
     max: null     # Maximum startup time (s) - e.g., ~3 years
   
-  unrealized_gains:
+  unrealized_profits:
     min: null     # Minimum unrealized gains ($)
     max: null      # Maximum unrealized gains ($)
   
@@ -212,9 +212,9 @@ advanced:
 # Uncomment and modify these examples for common use cases
 
 # --- Example 1: Focus on high-cost scenarios ---
-# target_variables: [unrealized_gains]
+# target_variables: [unrealized_profits]
 # output_filters:
-#   unrealized_gains:
+#   unrealized_profits:
 #     min: 5.0e6
 #     max: null
 # plots:
@@ -237,7 +237,7 @@ advanced:
 # files:
 #   - "outputs/dd_startup_lump.h5"
 #   - "outputs/dd_startup_tseeded.h5"
-# target_variables: [unrealized_gains, t_startup]
+# target_variables: [unrealized_profits, t_startup]
 # plots:
 #   generate_all: false
 #   pdf: true

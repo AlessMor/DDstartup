@@ -70,6 +70,19 @@ def main():
     verbose = config['verbose']
     
     # ============================================================================
+    # DRY RUN CHECK (EARLY EXIT)
+    # ============================================================================
+    # If dry-run flag is set, exit here after validating configuration files
+    # No need to prepare input data or profile system for dry-run
+    if args.dry_run:
+        print("\n✅ Dry run completed. Configuration files validated successfully.")
+        print(f"✅ Parameter file: {param_file}")
+        print(f"✅ Config file: {config_file}")
+        print(f"✅ Analysis type: {config['analysis_type']}")
+        print(f"✅ Method: {config['method']}")
+        return 0
+    
+    # ============================================================================
     # PARAMETER LOADING AND INPUT DATA PREPARATION
     # ============================================================================
     # Load parameter fields from Python parameter file
@@ -144,15 +157,6 @@ def main():
     except Exception as e:
         print(f"Error creating output directory: {e}", file=sys.stderr)
         return 1
-    
-    # ============================================================================
-    # DRY RUN CHECK
-    # ============================================================================
-    # If dry-run flag is set, exit here after validating configuration
-    if args.dry_run:
-        print("\n✅ Dry run completed. Configuration validated successfully.")
-        print(f"✅ Output would be saved to: {output_file}")
-        return 0
     
     # ============================================================================
     # PHYSICS MODULE IMPORT

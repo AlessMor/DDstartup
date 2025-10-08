@@ -161,7 +161,7 @@ def sobol_analysis(
         print("=" * 60)
     
     # Import tools for field names and progress bar
-    from utils.tools import inputs_names, outputs_names
+    from ddstartup.utils.tools import inputs_names, outputs_names
     from tqdm import tqdm
     
     # Get number of jobs from config or use all cores
@@ -218,31 +218,31 @@ def sobol_analysis(
         print(f"⚡ Average: {(t5-t4)/N_SAMPLES*1000:.2f} ms/sample")
         print(f"🚀 Throughput: {N_SAMPLES/(t5-t4):.1f} samples/s")
 
-    # 7. Extract output metric (unrealized_gains) - vectorized approach
+    # 7. Extract output metric (unrealized_profits) - vectorized approach
     if verbose:
         print("\nExtracting results...")
     
     # Pre-allocate arrays for better performance
     n_results = len(results)
-    unrealized_gains = np.full(n_results, np.nan, dtype=np.float64)
+    unrealized_profits = np.full(n_results, np.nan, dtype=np.float64)
     
     # Vectorized extraction with error checking
     for i, r in enumerate(results):
         if r is not None and isinstance(r, dict):
-            ug = r.get('unrealized_gains', np.nan)
+            ug = r.get('unrealized_profits', np.nan)
             if isinstance(ug, (int, float, np.number)) and np.isfinite(ug):
-                unrealized_gains[i] = float(ug)
+                unrealized_profits[i] = float(ug)
     
     # Filter valid results
-    valid_mask = np.isfinite(unrealized_gains)
+    valid_mask = np.isfinite(unrealized_profits)
     n_valid = np.sum(valid_mask)
     
     # Debug: check first result
     if verbose and len(results) > 0:
         print(f"\nDEBUG - First result keys: {list(results[0].keys()) if results[0] else 'None'}")
-        if results[0] and 'unrealized_gains' in results[0]:
-            print(f"DEBUG - First unrealized_gains: {results[0]['unrealized_gains']}")
-        print(f"DEBUG - First 10 unrealized_gains values: {unrealized_gains[:10]}")
+        if results[0] and 'unrealized_profits' in results[0]:
+            print(f"DEBUG - First unrealized_profits: {results[0]['unrealized_profits']}")
+        print(f"DEBUG - First 10 unrealized_profits values: {unrealized_profits[:10]}")
     
     if verbose:
         print(f"\nValid results: {n_valid}/{N_SAMPLES} ({100*n_valid/N_SAMPLES:.1f}%)")
@@ -254,7 +254,7 @@ def sobol_analysis(
     # Extract only variable parameter columns for valid samples
     # This reduces PCE fitting dimensionality (ignore constant parameters)
     valid_samples_var = samples_var[valid_mask]  # Only variable parameters
-    valid_dollars = unrealized_gains[valid_mask]
+    valid_dollars = unrealized_profits[valid_mask]
 
     # 8. Fit PCE surrogate model and compute Sobol indices
     # Use variable parameters only (more efficient)

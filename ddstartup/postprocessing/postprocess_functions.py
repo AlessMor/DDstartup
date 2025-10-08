@@ -92,7 +92,7 @@ def load_yaml_config(config_path):
 
 def parse_filter_expression(filter_str):
     """
-    Parse a filter expression like "V_plasma<150" or "t_startup>1e6,unrealized_gains<2e9".
+    Parse a filter expression like "V_plasma<150" or "t_startup>1e6,unrealized_profits<2e9".
     
     Args:
         filter_str: String with filter expressions separated by commas
@@ -279,7 +279,7 @@ def get_input_parameters(df, target_variable, filename=None):
     return input_parameters
 
 def scale_target(df, target_variable):
-    if target_variable == 'unrealized_gains':
+    if target_variable == 'unrealized_profits':
         df[target_variable] = df[target_variable] / 1e6
         return df, 'M$'
     if target_variable != 't_startup':

@@ -68,10 +68,10 @@ def test_save_quartile_extremes_to_csv_basic(temp_dir, sample_dataframe):
 
 def test_save_quartile_extremes_to_csv_with_tstartup_column(temp_dir, sample_dataframe):
     """
-    Test that t_startup column is included when analyzing unrealized_gains.
+    Test that t_startup column is included when analyzing unrealized_profits.
     Expected: CSV should include t_startup column even if not in input_parameters.
     """
-    target = 'unrealized_gains'
+    target = 'unrealized_profits'
     bin_edges = sample_dataframe[target].quantile([0, 0.25, 0.5, 0.75, 1.0]).values
     bin_labels = [
         f"Q1: {bin_edges[0]:.2e}–{bin_edges[1]:.2e}",
@@ -84,13 +84,13 @@ def test_save_quartile_extremes_to_csv_with_tstartup_column(temp_dir, sample_dat
     )
     
     input_parameters = ['V_plasma', 'n_tot']  # t_startup not in input params
-    plot_name = 'test_unrealized_gains.png'
+    plot_name = 'test_unrealized_profits.png'
     
     save_quartile_extremes_to_csv(
         sample_dataframe, target, input_parameters, bin_labels, temp_dir, plot_name
     )
     
-    csv_path = temp_dir / f"quartile_{target}_values_test_unrealized_gains.csv"
+    csv_path = temp_dir / f"quartile_{target}_values_test_unrealized_profits.csv"
     df_csv = pd.read_csv(csv_path)
     
     # Expected: t_startup column is present even though not in input_parameters

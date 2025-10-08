@@ -9,7 +9,7 @@ files: "latest"
 
 # Target variables to analyze
 target_variables:
-  - unrealized_gains
+  - unrealized_profits
   - t_startup
 
 # Input filters (set to null to disable)
@@ -23,7 +23,7 @@ output_filters:
   t_startup:
     min: null
     max: null  # ~3 years
-  unrealized_gains:
+  unrealized_profits:
     min: null
     max: null
 

@@ -107,7 +107,7 @@ def solve_ode_system(total_time,
     Returns:
         Dictionary containing:
             - Time series: N_ofc, N_ifc, N_stor, n_T, n_D, P_DDn, P_DDp, P_DT, TBE
-            - Scalars: t_startup, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains
+            - Scalars: t_startup, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits
             - Status: sol_success (bool), error (str)
     """
     # Units-free ODE function
@@ -272,7 +272,7 @@ def solve_ode_system(total_time,
             # P_e_net_DT_eq_avg = E_e_net_DT_eq / t_startup 
 
             E_lost = E_e_net_DT_eq - E_e_net_DD
-            unrealized_gains = E_lost * cost_of_electricity  # Cost in dollars (NB Cost is in 1/J)
+            unrealized_profits = E_lost * cost_of_electricity  # Cost in dollars (NB Cost is in 1/J)
 
             # Compute TBE_vector if requested
             mask = N_st > N_st_min
@@ -296,7 +296,7 @@ def solve_ode_system(total_time,
             #     f.write("Q_DD: {}\n".format(Q_DD))
             #     f.write("Q_DT_eq: {}\n".format(Q_DT_eq))
             #     f.write("E_lost: {}\n".format(E_lost))
-            #     f.write("unrealized_gains: {}\n".format(unrealized_gains))
+            #     f.write("unrealized_profits: {}\n".format(unrealized_profits))
             #     f.write("TBE_vector: {}\n".format(TBE_vector))
             
             
@@ -314,7 +314,7 @@ def solve_ode_system(total_time,
                 'Q_DD': Q_DD,
                 'Q_DT_eq': Q_DT_eq,
                 'E_lost': E_lost,
-                'unrealized_gains': unrealized_gains,
+                'unrealized_profits': unrealized_profits,
                 'TBE': TBE_vector,
                 'sol_success': True
             })
@@ -363,7 +363,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         Dictionary with input parameters and computed results:
             - Input echoes: V_plasma, T_i, n_tot, tau_p_T, P_aux, etc.
             - Time series: N_ofc, N_ifc, N_stor, n_T, n_D, P_DDn, P_DDp, P_DT, TBE
-            - Scalars: t_startup, Q_DD, Q_DT_eq, E_lost, unrealized_gains
+            - Scalars: t_startup, Q_DD, Q_DT_eq, E_lost, unrealized_profits
             - Status: linear_index, sol_success, error
     """
 
@@ -442,7 +442,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         n_T = fix_vector_length(ode_results['n_T'], vector_length)
         t_startup = ode_results.get('t_startup')
         # Call JIT postprocessing
-        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D = postprocess_fusion_results_Tseeded(t_startup,
+        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, TBE_vector, n_D = postprocess_fusion_results_Tseeded(t_startup,
             N_ofc, N_ifc, N_st, n_T, n_tot, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, TBR_DT, TBR_DDn, tau_ifc, eta_th, capacity_factor, cost_of_electricity, P_aux, P_aux_DT_eq, E_DDn, E_DDp, E_DT, injection_rate_max, 0.001/tritium_mass, vector_length
         )
         result_dict['N_ofc'] = N_ofc
@@ -457,7 +457,7 @@ def compute_single_combination(linear_index, input_arrays_flat, param_shapes_arr
         result_dict['Q_DD'] = Q_DD
         result_dict['Q_DT_eq'] = Q_DT_eq
         result_dict['E_lost'] = E_lost
-        result_dict['unrealized_gains'] = unrealized_gains
+        result_dict['unrealized_profits'] = unrealized_profits
         result_dict['TBE'] = TBE_vector
     else:
         # Fix vector lengths for error cases
@@ -501,7 +501,7 @@ def postprocess_fusion_results_Tseeded(t_startup, N_ofc, N_ifc, N_st, n_T, n_tot
         
     Returns:
         Tuple of (P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, 
-                  E_lost, unrealized_gains, TBE_vector, n_D)
+                  E_lost, unrealized_profits, TBE_vector, n_D)
     """
     n_D = n_tot - n_T
     n_D_squared = n_D ** 2
@@ -533,7 +533,7 @@ def postprocess_fusion_results_Tseeded(t_startup, N_ofc, N_ifc, N_st, n_T, n_tot
     Q_DT_eq = E_fusion_DT_eq / E_aux_DT_eq if E_aux_DT_eq > 0 else np.inf
 
     E_lost = E_e_net_DT_eq - E_e_net_DD
-    unrealized_gains = E_lost * cost_of_electricity
+    unrealized_profits = E_lost * cost_of_electricity
 
     mask = N_st > N_st_min
     inj_rate = np.empty_like(N_ifc)
@@ -547,7 +547,7 @@ def postprocess_fusion_results_Tseeded(t_startup, N_ofc, N_ifc, N_st, n_T, n_tot
     for i in prange(len(N_st)):
         if mask[i] and inj_rate[i] > 0:
             TBE_vector[i] = (n_D[i] * n_T[i] * sigmav_DT) / inj_rate[i]
-    return P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D
+    return P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, TBE_vector, n_D
 
 @njit(cache=True)
 def trapz_numba(y, x):

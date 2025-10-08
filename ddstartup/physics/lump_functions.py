@@ -36,7 +36,7 @@ def lump_numba(
         
     Returns:
         Tuple of (n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, 
-                  Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success)
+                  Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success)
     """
     
     n_D = n_tot
@@ -78,10 +78,10 @@ def lump_numba(
         E_e_net_DD = P_e_net * t_startup
         E_e_net_DT_eq = P_e_net_DT_eq * t_startup
         E_lost = E_e_net_DT_eq - E_e_net_DD
-        unrealized_gains = E_lost * cost_of_electricity
+        unrealized_profits = E_lost * cost_of_electricity
         
         
-        return (n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, True)
+        return (n_T, n_D, n_He3, t_startup, Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, True)
         
     
 
@@ -101,13 +101,13 @@ def lump_solver(
         
     Returns:
         Dictionary with keys: n_T, n_D, n_He3, t_startup, P_DDn, P_DDp, P_DT,
-                             P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, sol_success
+                             P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, sol_success
     """
 
     (n_T, n_D, n_He3, 
      t_startup, 
      Pf_DDn, Pf_DDp, Pf_DD_DT, Pf_DT_eq, Q_DD, Q_DT_eq, 
-     E_lost, unrealized_gains, sol_success) = lump_numba(
+     E_lost, unrealized_profits, sol_success) = lump_numba(
     V_plasma, n_tot, tau_p_T, tau_p_He3, 
     P_aux, P_aux_DT_eq, 
     TBR_DT, TBR_DDn, I_target, 
@@ -126,7 +126,7 @@ def lump_solver(
         'Q_DD': Q_DD,
         'Q_DT_eq': Q_DT_eq,
         'E_lost': E_lost,
-        'unrealized_gains': unrealized_gains,
+        'unrealized_profits': unrealized_profits,
         'sol_success': sol_success
     })
 
@@ -175,7 +175,7 @@ def lump_solver(
 #         'Q_DD': np.empty(n),
 #         'Q_DT_eq': np.empty(n),
 #         'E_lost': np.empty(n),
-#         'unrealized_gains': np.empty(n),
+#         'unrealized_profits': np.empty(n),
 #         'sol_success': np.empty(n, dtype=bool),
 #     }
 #     # Physics functions (vectorized)
@@ -204,7 +204,7 @@ def lump_solver(
 #         results['Q_DD'][i] = tup[8]
 #         results['Q_DT_eq'][i] = tup[9]
 #         results['E_lost'][i] = tup[10]
-#         results['unrealized_gains'][i] = tup[11]
+#         results['unrealized_profits'][i] = tup[11]
 #         results['sol_success'][i] = tup[12]
 #     return results
 

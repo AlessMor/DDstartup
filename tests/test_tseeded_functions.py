@@ -139,7 +139,7 @@ class TestODESolver:
             assert np.isfinite(result['t_startup']), "Startup time should be finite"
             assert result['t_startup'] > 0, "Startup time should be positive"
             assert 'Q_DD' in result
-            assert 'unrealized_gains' in result
+            assert 'unrealized_profits' in result
     
     def test_solve_ode_system_vector_outputs(self):
         """Test that vector outputs have correct length."""
@@ -408,7 +408,7 @@ class TestPostprocessingFunctions:
         )
         
         # Unpack results
-        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D = results
+        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, TBE_vector, n_D = results
         
         # Check types and shapes
         assert len(P_DDn) == vector_length
@@ -435,7 +435,7 @@ class TestPostprocessingFunctions:
             E_DDn, E_DDp, E_DT, 1e20, 0.001/tritium_mass, vector_length
         )
         
-        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D = results
+        P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_profits, TBE_vector, n_D = results
         
         # Powers should be non-negative
         assert np.all(P_DDn >= 0), "DD neutron power should be non-negative"

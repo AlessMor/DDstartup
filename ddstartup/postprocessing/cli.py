@@ -25,10 +25,10 @@ Examples:
     python -m ddstartup.postprocessing --files file1.h5 file2.h5
     
     # Specify target variables
-    python -m ddstartup.postprocessing --targets t_startup unrealized_gains
+    python -m ddstartup.postprocessing --targets t_startup unrealized_profits
     
     # Apply filters (command-line)
-    python -m ddstartup.postprocessing --input-filter "V_plasma<150" --output-filter "unrealized_gains>2e6"
+    python -m ddstartup.postprocessing --input-filter "V_plasma<150" --output-filter "unrealized_profits>2e6"
     
     # Generate specific plot types
     python -m ddstartup.postprocessing --plots kde parcoords pdf
@@ -184,7 +184,7 @@ def main():
     parser.add_argument(
         '--output-filter', '-of',
         type=str,
-        help='Filter for output variables (e.g., "unrealized_gains>2e6,t_startup<1e8")'
+        help='Filter for output variables (e.g., "unrealized_profits>2e6,t_startup<1e8")'
     )
     
     parser.add_argument(
@@ -228,7 +228,7 @@ def main():
         # Use defaults if no config file
         config = {
             'files': 'latest',
-            'target_variables': ['unrealized_gains', 't_startup'],
+            'target_variables': ['unrealized_profits', 't_startup'],
             'input_filters': {},
             'output_filters': {},
             'plots': {'generate_all': True},
@@ -366,7 +366,7 @@ def main():
     # GET TARGET VARIABLES
     # ============================================================================
     
-    targets = config.get('target_variables', ['unrealized_gains', 't_startup'])
+    targets = config.get('target_variables', ['unrealized_profits', 't_startup'])
     print(f"\n🎯 Target variables: {', '.join(targets)}")
     
     # ============================================================================

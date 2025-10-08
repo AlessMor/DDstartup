@@ -155,7 +155,7 @@ def test_load_yaml_config(temp_dir):
     """
     config_path = temp_dir / "config.yaml"
     config_data = {
-        'target_variables': ['t_startup', 'unrealized_gains'],
+        'target_variables': ['t_startup', 'unrealized_profits'],
         'input_filters': {'V_plasma': {'min': 100, 'max': 200}},
         'output_filters': {'t_startup': {'min': 0, 'max': 1e8}}
     }
@@ -167,7 +167,7 @@ def test_load_yaml_config(temp_dir):
     
     # Expected: Loaded config matches original data
     assert result == config_data
-    assert result['target_variables'] == ['t_startup', 'unrealized_gains']
+    assert result['target_variables'] == ['t_startup', 'unrealized_profits']
     assert result['input_filters']['V_plasma']['min'] == 100
 
 
@@ -320,12 +320,12 @@ def test_apply_filters_output_filters(sample_dataframe):
     Expected: Should filter based on output variable constraints.
     """
     input_filters = {}
-    output_filters = {'unrealized_gains': {'min': 1e8, 'max': None}}
+    output_filters = {'unrealized_profits': {'min': 1e8, 'max': None}}
     
     result = apply_filters(sample_dataframe, input_filters, output_filters, 't_startup')
     
-    # Expected: Only rows with unrealized_gains >= 1e8
-    assert result['unrealized_gains'].min() >= 1e8
+    # Expected: Only rows with unrealized_profits >= 1e8
+    assert result['unrealized_profits'].min() >= 1e8
 
 
 # ============================================================================
@@ -468,18 +468,18 @@ def test_get_input_parameters_t_seeded_removes_specific(sample_dataframe):
     assert 'I_target' not in result
 
 
-def test_scale_target_unrealized_gains(sample_dataframe):
+def test_scale_target_unrealized_profits(sample_dataframe):
     """
-    Test scaling unrealized_gains to millions of dollars.
+    Test scaling unrealized_profits to millions of dollars.
     Expected: Should divide by 1e6 and return 'M$' unit.
     """
     df = sample_dataframe.copy()
     
-    result_df, unit = scale_target(df, 'unrealized_gains')
+    result_df, unit = scale_target(df, 'unrealized_profits')
     
     # Expected: Values scaled down by 1e6, unit is 'M$'
     assert unit == 'M$'
-    assert result_df['unrealized_gains'].iloc[0] == sample_dataframe['unrealized_gains'].iloc[0] / 1e6
+    assert result_df['unrealized_profits'].iloc[0] == sample_dataframe['unrealized_profits'].iloc[0] / 1e6
 
 
 def test_scale_target_startup_to_days():
@@ -591,12 +591,12 @@ def test_prepare_dataframes_single_file(temp_dir):
     with h5py.File(h5_path, 'w') as f:
         f.create_dataset('V_plasma', data=[100, 150, 200, 250])
         f.create_dataset('t_startup', data=[1e6, 2e6, 3e6, np.nan])
-        f.create_dataset('unrealized_gains', data=[1e8, 2e8, np.nan, 4e8])
+        f.create_dataset('unrealized_profits', data=[1e8, 2e8, np.nan, 4e8])
     
-    target_variables = ['t_startup', 'unrealized_gains']
+    target_variables = ['t_startup', 'unrealized_profits']
     filters = {
         't_startup': {'min': 0, 'max': 5e6},
-        'unrealized_gains': {'min': 0, 'max': 5e8}
+        'unrealized_profits': {'min': 0, 'max': 5e8}
     }
     
     result = prepare_dataframes([h5_path], target_variables, filters)
@@ -604,15 +604,15 @@ def test_prepare_dataframes_single_file(temp_dir):
     # Expected: Nested dict with file -> target -> dataframe
     assert h5_path in result
     assert 't_startup' in result[h5_path]
-    assert 'unrealized_gains' in result[h5_path]
+    assert 'unrealized_profits' in result[h5_path]
     
     # Expected: t_startup dataframe has finite values only
     df_startup = result[h5_path]['t_startup']
     assert df_startup['t_startup'].isna().sum() == 0
     
-    # Expected: unrealized_gains dataframe has finite values only
-    df_gains = result[h5_path]['unrealized_gains']
-    assert df_gains['unrealized_gains'].isna().sum() == 0
+    # Expected: unrealized_profits dataframe has finite values only
+    df_gains = result[h5_path]['unrealized_profits']
+    assert df_gains['unrealized_profits'].isna().sum() == 0
 
 
 def test_prepare_dataframes_empty_filters(temp_dir):

@@ -274,7 +274,7 @@ class ParameterField:
         Returns:
             Scaled value
         """
-        if np.isscalar(val_array):
+        if isinstance(val_array, (int, float, complex, np.number)):
             return val_array * scale
         return val_array[index] * scale
 

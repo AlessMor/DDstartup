@@ -92,7 +92,7 @@ class TestSobolSampleEvaluation:
             return {
                 'linear_index': idx,
                 'sol_success': True,
-                'unrealized_gains': 1000.0,
+                'unrealized_profits': 1000.0,
                 't_startup': 3.156e7,  # 1 year
                 'Q_DD': 5.0,
                 'error': ''
@@ -112,7 +112,7 @@ class TestSobolSampleEvaluation:
         assert 'sample_idx' in result
         assert result['sample_idx'] == sample_idx
         assert 'sol_success' in result
-        assert 'unrealized_gains' in result
+        assert 'unrealized_profits' in result
     
     def test_run_sample_with_error(self):
         """Test that errors are caught and returned properly."""
@@ -155,7 +155,7 @@ class TestSobolHDF5Output:
             return {
                 'linear_index': idx,
                 'sol_success': True,
-                'unrealized_gains': 1000.0 + np.random.randn() * 100,
+                'unrealized_profits': 1000.0 + np.random.randn() * 100,
                 't_startup': 3.156e7,
                 'Q_DD': 5.0,
                 'V_plasma': arrays[0][0],
@@ -210,7 +210,7 @@ class TestSobolHDF5Output:
                 assert 'parameter_info' in h5
                 
                 # Check data fields exist
-                assert 'unrealized_gains' in h5
+                assert 'unrealized_profits' in h5
                 assert 'sol_success' in h5
                 
         finally:
@@ -231,7 +231,7 @@ class TestSobolHDF5Output:
             return {
                 'linear_index': idx,
                 'sol_success': False,
-                'unrealized_gains': np.nan,
+                'unrealized_profits': np.nan,
                 'error': 'Test failure'
             }
         
@@ -281,7 +281,7 @@ class TestSobolIndicesCalculation:
             return {
                 'linear_index': idx,
                 'sol_success': True,
-                'unrealized_gains': y,
+                'unrealized_profits': y,
                 'error': ''
             }
         

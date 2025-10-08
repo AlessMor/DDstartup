@@ -39,7 +39,7 @@ def run_sobol_analysis(
     """
     # Import sobol analysis function from physics module
     try:
-        from physics.sobol_functions import sobol_analysis as physics_sobol_analysis
+        from ddstartup.physics.sobol_functions import sobol_analysis as physics_sobol_analysis
     except ImportError:
         raise ImportError(
             "Sobol analysis requires the physics.sobol_functions module. "
