@@ -1,0 +1,40 @@
+# ============================================================================
+# Quick Postprocessing Configuration Example
+# ============================================================================
+# This is a simplified configuration for quick postprocessing tasks.
+# For a complete reference with all options, see postprocess_config.yaml
+
+# Files to process: "latest" or specific path(s)
+files: "latest"
+
+# Target variables to analyze
+target_variables:
+  - unrealized_gains
+  - t_startup
+
+# Input filters (set to null to disable)
+input_filters:
+  V_plasma:
+    min: null
+    max: null
+
+# Output filters (set to null to disable)
+output_filters:
+  t_startup:
+    min: null
+    max: null  # ~3 years
+  unrealized_gains:
+    min: null
+    max: null
+
+# Plot types to generate
+plots:
+  generate_all: true  # Set to false to select individual plots
+  # kde: true
+  # parcoords: true
+  # pdf: true
+
+# Output directory
+output:
+  directory: "default"  # or specify custom path
+  verbose: true
