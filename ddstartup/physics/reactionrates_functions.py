@@ -17,7 +17,7 @@ def sigmav_DT_BoschHale(ion_temp_profile: float64) -> float64:
         ion_temp_profile: ion temperature profile [keV]
 
     Returns:
-        :math:`\langle \sigma v \rangle` in cm^3/s.
+        :math:`\langle \sigma v \rangle` in m^3/s.
 
     """
         
@@ -52,7 +52,7 @@ def sigmav_DD_BoschHale(ion_temp_profile: float64) -> tuple[float64, float64, fl
         ion_temp_profile: ion temperature profile [keV]
 
     Returns:
-        :math:`\langle \sigma v \rangle` tuple (total, D(d,p)T, D(d,n)3He) in cm^3/s.
+        :math:`\langle \sigma v \rangle` tuple (total, D(d,p)T, D(d,n)3He) in m^3/s.
     """
         
     # For D(d,n)3He
@@ -106,7 +106,7 @@ def sigmav_DHe3_BoschHale(ion_temp_profile: float64) -> float64:
         ion_temp_profile: ion temperature profile [keV]
 
     Returns:
-        :math:`\langle \sigma v \rangle` in cm^3/s.
+        :math:`\langle \sigma v \rangle` in m^3/s.
     """
         
     # For He3(d,p)4He

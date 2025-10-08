@@ -132,81 +132,81 @@ def lump_solver(
 
 
 
-# --- Numba-parallelized batch computation ---
-def compute_lump_batch(
-    V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_aux_DT_eq,
-    TBR_DT, TBR_DDn, I_target, eta_th, capacity_factor, cost_of_electricity
-):
-    """
-    Compute lump model for multiple parameter combinations (vectorized).
+# # --- Numba-parallelized batch computation ---
+# def compute_lump_batch(
+#     V_plasma, T_i, n_tot, tau_p_T, tau_p_He3, P_aux, P_aux_DT_eq,
+#     TBR_DT, TBR_DDn, I_target, eta_th, capacity_factor, cost_of_electricity
+# ):
+#     """
+#     Compute lump model for multiple parameter combinations (vectorized).
     
-    Alternative to compute_single_combination for batch processing.
-    All inputs are arrays of the same length.
+#     Alternative to compute_single_combination for batch processing.
+#     All inputs are arrays of the same length.
     
-    Args:
-        V_plasma: Array of plasma volumes (m³)
-        T_i: Array of ion temperatures (keV)
-        n_tot: Array of total densities (m⁻³)
-        tau_p_T: Array of tritium confinement times (s)
-        tau_p_He3: Array of He3 confinement times (s)
-        P_aux: Array of auxiliary powers (W)
-        P_aux_DT_eq: Array of D-T equivalent powers (W)
-        TBR_DT: Array of D-T breeding ratios
-        TBR_DDn: Array of DD neutron breeding ratios
-        I_target: Array of target inventories (kg)
-        eta_th: Array of thermal efficiencies
-        capacity_factor: Array of capacity factors
-        cost_of_electricity: Array of electricity costs ($/J)
+#     Args:
+#         V_plasma: Array of plasma volumes (m³)
+#         T_i: Array of ion temperatures (keV)
+#         n_tot: Array of total densities (m⁻³)
+#         tau_p_T: Array of tritium confinement times (s)
+#         tau_p_He3: Array of He3 confinement times (s)
+#         P_aux: Array of auxiliary powers (W)
+#         P_aux_DT_eq: Array of D-T equivalent powers (W)
+#         TBR_DT: Array of D-T breeding ratios
+#         TBR_DDn: Array of DD neutron breeding ratios
+#         I_target: Array of target inventories (kg)
+#         eta_th: Array of thermal efficiencies
+#         capacity_factor: Array of capacity factors
+#         cost_of_electricity: Array of electricity costs ($/J)
         
-    Returns:
-        Dictionary of result arrays (n_T, n_D, n_He3, t_startup, etc.)
-    """
-    n = len(V_plasma)
-    # Preallocate output arrays
-    results = {
-        'n_T': np.empty(n),
-        'n_D': np.empty(n),
-        'n_He3': np.empty(n),
-        't_startup': np.empty(n),
-        'P_DDn': np.empty(n),
-        'P_DDp': np.empty(n),
-        'P_DT': np.empty(n),
-        'P_DT_eq': np.empty(n),
-        'Q_DD': np.empty(n),
-        'Q_DT_eq': np.empty(n),
-        'E_lost': np.empty(n),
-        'unrealized_gains': np.empty(n),
-        'sol_success': np.empty(n, dtype=bool),
-    }
-    # Physics functions (vectorized)
-    sigmav_DD_results = sigmav_DD_BoschHale(T_i)
-    sigmav_DD_p = sigmav_DD_results[1]
-    sigmav_DD_n = sigmav_DD_results[2]
-    sigmav_DT = sigmav_DT_BoschHale(T_i)
-    sigmav_DHe3 = sigmav_DHe3_BoschHale(T_i)
-    # Numba loop
-    for i in range(n):
-        tup = lump_numba(
-            V_plasma[i], n_tot[i], tau_p_T[i], tau_p_He3[i],
-            P_aux[i], P_aux_DT_eq[i], TBR_DT[i], TBR_DDn[i], I_target[i],
-            eta_th[i], capacity_factor[i], cost_of_electricity[i],
-            sigmav_DD_p[i], sigmav_DD_n[i], sigmav_DT[i], sigmav_DHe3[i]
-        )
-        # Unpack results
-        results['n_T'][i] = tup[0]
-        results['n_D'][i] = tup[1]
-        results['n_He3'][i] = tup[2]
-        results['t_startup'][i] = tup[3]
-        results['P_DDn'][i] = tup[4]
-        results['P_DDp'][i] = tup[5]
-        results['P_DT'][i] = tup[6]
-        results['P_DT_eq'][i] = tup[7]
-        results['Q_DD'][i] = tup[8]
-        results['Q_DT_eq'][i] = tup[9]
-        results['E_lost'][i] = tup[10]
-        results['unrealized_gains'][i] = tup[11]
-        results['sol_success'][i] = tup[12]
-    return results
+#     Returns:
+#         Dictionary of result arrays (n_T, n_D, n_He3, t_startup, etc.)
+#     """
+#     n = len(V_plasma)
+#     # Preallocate output arrays
+#     results = {
+#         'n_T': np.empty(n),
+#         'n_D': np.empty(n),
+#         'n_He3': np.empty(n),
+#         't_startup': np.empty(n),
+#         'P_DDn': np.empty(n),
+#         'P_DDp': np.empty(n),
+#         'P_DT': np.empty(n),
+#         'P_DT_eq': np.empty(n),
+#         'Q_DD': np.empty(n),
+#         'Q_DT_eq': np.empty(n),
+#         'E_lost': np.empty(n),
+#         'unrealized_gains': np.empty(n),
+#         'sol_success': np.empty(n, dtype=bool),
+#     }
+#     # Physics functions (vectorized)
+#     sigmav_DD_results = sigmav_DD_BoschHale(T_i)
+#     sigmav_DD_p = sigmav_DD_results[1]
+#     sigmav_DD_n = sigmav_DD_results[2]
+#     sigmav_DT = sigmav_DT_BoschHale(T_i)
+#     sigmav_DHe3 = sigmav_DHe3_BoschHale(T_i)
+#     # Numba loop
+#     for i in range(n):
+#         tup = lump_numba(
+#             V_plasma[i], n_tot[i], tau_p_T[i], tau_p_He3[i],
+#             P_aux[i], P_aux_DT_eq[i], TBR_DT[i], TBR_DDn[i], I_target[i],
+#             eta_th[i], capacity_factor[i], cost_of_electricity[i],
+#             sigmav_DD_p[i], sigmav_DD_n[i], sigmav_DT[i], sigmav_DHe3[i]
+#         )
+#         # Unpack results
+#         results['n_T'][i] = tup[0]
+#         results['n_D'][i] = tup[1]
+#         results['n_He3'][i] = tup[2]
+#         results['t_startup'][i] = tup[3]
+#         results['P_DDn'][i] = tup[4]
+#         results['P_DDp'][i] = tup[5]
+#         results['P_DT'][i] = tup[6]
+#         results['P_DT_eq'][i] = tup[7]
+#         results['Q_DD'][i] = tup[8]
+#         results['Q_DT_eq'][i] = tup[9]
+#         results['E_lost'][i] = tup[10]
+#         results['unrealized_gains'][i] = tup[11]
+#         results['sol_success'][i] = tup[12]
+#     return results
 
 # --- Old single-combination function preserved ---
 def compute_single_combination(linear_index, input_arrays_flat, param_shapes_array):
