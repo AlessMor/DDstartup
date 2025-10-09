@@ -76,11 +76,11 @@ python -m ddstartup.main param_file_name.py config_file_name.yaml
 ```
 For example, to run a parameteric analysis - lump method:
 ```bash
-python -m ddstartup.main param.py parametric_lump.yaml
+python -m ddstartup.main params.py parametric_lump.yaml
 ```
 or
 ```bash
-python -m ddstartup.main param parametric_lump
+python -m ddstartup.main params parametric_lump
 ```
 
 ## Using Command Line Arguments

@@ -206,8 +206,10 @@ def main():
     # LOAD CONFIGURATION
     # ============================================================================
     
-    # Get base directory (where main.py is located)
-    base_dir = Path(__file__).parent.parent
+    # Get base directory (project root, not package directory)
+    # __file__ is in ddstartup/postprocessing/cli.py
+    # So parent.parent.parent gives us the project root
+    base_dir = Path(__file__).parent.parent.parent
     
     # Load YAML config if provided
     if args.config:
@@ -215,11 +217,21 @@ def main():
         if not config_path.is_absolute():
             # Try relative to current directory first
             if not config_path.exists():
-                # Try relative to inputs directory
-                config_path = base_dir / 'inputs' / args.config
+                # Try relative to inputs directory at project root
+                inputs_path = base_dir / 'inputs' / args.config
+                if inputs_path.exists():
+                    config_path = inputs_path
+                # Try with .yaml extension if not present
+                elif not args.config.endswith('.yaml') and not args.config.endswith('.yml'):
+                    yaml_path = base_dir / 'inputs' / f"{args.config}.yaml"
+                    if yaml_path.exists():
+                        config_path = yaml_path
         
         if not config_path.exists():
             print(f"❌ Error: Configuration file not found: {args.config}")
+            print(f"   Searched in:")
+            print(f"   - Current directory: {Path.cwd()}")
+            print(f"   - Inputs directory: {base_dir / 'inputs'}")
             sys.exit(1)
         
         print(f"📋 Loading configuration from: {config_path.name}")
