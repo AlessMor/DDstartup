@@ -13,7 +13,7 @@ total_time: 315360000  # in seconds. default is 315360000 (10 years)
 n_jobs: null           # null for auto-detect, or specify number
 chunk_size: null       # null for auto-calculate, or specify
 batch_size: null    # null for auto-calculate, or specify
-
+N_SAMPLES: 1000        # Number of samples for the Sobol analysis. Default is 1000
 # Output settings
 output_dir: outputs   #default is 'outputs'  
 verbose: true

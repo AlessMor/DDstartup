@@ -1,8 +1,5 @@
 # DD Startup Analysis Toolbox
 
-![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-
 ## Aim of the project
 The aim of this project is to create a **device-agnostic, integrated analysis toolbox** to **evaluate the operational regime that could enable a D-D startup** built upon open-source tools. 
 
@@ -77,19 +74,6 @@ The code will then build the iterator element by creating all possible combinati
 6. The economic losses are calculated by multiplying the cost of electricity by the energy lost by operating with a D-D startup rather than D-T.
 
 ---
-
-## Quick Start Guide
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/AlessMor/DHe3.git
-cd dd_startup
-
-# Install dependencies
-pip install -r requirements.txt
-```
 
 ### Basic Usage
 
