@@ -164,7 +164,8 @@ def run_parametric_analysis(
         # Initialize progress bar AFTER all messages
         overall_pbar = tqdm(total=n_combinations, desc="Computing", unit="comb", 
                            disable=not verbose, position=0, leave=True, 
-                           dynamic_ncols=True, mininterval=0.5, miniters=1)
+                           ncols=120, mininterval=1.0, miniters=100, 
+                           smoothing=0.3)
         
         # Parallel computation with buffered writing
         buffer_results = []
