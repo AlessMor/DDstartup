@@ -59,6 +59,9 @@ from ddstartup.postprocessing.postprocess_functions import (
 from ddstartup.postprocessing.plot_kde_functions import kde_quartile_plot
 from ddstartup.postprocessing.plot_parcoords_functions import generate_parcoords_plot
 from ddstartup.postprocessing.plot_pdf_functions import generate_pdf_plot
+from ddstartup.postprocessing.plot_importance_matrix import plot_effect_size_matrix
+from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_bar
+from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -121,6 +124,36 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                     print(f"   ✅ Saved: {plot_name}")
                 except Exception as e:
                     print(f"   ❌ Error generating KDE plot: {e}")
+
+            # Generate effect-size (importance) matrix
+            if 'importance' in plot_types:
+                print(f"   Generating effect-size matrix...")
+                plot_name = f"effects_{file_path.stem}_{target}"
+                try:
+                    plot_effect_size_matrix(df_filtered, target, input_parameters, output_dir, plot_name=plot_name)
+                    print(f"   ✅ Saved: {plot_name}.png and CSV")
+                except Exception as e:
+                    print(f"   ❌ Error generating effect-size matrix: {e}")
+
+            # Generate KMeans cluster vs quartile bar
+            if 'kmeans' in plot_types:
+                print(f"   Generating KMeans cluster plot...")
+                plot_name = f"kmeans_{file_path.stem}_{target}"
+                try:
+                    cluster_and_quartile_bar(df_filtered, input_parameters, target, output_dir, n_clusters=5, plot_name=plot_name)
+                    print(f"   ✅ Saved: {plot_name}.png and cluster centers CSV")
+                except Exception as e:
+                    print(f"   ❌ Error generating KMeans plot: {e}")
+
+            # Generate contour/heatmap for top two inputs (if available)
+            if 'contour' in plot_types and len(input_parameters) >= 2:
+                print(f"   Generating pairwise 2D contour/heatmap for input parameter pairs...")
+                plot_name = f"contour_pairwise_{file_path.stem}_{target}"
+                try:
+                    plot_pairwise_contours(df_filtered, input_parameters, target, output_dir, max_pairs=12, plot_name=plot_name)
+                    print(f"   ✅ Saved: {plot_name}.png")
+                except Exception as e:
+                    print(f"   ❌ Error generating contour/heatmap: {e}")
             
             # Generate parallel coordinates plot
             if 'parcoords' in plot_types:
@@ -190,7 +223,7 @@ def main():
     parser.add_argument(
         '--plots', '-p',
         nargs='+',
-        choices=['kde', 'parcoords', 'pdf', 'all'],
+        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'all'],
         help='Plot types to generate (overrides config file)'
     )
     
@@ -387,7 +420,7 @@ def main():
     
     plots_config = config.get('plots', {})
     if plots_config.get('generate_all', True):
-        plot_types = ['kde', 'parcoords', 'pdf']
+        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour']
     else:
         plot_types = []
         if plots_config.get('kde', False):
@@ -396,6 +429,12 @@ def main():
             plot_types.append('parcoords')
         if plots_config.get('pdf', False):
             plot_types.append('pdf')
+        if plots_config.get('importance', False):
+            plot_types.append('importance')
+        if plots_config.get('kmeans', False):
+            plot_types.append('kmeans')
+        if plots_config.get('contour', False):
+            plot_types.append('contour')
     
     print(f"📊 Plot types: {', '.join(plot_types)}")
     
