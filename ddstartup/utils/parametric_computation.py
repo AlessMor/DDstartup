@@ -145,10 +145,7 @@ def run_parametric_analysis(
         for name, arr in zip(param_names, input_arrays):
             param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
         
-        # Initialize progress bar
-        overall_pbar = tqdm(total=n_combinations, desc="Computing", unit="comb", disable=not verbose)
-        
-        # Prime Numba compilation if T_seeded
+        # Prime Numba compilation if T_seeded (before progress bar)
         if analysis_type == 'T_seeded' and verbose:
             print("Priming Numba compilation...")
             try:
@@ -156,85 +153,164 @@ def run_parametric_analysis(
             except Exception as e:
                 print(f"Warning during Numba priming: {e}")
         
+        # Print parallelization info (before progress bar)
+        if verbose:
+            print(f"Starting parallel computation with {n_jobs} workers...")
+            print(f"Processing {n_combinations:,} combinations in chunks of {chunk_size:,}")
+            print(f"Using async I/O: computation continues during HDF5 writes")
+            print(f"Expected: First ~{n_jobs * 2} tasks slow (Numba compilation), then fast")
+            print(f"Monitor the speed after the first 100 combinations...")
+        
+        # Initialize progress bar AFTER all messages
+        overall_pbar = tqdm(total=n_combinations, desc="Computing", unit="comb", 
+                           disable=not verbose, position=0, leave=True, 
+                           dynamic_ncols=True, mininterval=0.5, miniters=1)
+        
         # Parallel computation with buffered writing
         buffer_results = []
         buffer_indices = []
         buffer_write_size = 1000  # Write every 1000 results
         
+        # Timing tracking for speed diagnosis
+        last_time_check = time.time()
+        last_processed = 0
+        
+        # Global error logging flag (across all chunks)
+        first_error_logged = False
+        
         # Ensure integer types for range()
         n_combinations = int(n_combinations)
         chunk_size = int(chunk_size)
         
-        for chunk_start in range(0, n_combinations, chunk_size):
-            chunk_end = min(chunk_start + chunk_size, n_combinations)
-            chunk_indices = np.arange(chunk_start, chunk_end)
-            
-            # Prepare task arguments based on analysis type
-            if analysis_type == 'lump':
-                task_args = [
-                    (idx, input_arrays_flat, param_shapes_array) 
-                    for idx in chunk_indices
-                ]
-            elif analysis_type == 'T_seeded':
-                task_args = [
-                    (idx, input_arrays_flat, param_shapes_array, total_time, vector_length) 
-                    for idx in chunk_indices
-                ]
-            else:
-                raise ValueError(f"Unknown analysis type: {analysis_type}")
-            
-            # Parallel computation
-            chunk_results = Parallel(n_jobs=n_jobs, backend='loky')(
-                delayed(compute_function)(*args) for args in task_args
-            )
-            
-            # Buffer results
-            for i, result in enumerate(chunk_results):
-                abs_idx = chunk_start + i
-                buffer_results.append(result)
-                buffer_indices.append(abs_idx)
-                
-                # Track successes
-                if result.get('sol_success', False):
-                    successful_count += 1
-                
-                # Update progress bar periodically
-                if i % 10 == 0:
-                    overall_pbar.update(min(10, len(chunk_results) - i))
-            
-            # Update remaining progress
-            remainder = len(chunk_results) % 10
-            if remainder > 0:
-                overall_pbar.update(remainder)
-            
-            processed_count += len(chunk_results)
-            
-            # Write buffered results if buffer is full
-            if len(buffer_results) >= buffer_write_size:
-                _write_results_to_hdf5(
-                    datasets, buffer_results, buffer_indices,
-                    data_fields, vector_fields, vector_length
-                )
+        # Use ProcessPoolExecutor for persistent workers
+        from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+        import concurrent.futures
+        from queue import Queue
+        import threading
+        
+        # Create a queue for async HDF5 writing
+        write_queue = Queue(maxsize=0)  # Unbounded queue to never block computation
+        write_complete = threading.Event()
+        
+        def writer_thread():
+            """Background thread for HDF5 writing"""
+            from queue import Empty
+            while not write_complete.is_set() or not write_queue.empty():
+                try:
+                    item = write_queue.get(timeout=0.1)
+                    if item is None:  # Poison pill
+                        write_queue.task_done()
+                        break
+                    results, indices = item
+                    _write_results_to_hdf5(
+                        datasets, results, indices,
+                        data_fields, vector_fields, vector_length
+                    )
+                    h5_file.flush()
+                    write_queue.task_done()
+                except Empty:
+                    # Normal timeout, just continue
+                    continue
+                except Exception as e:
+                    # Real error during writing
+                    if verbose and str(e):  # Only print if there's an actual error message
+                        overall_pbar.write(f"⚠️  Writer error: {type(e).__name__}: {e}")
+                    try:
+                        write_queue.task_done()
+                    except:
+                        pass
+        
+        # Start writer thread
+        writer = threading.Thread(target=writer_thread, daemon=True)
+        writer.start()
+        
+        try:
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                for chunk_start in range(0, n_combinations, chunk_size):
+                    chunk_end = min(chunk_start + chunk_size, n_combinations)
+                    chunk_indices = np.arange(chunk_start, chunk_end)
+                    
+                    # Prepare task arguments based on analysis type
+                    if analysis_type == 'lump':
+                        task_args = [
+                            (idx, input_arrays_flat, param_shapes_array) 
+                            for idx in chunk_indices
+                        ]
+                    elif analysis_type == 'T_seeded':
+                        task_args = [
+                            (idx, input_arrays_flat, param_shapes_array, total_time, vector_length) 
+                            for idx in chunk_indices
+                        ]
+                    else:
+                        raise ValueError(f"Unknown analysis type: {analysis_type}")
+                    
+                    # Submit tasks to persistent workers with futures to maintain order
+                    futures = {executor.submit(compute_function, *args): idx 
+                              for idx, args in enumerate(task_args)}
+                    
+                    # Collect results in submission order
+                    chunk_results = [None] * len(chunk_indices)
+                    for future in concurrent.futures.as_completed(futures):
+                        result_idx = futures[future]
+                        try:
+                            result = future.result()
+                            chunk_results[result_idx] = result
+                        except Exception as exc:
+                            chunk_results[result_idx] = {'error': str(exc), 'sol_success': False}
+                        
+                        # Track successes and update progress immediately
+                        if chunk_results[result_idx].get('sol_success', False):
+                            successful_count += 1
+                        else:
+                            # Log first error for debugging (only once globally)
+                            if not first_error_logged and verbose:
+                                error_msg = chunk_results[result_idx].get('error', 'Unknown error')
+                                overall_pbar.write(f"⚠️  First error: {error_msg}")
+                                first_error_logged = True
+                        processed_count += 1
+                        
+                        # Update progress bar for each completed task
+                        overall_pbar.update(1)
+                        
+                        # Buffer this result immediately
+                        abs_idx = chunk_start + result_idx
+                        buffer_results.append(chunk_results[result_idx])
+                        buffer_indices.append(abs_idx)
+                        
+                        # Write buffer if it's full (non-blocking via queue)
+                        if len(buffer_results) >= buffer_write_size:
+                            # Copy buffers and send to writer thread (never blocks with unbounded queue)
+                            write_queue.put((buffer_results.copy(), buffer_indices.copy()))
+                            buffer_results.clear()
+                            buffer_indices.clear()
+                        
+                        # Update progress bar postfix periodically
+                        if processed_count % 500 == 0:
+                            success_rate = (successful_count / processed_count) * 100 if processed_count else 0
+                            overall_pbar.set_postfix({
+                                "Success": f"{success_rate:.1f}%",
+                                "Workers": n_jobs
+                            })
+        except Exception as e:
+            if verbose:
+                overall_pbar.write(f"❌ Error during computation: {e}")
+                import traceback
+                traceback.print_exc()
+            raise
+        finally:
+            # Write any remaining buffered results
+            if buffer_results:
+                write_queue.put((buffer_results.copy(), buffer_indices.copy()))
                 buffer_results.clear()
                 buffer_indices.clear()
-                h5_file.flush()
             
-            # Update progress bar postfix
-            success_rate = (successful_count / processed_count) * 100 if processed_count else 0
-            overall_pbar.set_postfix({
-                "Success": f"{success_rate:.1f}%",
-                "Chunk": f"{len(chunk_indices)}"
-            })
-        
-        # Write any remaining buffered results
-        if buffer_results:
-            _write_results_to_hdf5(
-                datasets, buffer_results, buffer_indices,
-                data_fields, vector_fields, vector_length
-            )
-            h5_file.flush()
-        
-        overall_pbar.close()
+            # Signal writer thread to finish and wait for it
+            write_complete.set()
+            write_queue.put(None)  # Poison pill
+            write_queue.join()  # Wait for all writes to complete
+            writer.join(timeout=30)  # Wait for writer thread
+            
+            overall_pbar.close()
         
         # Final metadata
         end_time = time.time()
