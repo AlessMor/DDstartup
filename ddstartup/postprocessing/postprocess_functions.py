@@ -3,6 +3,13 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
+# Import hdf5plugin to enable LZ4 compression support
+# This MUST be imported before opening any HDF5 files with LZ4 compression
+try:
+    import hdf5plugin
+except ImportError:
+    pass  # Will fall back to standard compression formats
+
 
 # ============================================================================
 # FILE AND DIRECTORY UTILITIES

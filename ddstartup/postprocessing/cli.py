@@ -44,6 +44,13 @@ import sys
 import warnings
 from pathlib import Path
 
+# CRITICAL: Import hdf5plugin BEFORE any h5py operations
+# This enables LZ4 compression support for reading compressed HDF5 files
+try:
+    import hdf5plugin
+except ImportError:
+    warnings.warn("hdf5plugin not installed - LZ4 compressed files cannot be read")
+
 # Local imports
 from ddstartup.postprocessing.postprocess_functions import (
     load_h5_to_dataframe,
@@ -146,15 +153,15 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 except Exception as e:
                     print(f"   ❌ Error generating KMeans plot: {e}")
 
-            # Generate contour/heatmap for top two inputs (if available)
+            # Generate interactive contour/heatmap with dropdown selection
             if 'contour' in plot_types and len(input_parameters) >= 2:
-                print(f"   Generating pairwise 2D contour/heatmap for input parameter pairs...")
-                plot_name = f"contour_pairwise_{file_path.stem}_{target}"
+                print(f"   Generating interactive 2D contour/heatmap (with parameter selection)...")
+                plot_name = f"contour_interactive_{file_path.stem}_{target}"
                 try:
-                    plot_pairwise_contours(df_filtered, input_parameters, target, output_dir, max_pairs=12, plot_name=plot_name)
-                    print(f"   ✅ Saved: {plot_name}.png")
+                    plot_interactive_pairwise_contours(df_filtered, input_parameters, target, output_dir, plot_name=plot_name)
+                    print(f"   ✅ Saved: {plot_name}.html (interactive)")
                 except Exception as e:
-                    print(f"   ❌ Error generating contour/heatmap: {e}")
+                    print(f"   ❌ Error generating interactive contour: {e}")
             
             # Generate parallel coordinates plot
             if 'parcoords' in plot_types:

@@ -1,21 +1,21 @@
 from utils.units_and_constants import *
 from utils.custom_classes import ParameterField
 
-param_points = 2
+param_points = 3
 
 V_plasma_field = ParameterField(
     parametrization_type="normal", mean=150, std=15, unit=u.m**3, 
-    param_points=1, name="plasma_volume"
+    param_points=param_points, name="plasma_volume"
 )
 
 T_i_field = ParameterField(
     parametrization_type="linear", min_val=14, max_val=20, unit=u.keV,
-    param_points=1, name="T_i_field"
+    param_points=param_points, name="T_i_field"
 )
 
 n_tot_field = ParameterField(
     parametrization_type="linear", min_val=1.3e20, max_val=2.1e20, unit=u.m**(-3),
-    param_points=1, name="n_tot_field"
+    param_points=param_points, name="n_tot_field"
 )
 
 tau_p_T_field = ParameterField(
@@ -30,13 +30,13 @@ tau_p_He3_field = ParameterField(
 
 P_aux_field = ParameterField(
     parametrization_type="linear", min_val=20, max_val=100, unit=u.MW,
-    param_points=1, name="P_aux"
+    param_points=param_points, name="P_aux"
 )
 
 
 P_aux_DT_eq_field = ParameterField(
     parametrization_type="linear", min_val=20, max_val=100, unit=u.MW,
-    param_points=1, name="P_aux_DT_eq"
+    param_points=param_points, name="P_aux_DT_eq"
 )
 
 
