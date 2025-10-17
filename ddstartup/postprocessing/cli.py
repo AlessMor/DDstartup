@@ -62,6 +62,7 @@ from ddstartup.postprocessing.plot_pdf_functions import generate_pdf_plot
 from ddstartup.postprocessing.plot_importance_matrix import plot_effect_size_matrix
 from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_bar
 from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours
+from ddstartup.postprocessing.plot_shap_functions import generate_shap_plots
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -177,6 +178,22 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                     print(f"   ✅ Saved: {plot_name}")
                 except Exception as e:
                     print(f"   ❌ Error generating PDF plot: {e}")
+            
+            # Generate SHAP plots
+            if 'shap' in plot_types:
+                print(f"   Generating SHAP plots...")
+                plot_name = f"shap_{file_path.stem}_{target}"
+                try:
+                    generate_shap_plots(
+                        df_filtered, target, input_parameters, target_unit,
+                        output_dir, file_type, plot_name,
+                        max_display=20,
+                        max_samples=2000,
+                        save_csv=True
+                    )
+                    print(f"   ✅ Generated SHAP plots and CSV files")
+                except Exception as e:
+                    print(f"   ❌ Error generating SHAP plots: {e}")
 
 
 def main():
@@ -223,7 +240,7 @@ def main():
     parser.add_argument(
         '--plots', '-p',
         nargs='+',
-        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'all'],
+        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'all'],
         help='Plot types to generate (overrides config file)'
     )
     
@@ -415,12 +432,12 @@ def main():
     print(f"\n🎯 Target variables: {', '.join(targets)}")
     
     # ============================================================================
-    # DETERMINE PLOT TYPES
+    # Determine plot types
     # ============================================================================
     
     plots_config = config.get('plots', {})
     if plots_config.get('generate_all', True):
-        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour']
+        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap']
     else:
         plot_types = []
         if plots_config.get('kde', False):
@@ -435,6 +452,8 @@ def main():
             plot_types.append('kmeans')
         if plots_config.get('contour', False):
             plot_types.append('contour')
+        if plots_config.get('shap', False):
+            plot_types.append('shap')
     
     print(f"📊 Plot types: {', '.join(plot_types)}")
     
