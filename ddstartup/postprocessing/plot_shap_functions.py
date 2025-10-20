@@ -84,7 +84,7 @@ def normalize_to_range(values):
 
 def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
                                     outputs_dir, plot_name, max_display=20, 
-                                    max_samples=2000):
+                                    max_samples=2000, interpolate=False):
     """
     Create a SHAP-style beeswarm plot showing feature importance.
     
@@ -109,6 +109,7 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
         plot_name: Base name for saved plot
         max_display: Maximum number of features to display (default: 20)
         max_samples: Maximum samples to plot per feature (default: 2000)
+        interpolate: If True, create smooth density-based plot instead of scatter (default: False)
     
     Returns:
         Dictionary with feature importance statistics
@@ -217,26 +218,111 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
         # Y position for this feature
         y_pos = n_features - plot_idx - 1
         
-        # Add jitter to y-axis for visibility
-        # Use importance-based jitter: more important = more spread = easier to see
-        jitter_amount = 0.12 * (1.0 + sorted_importance[plot_idx])  # Use sorted_importance
-        y_jitter = np.random.normal(0, jitter_amount, len(effects_plot))
-        
-        # Plot dots with size proportional to importance
-        dot_size = 8 + 20 * sorted_importance[plot_idx]  # Use sorted_importance
-        
-        scatter = ax.scatter( 
-            effects_plot,
-            np.ones(len(effects_plot)) * y_pos + y_jitter,
-            c=norm_values_plot,
-            cmap=cmap,
-            s=dot_size,
-            alpha=0.6,
-            edgecolors='none',
-            vmin=0,
-            vmax=1,
-            rasterized=True  # For better performance with many points
-        )
+        if interpolate:
+            # Create smooth density-based visualization
+            # Use 2D histogram to compute density, then plot as smooth contours
+            from scipy.ndimage import gaussian_filter
+            
+            # Create bins for 2D histogram
+            n_bins_x = 100
+            n_bins_y = 30
+            
+            # Get effect range
+            effect_min, effect_max = effects_plot.min(), effects_plot.max()
+            effect_range_val = effect_max - effect_min
+            if effect_range_val < 1e-10:  # Avoid division by zero
+                effect_range_val = 1.0
+            
+            # Create 2D histogram weighted by density
+            y_spread = 0.5  # Vertical spread for visualization
+            y_centers = np.ones(len(effects_plot)) * y_pos
+            
+            # Bin the data
+            H, xedges, yedges = np.histogram2d(
+                effects_plot, 
+                y_centers,
+                bins=[n_bins_x, n_bins_y],
+                range=[[effect_min - 0.1*effect_range_val, effect_max + 0.1*effect_range_val], 
+                       [y_pos - y_spread, y_pos + y_spread]],
+                weights=None
+            )
+            
+            # Smooth the histogram with Gaussian filter
+            H_smooth = gaussian_filter(H.T, sigma=[2.0, 1.5])
+            
+            # Normalize for better visualization
+            if H_smooth.max() > 0:
+                H_smooth = H_smooth / H_smooth.max()
+            
+            # Create meshgrid for contour plotting
+            X, Y = np.meshgrid(xedges[:-1] + np.diff(xedges)/2, 
+                              yedges[:-1] + np.diff(yedges)/2)
+            
+            # Compute average color for each x-bin based on feature values
+            x_bin_indices = np.digitize(effects_plot, xedges[:-1]) - 1
+            x_bin_indices = np.clip(x_bin_indices, 0, n_bins_x - 1)
+            
+            bin_colors = np.zeros(n_bins_x)
+            bin_counts = np.zeros(n_bins_x)
+            
+            for i, bin_idx in enumerate(x_bin_indices):
+                bin_colors[bin_idx] += norm_values_plot[i]
+                bin_counts[bin_idx] += 1
+            
+            # Average color per bin
+            with np.errstate(divide='ignore', invalid='ignore'):
+                bin_colors = np.where(bin_counts > 0, bin_colors / bin_counts, 0.5)
+            
+            # Create color array for contourf
+            color_array = np.tile(bin_colors, (n_bins_y, 1))
+            
+            # Plot filled contours with varying alpha based on density
+            levels = np.linspace(0.1, 1.0, 10)
+            
+            # Plot the density as alpha-blended regions
+            for i in range(n_bins_x):
+                x_center = xedges[i] + np.diff(xedges)[0]/2
+                density_profile = H_smooth[:, i]
+                
+                if density_profile.max() > 0.05:  # Only plot if significant density
+                    # Width proportional to density
+                    y_vals = yedges[:-1] + np.diff(yedges)/2
+                    
+                    # Create filled polygon
+                    for j, (y_val, density) in enumerate(zip(y_vals, density_profile)):
+                        if density > 0.05:
+                            color_val = cmap(color_array[j, i])
+                            ax.add_patch(plt.Rectangle(
+                                (x_center - np.diff(xedges)[0]/2, y_val - np.diff(yedges)[0]/2),
+                                np.diff(xedges)[0],
+                                np.diff(yedges)[0],
+                                facecolor=color_val,
+                                alpha=min(0.8 * density, 0.8),
+                                edgecolor='none'
+                            ))
+            
+        else:
+            # Original scatter plot
+            # Add jitter to y-axis for visibility
+            # Use importance-based jitter: more important = more spread = easier to see
+            jitter_amount = 0.12 * (1.0 + sorted_importance[plot_idx])  # Use sorted_importance
+            y_jitter = np.random.normal(0, jitter_amount, len(effects_plot))
+            
+            # Plot dots with size proportional to importance
+            dot_size = 8 + 20 * sorted_importance[plot_idx]  # Use sorted_importance
+            
+            scatter = ax.scatter( 
+                effects_plot,
+                np.ones(len(effects_plot)) * y_pos + y_jitter,
+                c=norm_values_plot,
+                cmap=cmap,
+                s=dot_size,
+                alpha=0.6,
+                edgecolors='none',
+                vmin=0,
+                vmax=1,
+                rasterized=True  # For better performance with many points
+            )
     
     # Set y-axis labels with importance values
     # Labels need to be reversed because y_pos = n_features - plot_idx - 1
@@ -339,7 +425,8 @@ def save_importance_to_csv(df, input_parameters, target, outputs_dir, plot_name)
 
 def generate_shap_plots(df_filtered, target, input_parameters, target_unit, 
                        outputs_dir, file_type, plot_name,
-                       max_display=20, max_samples=2000, save_csv=True):
+                       max_display=20, max_samples=2000, save_csv=True, 
+                       interpolate=False):
     """
     Main function to generate SHAP-style plots for a target variable.
     
@@ -359,6 +446,7 @@ def generate_shap_plots(df_filtered, target, input_parameters, target_unit,
         max_display: Maximum number of features to display (default: 20)
         max_samples: Maximum samples to plot per feature (default: 2000)
         save_csv: Whether to save importance rankings to CSV (default: True)
+        interpolate: If True, create smooth density plot instead of scatter (default: False)
     
     Returns:
         Dictionary with results and statistics
@@ -371,7 +459,7 @@ def generate_shap_plots(df_filtered, target, input_parameters, target_unit,
         # Generate beeswarm plot
         results = create_shap_style_beeswarm_plot(
             df_filtered, input_parameters, target, target_unit,
-            outputs_dir, plot_name, max_display, max_samples
+            outputs_dir, plot_name, max_display, max_samples, interpolate
         )
         
         # Save importance to CSV
