@@ -219,87 +219,98 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
         y_pos = n_features - plot_idx - 1
         
         if interpolate:
-            # Create smooth density-based visualization
-            # Use 2D histogram to compute density, then plot as smooth contours
-            from scipy.ndimage import gaussian_filter
+            # Continuous beeswarm using violin-style KDE density with gradient fill
+            from scipy.stats import gaussian_kde
             
-            # Create bins for 2D histogram
-            n_bins_x = 100
-            n_bins_y = 30
+            # Skip if too few points
+            if len(effects_plot) < 5:
+                continue
             
-            # Get effect range
+            # Compute KDE for density estimation
+            try:
+                kde = gaussian_kde(effects_plot, bw_method=0.2)
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+            
+            # Create dense x-grid for smooth curve
             effect_min, effect_max = effects_plot.min(), effects_plot.max()
-            effect_range_val = effect_max - effect_min
-            if effect_range_val < 1e-10:  # Avoid division by zero
-                effect_range_val = 1.0
-            
-            # Create 2D histogram weighted by density
-            y_spread = 0.5  # Vertical spread for visualization
-            y_centers = np.ones(len(effects_plot)) * y_pos
-            
-            # Bin the data
-            H, xedges, yedges = np.histogram2d(
-                effects_plot, 
-                y_centers,
-                bins=[n_bins_x, n_bins_y],
-                range=[[effect_min - 0.1*effect_range_val, effect_max + 0.1*effect_range_val], 
-                       [y_pos - y_spread, y_pos + y_spread]],
-                weights=None
-            )
-            
-            # Smooth the histogram with Gaussian filter
-            H_smooth = gaussian_filter(H.T, sigma=[2.0, 1.5])
-            
-            # Normalize for better visualization
-            if H_smooth.max() > 0:
-                H_smooth = H_smooth / H_smooth.max()
-            
-            # Create meshgrid for contour plotting
-            X, Y = np.meshgrid(xedges[:-1] + np.diff(xedges)/2, 
-                              yedges[:-1] + np.diff(yedges)/2)
-            
-            # Compute average color for each x-bin based on feature values
-            x_bin_indices = np.digitize(effects_plot, xedges[:-1]) - 1
-            x_bin_indices = np.clip(x_bin_indices, 0, n_bins_x - 1)
-            
-            bin_colors = np.zeros(n_bins_x)
-            bin_counts = np.zeros(n_bins_x)
-            
-            for i, bin_idx in enumerate(x_bin_indices):
-                bin_colors[bin_idx] += norm_values_plot[i]
-                bin_counts[bin_idx] += 1
-            
-            # Average color per bin
-            with np.errstate(divide='ignore', invalid='ignore'):
-                bin_colors = np.where(bin_counts > 0, bin_colors / bin_counts, 0.5)
-            
-            # Create color array for contourf
-            color_array = np.tile(bin_colors, (n_bins_y, 1))
-            
-            # Plot filled contours with varying alpha based on density
-            levels = np.linspace(0.1, 1.0, 10)
-            
-            # Plot the density as alpha-blended regions
-            for i in range(n_bins_x):
-                x_center = xedges[i] + np.diff(xedges)[0]/2
-                density_profile = H_smooth[:, i]
+            effect_range = effect_max - effect_min
+            if effect_range < 1e-10:
+                continue
                 
-                if density_profile.max() > 0.05:  # Only plot if significant density
-                    # Width proportional to density
-                    y_vals = yedges[:-1] + np.diff(yedges)/2
+            pad = 0.15 * effect_range
+            x_grid = np.linspace(effect_min - pad, effect_max + pad, 500)
+            
+            # Evaluate KDE density at grid points
+            density = kde(x_grid)
+            
+            # Normalize density for y-axis scaling (violin width)
+            max_density = density.max()
+            if max_density > 0:
+                density_scaled = density / max_density * 0.4  # Max width ±0.4
+            else:
+                continue
+            
+            # Compute average feature value at each x position for coloring
+            # Use weighted average based on proximity
+            from scipy.ndimage import gaussian_filter1d
+            
+            # Create fine bins for color mapping
+            n_bins = len(x_grid)
+            x_bins = x_grid
+            
+            # For each x position, compute weighted average of nearby feature values
+            color_values = np.zeros(n_bins)
+            bandwidth = kde.factor * np.std(effects_plot)
+            
+            for i, x_center in enumerate(x_bins):
+                # Gaussian weights for nearby points
+                weights = np.exp(-0.5 * ((effects_plot - x_center) / bandwidth) ** 2)
+                weights = weights / (weights.sum() + 1e-10)
+                # Weighted average of normalized feature values
+                color_values[i] = np.sum(weights * norm_values_plot)
+            
+            # Smooth the color transitions
+            color_values = gaussian_filter1d(color_values, sigma=3.0)
+            
+            # Clip to valid range
+            color_values = np.clip(color_values, 0, 1)
+            
+            # Create the violin plot with gradient coloring
+            # Split into many thin vertical slices, each with its own color
+            y_upper = y_pos + density_scaled
+            y_lower = y_pos - density_scaled
+            
+            # Use LineCollection for efficient rendering with color gradients
+            from matplotlib.collections import LineCollection
+            
+            # Create segments for upper and lower contours
+            points_upper = np.array([x_grid, y_upper]).T.reshape(-1, 1, 2)
+            points_lower = np.array([x_grid, y_lower]).T.reshape(-1, 1, 2)
+            
+            segments_upper = np.concatenate([points_upper[:-1], points_upper[1:]], axis=1)
+            segments_lower = np.concatenate([points_lower[:-1], points_lower[1:]], axis=1)
+            
+            # Map colors
+            colors = cmap(color_values)
+            
+            # Draw the filled violin using multiple vertical bars
+            for i in range(len(x_grid) - 1):
+                # Only draw if density is significant
+                avg_density = (density_scaled[i] + density_scaled[i+1]) / 2
+                if avg_density > 0.01:
+                    x_vals = [x_grid[i], x_grid[i+1]]
+                    y_lower_vals = [y_lower[i], y_lower[i+1]]
+                    y_upper_vals = [y_upper[i], y_upper[i+1]]
                     
-                    # Create filled polygon
-                    for j, (y_val, density) in enumerate(zip(y_vals, density_profile)):
-                        if density > 0.05:
-                            color_val = cmap(color_array[j, i])
-                            ax.add_patch(plt.Rectangle(
-                                (x_center - np.diff(xedges)[0]/2, y_val - np.diff(yedges)[0]/2),
-                                np.diff(xedges)[0],
-                                np.diff(yedges)[0],
-                                facecolor=color_val,
-                                alpha=min(0.8 * density, 0.8),
-                                edgecolor='none'
-                            ))
+                    color_rgb = colors[i]
+                    ax.fill_between(x_vals, y_lower_vals, y_upper_vals,
+                                   color=color_rgb, alpha=0.8, 
+                                   edgecolor='none', zorder=2)
+            
+            # Add subtle outline
+            ax.plot(x_grid, y_upper, color='gray', linewidth=0.3, alpha=0.4, zorder=3)
+            ax.plot(x_grid, y_lower, color='gray', linewidth=0.3, alpha=0.4, zorder=3)
             
         else:
             # Original scatter plot
