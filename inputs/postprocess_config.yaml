@@ -150,6 +150,10 @@ plots:
   kde: true              # Kernel density estimation quartile plots
   parcoords: true        # Parallel coordinates plots
   pdf: true              # Probability density function plots
+  importance: true       # Effect-size importance matrix (Cohen's d)
+  kmeans: true           # KMeans clustering analysis
+  contour: true          # 2D pairwise contour plots
+  shap: true             # SHAP (SHapley Additive exPlanations) plots
   
   # Plot-specific settings
   kde_settings:
@@ -163,6 +167,22 @@ plots:
   pdf_settings:
     n_bins: 10000        # Number of histogram bins
     use_log_scale: true  # Use logarithmic x-axis
+  
+  shap_settings:
+    model_type: tree     # Surrogate model type: 'tree', 'linear', or 'kernel'
+                         # - 'tree': Gradient Boosting (fast, accurate for nonlinear)
+                         # - 'linear': Ridge Regression (fast, assumes linearity)
+                         # - 'kernel': Model-agnostic (slower, most general)
+    max_samples: 1000    # Maximum samples for SHAP computation (performance)
+    plot_types:          # SHAP visualizations to generate
+      - summary          # Beeswarm plot showing feature impacts
+      - summary_bar      # Bar plot of mean absolute SHAP values
+      - dependence       # Dependence plots for top features
+      - csv              # Save SHAP values and importance to CSV
+      # Optional additional plots:
+      # - waterfall      # Waterfall plots for individual predictions
+      # - force          # Force plots (interactive HTML)
+      # - summary_violin # Violin plot distribution
 
 
 # ============================================================================

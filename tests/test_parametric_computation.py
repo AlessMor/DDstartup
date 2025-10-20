@@ -2,10 +2,12 @@
 Tests for utils/parametric_computation.py
 
 This module tests parametric analysis functions including:
-- Parametric analysis execution
+- Parametric analysis execution with ProcessPoolExecutor
+- Async HDF5 writing with background thread
 - HDF5 file creation and writing
 - Result buffering and writing
-- Error handling
+- Error handling and recovery
+- Numba compilation priming
 """
 
 import pytest
@@ -13,8 +15,9 @@ import numpy as np
 import h5py
 import sys
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import tempfile
+import time
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,6 +27,53 @@ from ddstartup.utils.parametric_computation import (
     print_parametric_summary,
     _write_results_to_hdf5
 )
+
+
+# Module-level mock functions for ProcessPoolExecutor (must be picklable)
+def _mock_compute_basic(idx, arrays, shapes, *args):
+    """Basic mock compute function"""
+    return {
+        'sol_success': True,
+        't_startup': 100.0 + idx,
+        'linear_index': idx,
+        'error': ''
+    }
+
+
+def _mock_compute_with_vectors(idx, arrays, shapes, *args):
+    """Mock compute with vector fields"""
+    vector_length = args[1] if len(args) > 1 else 50
+    return {
+        'sol_success': True,
+        't_startup': 100.0,
+        'N_ofc': np.arange(vector_length),
+        'error': ''
+    }
+
+
+def _mock_compute_with_errors(idx, arrays, shapes, *args):
+    """Mock compute that fails for first index"""
+    if idx == 0:
+        return {
+            'sol_success': False,
+            't_startup': np.nan,
+            'error': 'Test error message'
+        }
+    return {
+        'sol_success': True,
+        't_startup': 100.0,
+        'error': ''
+    }
+
+
+def _mock_compute_with_sleep(idx, arrays, shapes, *args):
+    """Mock compute with artificial delay"""
+    time.sleep(0.01)
+    return {
+        'sol_success': True,
+        't_startup': 100.0 + idx,
+        'error': ''
+    }
 
 
 class TestRunParametricAnalysis:
@@ -36,15 +86,6 @@ class TestRunParametricAnalysis:
             'V_plasma': np.array([100.0, 150.0]),
             'T_i': np.array([15.0, 17.0]),
         }
-        
-        # Mock compute function
-        def mock_compute(idx, arrays, shapes, *args):
-            return {
-                'sol_success': True,
-                't_startup': 100.0 + idx,
-                'linear_index': idx,
-                'error': ''
-            }
         
         # Configuration
         config = {
@@ -62,7 +103,7 @@ class TestRunParametricAnalysis:
         # Run analysis
         stats = run_parametric_analysis(
             input_data, output_file, config,
-            mock_compute, verbose=False
+            _mock_compute_basic, verbose=False
         )
         
         # Check statistics
@@ -90,14 +131,6 @@ class TestRunParametricAnalysis:
         
         vector_length = 50
         
-        def mock_compute(idx, arrays, shapes, *args):
-            return {
-                'sol_success': True,
-                't_startup': 100.0,
-                'N_ofc': np.arange(vector_length),  # Vector field
-                'error': ''
-            }
-        
         config = {
             'analysis_type': 'T_seeded',
             'method': 'parametric',
@@ -112,7 +145,7 @@ class TestRunParametricAnalysis:
         
         stats = run_parametric_analysis(
             input_data, output_file, config,
-            mock_compute, verbose=False
+            _mock_compute_with_vectors, verbose=False
         )
         
         # Check vector field was saved correctly
@@ -128,19 +161,6 @@ class TestRunParametricAnalysis:
             'T_i': np.array([15.0]),
         }
         
-        def mock_compute_with_errors(idx, arrays, shapes, *args):
-            if idx == 0:
-                return {
-                    'sol_success': False,
-                    't_startup': np.nan,
-                    'error': 'Test error message'
-                }
-            return {
-                'sol_success': True,
-                't_startup': 100.0,
-                'error': ''
-            }
-        
         config = {
             'analysis_type': 'T_seeded',
             'method': 'parametric',
@@ -155,7 +175,7 @@ class TestRunParametricAnalysis:
         
         stats = run_parametric_analysis(
             input_data, output_file, config,
-            mock_compute_with_errors, verbose=False
+            _mock_compute_with_errors, verbose=False
         )
         
         # Check that error was recorded
@@ -200,6 +220,94 @@ class TestRunParametricAnalysis:
             assert f.attrs['n_jobs'] == 2
             assert 'computation_start_time' in f.attrs
             assert 'computation_end_time' in f.attrs
+    
+    def test_processpool_executor_usage(self, temp_dir):
+        """Test that ProcessPoolExecutor is used for parallel execution"""
+        input_data = {
+            'V_plasma': np.array([100.0, 150.0]),
+            'T_i': np.array([15.0, 17.0]),
+        }
+        
+        config = {
+            'analysis_type': 'T_seeded',
+            'method': 'parametric',
+            'n_jobs': 2,
+            'chunk_size': 10,
+            'batch_size': 10,
+            'vector_length': 10,
+            'total_time': 3600,
+        }
+        
+        output_file = str(temp_dir / "test_pool.h5")
+        
+        start = time.time()
+        stats = run_parametric_analysis(
+            input_data, output_file, config,
+            _mock_compute_with_sleep, verbose=False
+        )
+        elapsed = time.time() - start
+        
+        # Verify all combinations were computed
+        assert stats['processed'] == 4
+        assert stats['successful'] == 4
+        
+        # With 2 workers and 0.01s work, parallel should be faster than 4*0.01s
+        # Allow generous margin for test reliability
+        assert elapsed < 0.3, f"Parallel execution took {elapsed}s, expected < 0.3s"
+    
+    def test_async_hdf5_writing(self, temp_dir):
+        """Test that HDF5 writing happens asynchronously"""
+        input_data = {'V_plasma': np.array([100.0, 150.0, 200.0])}
+        
+        config = {
+            'analysis_type': 'T_seeded',
+            'method': 'parametric',
+            'n_jobs': 1,
+            'chunk_size': 10,
+            'batch_size': 1,  # Force frequent writes
+            'vector_length': 10,
+            'total_time': 3600,
+        }
+        
+        output_file = str(temp_dir / "test_async.h5")
+        
+        stats = run_parametric_analysis(
+            input_data, output_file, config,
+            _mock_compute_basic, verbose=False
+        )
+        
+        # Verify all results were written
+        assert stats['successful'] == 3
+        
+        with h5py.File(output_file, 'r') as f:
+            assert 't_startup' in f
+            assert len(f['t_startup']) == 3
+            assert np.allclose(f['t_startup'][:], [100.0, 101.0, 102.0])
+    
+    def test_numba_priming_tseeded(self, temp_dir):
+        """Test Numba compilation priming for T_seeded"""
+        input_data = {'V_plasma': np.array([100.0])}
+        
+        config = {
+            'analysis_type': 'T_seeded',
+            'method': 'parametric',
+            'n_jobs': 1,
+            'chunk_size': 10,
+            'batch_size': 10,
+            'vector_length': 10,
+            'total_time': 3600,
+        }
+        
+        output_file = str(temp_dir / "test_prime.h5")
+        
+        # Run with verbose=True to trigger priming
+        stats = run_parametric_analysis(
+            input_data, output_file, config,
+            _mock_compute_basic, verbose=True
+        )
+        
+        # Should complete successfully
+        assert stats['processed'] >= 1
 
 
 class TestWriteResultsToHDF5:

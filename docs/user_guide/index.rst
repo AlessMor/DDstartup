@@ -12,4 +12,5 @@ This section provides comprehensive usage documentation for the DD Startup Analy
    analysis_methods
    output_files
    postprocessing_workflow
+   manual_testing/index
    troubleshooting
