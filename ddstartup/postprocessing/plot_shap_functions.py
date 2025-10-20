@@ -37,14 +37,18 @@ def compute_feature_importance(df, input_parameters, target):
         target: Target output variable name
     
     Returns:
-        Array of importance scores (absolute correlation with target)
+        Tuple of (importance_array, correlation_array)
+        - importance: Array of importance scores (absolute correlation with target)
+        - correlation: Array of signed correlation values (preserves direction)
     """
     importance = np.zeros(len(input_parameters))
+    correlation = np.zeros(len(input_parameters))
     
     for i, param in enumerate(input_parameters):
         # Skip parameters with zero variance (constant values)
         if df[param].std() == 0:
             importance[i] = 0.0
+            correlation[i] = 0.0
             continue
         
         # Compute correlation between input and output
@@ -53,11 +57,13 @@ def compute_feature_importance(df, input_parameters, target):
         # Handle NaN (can occur if target also has zero variance)
         if np.isnan(corr):
             importance[i] = 0.0
+            correlation[i] = 0.0
         else:
-            # Use absolute value as importance
+            # Store both absolute value (for ranking) and signed value (for direction)
             importance[i] = np.abs(corr)
+            correlation[i] = corr
     
-    return importance
+    return importance, correlation
 
 
 def normalize_to_range(values):
@@ -126,12 +132,13 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
         return None
     
     # Compute feature importance (correlation-based)
-    importance = compute_feature_importance(df, varying_params, target)
+    importance, correlations = compute_feature_importance(df, varying_params, target)
     
     # Sort features by importance
     sorted_indices = np.argsort(importance)[::-1][:max_display]
     sorted_params = [varying_params[i] for i in sorted_indices]
     sorted_importance = importance[sorted_indices]
+    sorted_correlations = correlations[sorted_indices]  # Keep signed correlations
     
     print(f"   Top {min(5, len(sorted_params))} features by importance:")
     for param, imp in zip(sorted_params[:5], sorted_importance[:5]):
@@ -162,12 +169,11 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
         feature_values = df[param].values
         feature_centered = feature_values - feature_values.mean()
         feature_std = feature_values.std()
-        # Use STANDARDIZED effects to match what we plot
-        # Use sorted_importance[plot_idx] not importance[feat_idx]
+        # Use SIGNED correlation to preserve direction (not absolute importance)
         if feature_std > 0:
-            effects = sorted_importance[plot_idx] * (feature_centered / feature_std)
+            effects = sorted_correlations[plot_idx] * (feature_centered / feature_std)
         else:
-            effects = sorted_importance[plot_idx] * feature_centered
+            effects = sorted_correlations[plot_idx] * feature_centered
         effect_range = effects.max() - effects.min()
         feature_effect_ranges.append(effect_range)
         max_effect_range = max(max_effect_range, effect_range)
@@ -187,14 +193,14 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
         feature_std = feature_values.std()
         feature_centered = feature_values - feature_mean
         
-        # Effect = importance × standardized_value (divided by std)
+        # Effect = signed_correlation × standardized_value (divided by std)
         # This shows impact per standard deviation, making features comparable
         # even when they have different scales or are discrete vs continuous
-        # Use sorted_importance[plot_idx] to get the correct importance value
+        # CRITICAL: Use signed correlation (not absolute importance) to show direction!
         if feature_std > 0:
-            effects = sorted_importance[plot_idx] * (feature_centered / feature_std)
+            effects = sorted_correlations[plot_idx] * (feature_centered / feature_std)
         else:
-            effects = sorted_importance[plot_idx] * feature_centered
+            effects = sorted_correlations[plot_idx] * feature_centered
         
         # Normalize feature values for coloring (0 to 1)
         norm_values = normalize_to_range(feature_values)
@@ -308,8 +314,8 @@ def save_importance_to_csv(df, input_parameters, target, outputs_dir, plot_name)
         print(f"   ⚠️  No varying parameters to save to CSV")
         return
     
-    # Compute importance
-    importance = compute_feature_importance(df, varying_params, target)
+    # Compute importance and correlations
+    importance, correlations = compute_feature_importance(df, varying_params, target)
     
     # Create DataFrame
     importance_df = pd.DataFrame({
@@ -321,11 +327,7 @@ def save_importance_to_csv(df, input_parameters, target, outputs_dir, plot_name)
     # Sort by importance
     importance_df = importance_df.sort_values('importance', ascending=False)
     
-    # Add correlation values (signed, not absolute)
-    correlations = []
-    for param in importance_df['feature']:
-        corr = np.corrcoef(df[param].values, df[target].values)[0, 1]
-        correlations.append(corr)
+    # Add correlation values (signed, not absolute) - already computed
     importance_df['correlation'] = correlations
     
     # Save to CSV
