@@ -12,6 +12,7 @@ from pathlib import Path
 
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
+from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
 
 
 def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot_name=None, save_csv=True):
@@ -32,12 +33,17 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
     labels = kmeans.fit_predict(Xs)
     df['cluster'] = labels
 
-    # Quartiles
+    # Quartiles with consistent color scheme (green to red, matching other plots)
     df['quartile'] = pd.qcut(df[target], 4, labels=[f'Q{i+1}' for i in range(4)])
 
     ctab = pd.crosstab(df['cluster'], df['quartile'], normalize='index')
+    
+    # Get the same color scheme as KDE and other plots (green = Q1/best, red = Q4/worst)
+    colorscale = get_discrete_colorscale(4)
+    quartile_colors = [colorscale[i*2][1] for i in range(4)]  # Extract colors for Q1-Q4
+    
     fig, ax = plt.subplots(figsize=(8, 4))
-    ctab.plot.bar(stacked=True, ax=ax, colormap='Spectral')
+    ctab.plot.bar(stacked=True, ax=ax, color=quartile_colors)
     ax.set_ylabel('Proportion')
     ax.set_title(f'Quartile Distribution per Cluster (k={n_clusters}) — {target}')
     plt.tight_layout()
@@ -46,8 +52,30 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
     plt.close()
 
     if save_csv:
+        # Save cluster centers (mean values)
         centers = pd.DataFrame(scaler.inverse_transform(kmeans.cluster_centers_), columns=X.columns)
         centers['cluster'] = range(n_clusters)
         centers.to_csv(outputs_dir / (plot_name + '_cluster_centers.csv' if plot_name else f'kmeans_centers_{target}.csv'), index=False)
+        
+        # Save cluster ranges (min, max, mean, std for each parameter)
+        ranges_data = []
+        for cluster_id in range(n_clusters):
+            cluster_mask = df['cluster'] == cluster_id
+            cluster_df = df[cluster_mask]
+            n_samples = cluster_mask.sum()
+            
+            for param in X.columns:
+                ranges_data.append({
+                    'cluster': cluster_id,
+                    'parameter': param,
+                    'min': cluster_df[param].min(),
+                    'max': cluster_df[param].max(),
+                    'mean': cluster_df[param].mean(),
+                    'std': cluster_df[param].std(),
+                    'n_samples': n_samples
+                })
+        
+        ranges_df = pd.DataFrame(ranges_data)
+        ranges_df.to_csv(outputs_dir / (plot_name + '_cluster_ranges.csv' if plot_name else f'kmeans_ranges_{target}.csv'), index=False)
 
     return kmeans, ctab

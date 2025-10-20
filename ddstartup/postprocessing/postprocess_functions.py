@@ -18,6 +18,8 @@ except ImportError:
 def find_latest_output_folder(outputs_dir):
     """
     Find the most recent output folder in the outputs directory.
+    Prioritizes folders with timestamp prefixes (YYYYMMDD_HHMMSS format),
+    then falls back to filesystem creation time.
     
     Args:
         outputs_dir: Path to outputs directory
@@ -25,14 +27,29 @@ def find_latest_output_folder(outputs_dir):
     Returns:
         Tuple of (folder_path, h5_files) or (None, None) if not found
     """
+    import re
+    
     # Find all directories (excluding hidden dirs)
     folders = [d for d in outputs_dir.iterdir() if d.is_dir() and not d.name.startswith('.')]
     
     if not folders:
         return None, None
     
-    # Sort by modification time, most recent first
-    folders.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    # Sort by timestamp in folder name if present, otherwise by creation time
+    def sort_key(path):
+        # Try to extract timestamp from folder name (YYYYMMDD_HHMMSS format)
+        match = re.match(r'(\d{8})_(\d{6})', path.name)
+        if match:
+            # Return timestamp as sortable string (YYYYMMDDHHMMSS)
+            return (1, match.group(1) + match.group(2))  # Priority 1 (highest)
+        else:
+            # Fall back to filesystem creation time for folders without timestamp
+            stat = path.stat()
+            # Use st_birthtime if available (macOS), otherwise st_mtime (best proxy on Linux)
+            ctime = getattr(stat, 'st_birthtime', stat.st_mtime)
+            return (0, ctime)  # Priority 0 (lower than named folders)
+    
+    folders.sort(key=sort_key, reverse=True)
     latest_folder = folders[0]
     
     # Find HDF5 files in the latest folder
@@ -282,8 +299,17 @@ def get_input_parameters(df, target_variable, filename=None):
             REMOVE_PARAMS = ['tau_ifc', 'tau_ofc']
     if target_variable == 't_startup':
         REMOVE_PARAMS += ['eta_th', 'capacity_factor', 'cost_of_electricity','P_aux', 'P_aux_DT_eq']
-    input_parameters = [p for p in input_parameters if p not in REMOVE_PARAMS]
-    return input_parameters
+    
+    # Filter out constant parameters (zero variance)
+    # This automatically excludes parameters with a single value across all samples
+    varying_params = []
+    for param in input_parameters:
+        if param not in REMOVE_PARAMS and param in df.columns:
+            # Check if parameter varies (std > threshold to account for floating point errors)
+            if df[param].std() > 1e-10:
+                varying_params.append(param)
+    
+    return varying_params
 
 def scale_target(df, target_variable):
     if target_variable == 'unrealized_profits':
@@ -305,11 +331,16 @@ def scale_target(df, target_variable):
 
 def get_discrete_colorscale(n_chunks):
     """
-    Returns a Plotly-compatible discrete colorscale from green to red.
+    Returns a Plotly-compatible discrete colorscale from blue to orange/red.
+    
+    This colorblind-friendly palette works for ~99% of people, including those
+    with red-green colorblindness (deuteranopia/protanopia).
+    
+    Color progression: Blue (good) → Teal → Yellow → Orange → Red (bad)
     
     Logic:
     - If n_chunks <= 7: Uses base colors with interpolation for smooth transitions
-    - If n_chunks > 7: Uses matplotlib's RdYlGn_r colormap for more colors
+    - If n_chunks > 7: Uses matplotlib's RdYlBu_r colormap for more colors
     
     Args:
         n_chunks: Number of discrete color bins
@@ -317,24 +348,25 @@ def get_discrete_colorscale(n_chunks):
     Returns:
         List of [fraction, color] pairs for Plotly colorscale
     """
-    # Improved vibrant green to red (darker green for better visibility)
+    # Colorblind-friendly blue to orange/red palette
+    # Based on ColorBrewer's RdYlBu reversed, optimized for accessibility
     base_colors = [
-        "#66FF00",  # lime green
-        "#00CC00",  # vivid green
-        "#CCFF00",  # yellow-green
-        "#FFFF00",  # yellow
-        "#FFCC00",  # gold
-        "#FF6600",  # orange
-        "#FF0000",  # red
+        "#2166AC",  # dark blue (best/lowest)
+        "#4393C3",  # medium blue
+        "#92C5DE",  # light blue
+        "#FFFFBF",  # pale yellow (neutral)
+        "#FDAE61",  # light orange
+        "#F46D43",  # orange
+        "#D73027",  # red (worst/highest)
     ]
     
     import matplotlib.colors as mcolors
     
     if n_chunks > len(base_colors):
         # Case 1: Need MORE colors than base palette
-        # Use matplotlib's RdYlGn_r (Red-Yellow-Green reversed) colormap
+        # Use matplotlib's RdYlBu_r (Red-Yellow-Blue reversed) colormap
         import matplotlib
-        cmap = matplotlib.colormaps.get_cmap('RdYlGn_r')
+        cmap = matplotlib.colormaps.get_cmap('RdYlBu_r')
         color_values = cmap(np.linspace(0, 1, n_chunks))
         color_list = [f'#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}' 
                      for r, g, b, _ in color_values]

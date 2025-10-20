@@ -68,7 +68,7 @@ from ddstartup.postprocessing.plot_parcoords_functions import generate_parcoords
 from ddstartup.postprocessing.plot_pdf_functions import generate_pdf_plot
 from ddstartup.postprocessing.plot_importance_matrix import plot_effect_size_matrix
 from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_bar
-from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours
+from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours, plot_interactive_pairwise_contours
 from ddstartup.postprocessing.plot_shap_functions import generate_shap_plots
 
 # Suppress warnings
