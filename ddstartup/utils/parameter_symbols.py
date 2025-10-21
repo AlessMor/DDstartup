@@ -51,8 +51,8 @@ PARAM_SYMBOLS = {
     # Time and energy
     't_startup': r'$t_{\mathrm{startup}}$',
     'E_lost': r'$E_{\mathrm{lost}}$',
-    'unrealized_profits': r'$G$',
-    'unrealized_gains': r'$G$',
+    'unrealized_profits': 'G',
+    'unrealized_gains': 'G',
     
     # Tritium burn-up efficiency
     'TBE': r'$\mathrm{TBE}$',
