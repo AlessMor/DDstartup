@@ -68,17 +68,15 @@ from ddstartup.postprocessing.plot_parcoords_functions import generate_parcoords
 from ddstartup.postprocessing.plot_pdf_functions import generate_pdf_plot
 from ddstartup.postprocessing.plot_importance_matrix import plot_effect_size_matrix
 from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_bar
-from ddstartup.postprocessing.plot_contour_functions import (
-    plot_2d_cell_mean_heatmap, 
-    plot_pairwise_contours,
-    plot_interactive_pairwise_contours
-)
+from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours, plot_interactive_pairwise_contours
+from ddstartup.postprocessing.plot_shap_functions import generate_shap_plots
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 
-def generate_plots(files, targets, input_filters, output_filters, plot_types, output_dir):
+def generate_plots(files, targets, input_filters, output_filters, plot_types, output_dir, 
+                   shap_interpolate=False, pdf_smooth=False):
     """
     Generate requested plots for the given files and targets.
     
@@ -89,6 +87,8 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
         output_filters: Dictionary of output filters
         plot_types: List of plot types to generate ('kde', 'parcoords', 'pdf')
         output_dir: Directory to save plots
+        shap_interpolate: Whether to use interpolated (smooth) SHAP plots (default: False)
+        pdf_smooth: Whether to use KDE smoothing for PDF plots (default: False)
     """
     print(f"\n{'='*80}")
     print(f"GENERATING PLOTS")
@@ -184,10 +184,27 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 try:
                     generate_pdf_plot({str(file_path): {target: df_filtered[target].values}}, 
                                     target, [f"{file_type}"], output_filters, 
-                                    output_dir / plot_name)
+                                    output_dir / plot_name, smooth=pdf_smooth)
                     print(f"   ✅ Saved: {plot_name}")
                 except Exception as e:
                     print(f"   ❌ Error generating PDF plot: {e}")
+            
+            # Generate SHAP plots
+            if 'shap' in plot_types:
+                print(f"   Generating SHAP plots...")
+                plot_name = f"shap_{file_path.stem}_{target}"
+                try:
+                    generate_shap_plots(
+                        df_filtered, target, input_parameters, target_unit,
+                        output_dir, file_type, plot_name,
+                        max_display=20,
+                        max_samples=2000,
+                        save_csv=True,
+                        interpolate=shap_interpolate
+                    )
+                    print(f"   ✅ Generated SHAP plots and CSV files")
+                except Exception as e:
+                    print(f"   ❌ Error generating SHAP plots: {e}")
 
 
 def main():
@@ -234,7 +251,7 @@ def main():
     parser.add_argument(
         '--plots', '-p',
         nargs='+',
-        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'all'],
+        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'all'],
         help='Plot types to generate (overrides config file)'
     )
     
@@ -242,6 +259,18 @@ def main():
         '--output-dir', '-o',
         type=str,
         help='Output directory for plots (overrides config file)'
+    )
+    
+    parser.add_argument(
+        '--shap-interpolate',
+        action='store_true',
+        help='Use smooth interpolated SHAP plots instead of scatter plots'
+    )
+    
+    parser.add_argument(
+        '--pdf-smooth',
+        action='store_true',
+        help='Use KDE smoothing for PDF plots instead of histogram bins'
     )
     
     args = parser.parse_args()
@@ -426,12 +455,12 @@ def main():
     print(f"\n🎯 Target variables: {', '.join(targets)}")
     
     # ============================================================================
-    # DETERMINE PLOT TYPES
+    # Determine plot types
     # ============================================================================
     
     plots_config = config.get('plots', {})
     if plots_config.get('generate_all', True):
-        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour']
+        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap']
     else:
         plot_types = []
         if plots_config.get('kde', False):
@@ -446,8 +475,40 @@ def main():
             plot_types.append('kmeans')
         if plots_config.get('contour', False):
             plot_types.append('contour')
+        if plots_config.get('shap', False):
+            plot_types.append('shap')
     
     print(f"📊 Plot types: {', '.join(plot_types)}")
+    
+    # ============================================================================
+    # GET SHAP SETTINGS
+    # ============================================================================
+    
+    # Get SHAP interpolation setting from YAML or CLI
+    shap_settings = plots_config.get('shap_settings', {})
+    shap_interpolate = shap_settings.get('interpolate', False)
+    
+    # Command-line argument overrides YAML config
+    if args.shap_interpolate:
+        shap_interpolate = True
+    
+    if shap_interpolate and 'shap' in plot_types:
+        print(f"🔷 SHAP interpolation: ENABLED (smooth density plots)")
+    elif 'shap' in plot_types:
+        print(f"🔷 SHAP interpolation: DISABLED (scatter plots)")
+    
+    # Get PDF smoothing setting from YAML or CLI
+    pdf_settings = plots_config.get('pdf_settings', {})
+    pdf_smooth = pdf_settings.get('smooth', False)
+    
+    # Command-line argument overrides YAML config
+    if args.pdf_smooth:
+        pdf_smooth = True
+    
+    if pdf_smooth and 'pdf' in plot_types:
+        print(f"🔷 PDF smoothing: ENABLED (KDE)")
+    elif 'pdf' in plot_types:
+        print(f"🔷 PDF smoothing: DISABLED (histogram bins)")
     
     # ============================================================================
     # DETERMINE OUTPUT DIRECTORY
@@ -477,7 +538,7 @@ def main():
     # ============================================================================
     
     generate_plots(file_paths, targets, input_filters, output_filters, 
-                   plot_types, output_dir)
+                   plot_types, output_dir, shap_interpolate, pdf_smooth)
     
     print(f"\n{'='*80}")
     print(f"✅ POSTPROCESSING COMPLETE")
