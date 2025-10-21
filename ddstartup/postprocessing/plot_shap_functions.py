@@ -20,6 +20,8 @@ import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 import warnings
 
+from ..utils.parameter_symbols import get_param_label, get_param_symbol
+
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -339,25 +341,28 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
     # Labels need to be reversed because y_pos = n_features - plot_idx - 1
     # so the first feature (plot_idx=0) is at the TOP (highest y_pos)
     ax.set_yticks(range(n_features))
-    y_labels = [f"{param} (|r|={sorted_importance[i]:.3f})" 
+    y_labels = [f"{get_param_symbol(param)} (|r|={sorted_importance[i]:.3f})" 
                 for i, param in enumerate(sorted_params)]
     y_labels_reversed = y_labels[::-1]  # Reverse the labels!
     ax.set_yticklabels(y_labels_reversed, fontsize=10)
     ax.set_ylim(-0.8, n_features - 0.2)
     
     # Set x-axis label
-    ax.set_xlabel(f'Impact on {target} (correlation × standardized value)', fontsize=12)
+    target_label = get_param_symbol(target)
+    ax.set_xlabel(f'Impact on {target_label} (correlation × standardized value)', fontsize=12)
     ax.axvline(x=0, color='#888888', linestyle='-', linewidth=1.0, alpha=0.8, zorder=0)
     ax.grid(axis='x', alpha=0.3, linestyle='--', linewidth=0.5)
     
     # Title with explanation
-    title_text = f'Feature Importance: {target}'
+    target_symbol = get_param_symbol(target)
+    title_text = f'Feature Importance: {target_symbol}'
     if target_unit:
-        title_text += f' {target_unit}'
+        title_text += f' [{target_unit}]'
     
     # Add subtitle with correlation info
     top_feature_corr = sorted_importance[0] if len(sorted_importance) > 0 else 0
-    subtitle = f'(Top feature: {sorted_params[0]} with |correlation|={top_feature_corr:.3f})'
+    top_feature_symbol = get_param_symbol(sorted_params[0]) if len(sorted_params) > 0 else ''
+    subtitle = f'(Top feature: {top_feature_symbol} with |correlation|={top_feature_corr:.3f})'
     
     ax.set_title(title_text + '\n' + subtitle,
                  fontsize=14, pad=20, fontweight='bold')

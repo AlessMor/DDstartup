@@ -13,6 +13,7 @@ import seaborn as sns
 
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
 from ddstartup.utils.tools import PARAM_UNITS
+from ddstartup.utils.parameter_symbols import get_param_label, get_param_symbol
 
 
 def save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_labels, outputs_dir, plot_name):
@@ -107,11 +108,8 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
             else:
                 sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(bin_label), color=color)
         
-        # Add unit to title if available
-        if param in PARAM_UNITS:
-            param_label = f"{param} [{PARAM_UNITS[param]}]"
-        else:
-            param_label = param
+        # Add unit to title with symbol
+        param_label = get_param_label(param, PARAM_UNITS.get(param))
         ax.set_title(param_label, fontsize=10)
         ax.set_xlabel("")
         ax.set_ylabel("Density")
@@ -121,16 +119,18 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
     for j in range(n_inputs, len(axes)):
         axes[j].set_visible(False)
     
-    # Add legend
+    # Add legend with symbol
     handles, labels = axes[0].get_legend_handles_labels()
-    legend_title = f"{target} quartile [{target_unit}]"
+    target_label = get_param_label(target, target_unit)
+    legend_title = f"{target_label} quartile"
     fig.legend(handles, labels,
                title=legend_title,
                loc='lower right',
                fontsize=12, title_fontsize=14)
     
     # Adjust layout
-    fig.suptitle(f"KDE of Inputs by {target} quartile for {file_type}", fontsize=14)
+    target_symbol = get_param_symbol(target)
+    fig.suptitle(f"KDE of Inputs by {target_symbol} quartile for {file_type}", fontsize=14)
     plt.subplots_adjust(
         left=0.05,
         right=0.85,
