@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
 from ddstartup.utils.tools import PARAM_UNITS
+from ddstartup.utils.parameter_symbols import get_param_symbol
 
 
 def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, file_type, output_path):
@@ -52,7 +53,11 @@ def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, 
             continue  # skip vector fields
         
         unique_vals = np.sort(np.unique(values))
-        label = f"{param}<br>[{PARAM_UNITS.get(param, '')}]" if param in PARAM_UNITS else param
+        
+        # Use symbol instead of parameter name
+        param_symbol = get_param_symbol(param)
+        unit = PARAM_UNITS.get(param, '')
+        label = f"{param_symbol}<br>[{unit}]" if unit else param_symbol
         
         dim = dict(label=label, values=values, range=[values.min(), values.max()])
         if len(unique_vals) <= 20:
@@ -61,7 +66,8 @@ def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, 
     
     # Add target dimension
     values = df_filtered[target]
-    target_label = f"{target}<br>[{target_unit}]"
+    target_symbol = get_param_symbol(target)
+    target_label = f"{target_symbol}<br>[{target_unit}]"
     dimensions.append(dict(label=target_label, values=values, range=[values.min(), values.max()]))
     
     # Create figure
@@ -86,7 +92,7 @@ def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, 
     ))
     
     fig.update_layout(
-        title=f"Parallel Coordinates Plot - {file_type} ({target})",
+        title=f"Parallel Coordinates Plot - {file_type} ({target_symbol})",
         font=dict(size=12),
         width=1400,
         height=700,

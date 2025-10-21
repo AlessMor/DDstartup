@@ -10,6 +10,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 
+from ddstartup.utils.parameter_symbols import get_param_symbol
+
 
 def cohen_d(a, b):
     """Compute Cohen's d between two samples."""
@@ -60,9 +62,15 @@ def plot_effect_size_matrix(df, target, inputs, outputs_dir, plot_name=None, sav
         csv_name = outputs_dir / (plot_name + '_effects.csv' if plot_name else f'{target}_effects.csv')
         effects.to_csv(csv_name)
 
+    # Replace input parameter names with symbols for heatmap y-axis
+    from ddstartup.utils.parameter_symbols import get_param_symbol
+    effects_display = effects.copy()
+    effects_display.index = [get_param_symbol(inp) for inp in effects.index]
+
     plt.figure(figsize=(max(6, len(inputs)*0.4), 6))
-    sns.heatmap(effects.astype(float), cmap='vlag', center=0, annot=True, fmt='.2f')
-    plt.title(f"Effect Size (Cohen's d) per Quartile — {target}")
+    sns.heatmap(effects_display.astype(float), cmap='vlag', center=0, annot=True, fmt='.2f')
+    target_symbol = get_param_symbol(target)
+    plt.title(f"Effect Size (Cohen's d) per Quartile — {target_symbol}")
     plt.tight_layout()
     png_name = outputs_dir / (plot_name + '.png' if plot_name else f'{target}_effects.png')
     plt.savefig(png_name, dpi=150)

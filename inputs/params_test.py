@@ -1,7 +1,7 @@
 from utils.units_and_constants import *
 from utils.custom_classes import ParameterField
 
-param_points = 3
+param_points = 2
 
 V_plasma_field = ParameterField(
     parametrization_type="normal", mean=150, std=15, unit=u.m**3, 

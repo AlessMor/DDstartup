@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, NullFormatter
 from scipy.stats import gaussian_kde
 
+from ..utils.parameter_symbols import get_param_label, get_param_symbol
+from ..utils.tools import PARAM_UNITS
+
 
 def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path, 
                      smooth=False, kde_bandwidth='scott'):
@@ -93,11 +96,17 @@ def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path,
                     plt.plot(bin_centers[mask], counts[mask], drawstyle='steps-mid', label=f"{label}")
                     has_data = True
     
-    plt.xlabel(var)
+    # Get unit for variable
+    unit = PARAM_UNITS.get(var, None)
+    
+    # Format labels with symbols
+    xlabel = get_param_label(var, unit)
+    plt.xlabel(xlabel)
     plt.ylabel('Probability Density')
     
     # Add subtitle indicating mode
-    title_text = f'PDF of {var}'
+    var_symbol = get_param_symbol(var)
+    title_text = f'PDF of {var_symbol}'
     if smooth:
         title_text += '\n(Kernel Density Estimation)'
     

@@ -13,6 +13,7 @@ import seaborn as sns
 
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
 from ddstartup.utils.tools import PARAM_UNITS
+from ddstartup.utils.parameter_symbols import get_param_label, get_param_symbol
 
 
 def save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_labels, outputs_dir, plot_name):
@@ -70,11 +71,29 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
         print(f"   No input parameters found for target '{target}'. Skipping KDE plot.")
         return
     
-    # Set up subplot grid
+    # Set up subplot grid with extra row for title and extra row for legend
     ncols = min(3, n_inputs)
     nrows = int(np.ceil(n_inputs / ncols))
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(4*ncols, 3*nrows), sharey=False)
-    axes = axes.flatten() if n_inputs > 1 else [axes]
+    
+    # Add 2 extra rows: one for title at top, one for legend at bottom
+    # Use gridspec to control row heights
+    from matplotlib import gridspec
+    
+    # Define height ratios: first row (title) = 0.07 (minimal for fontsize 14), 
+    # data rows = 1 each, last row (legend) = 0.45 (more space for legend)
+    height_ratios = [0.07] + [1] * nrows + [0.45]
+
+    fig = plt.figure(figsize=(4*ncols, 3*nrows + 2))
+    gs = gridspec.GridSpec(nrows=nrows+2, ncols=ncols, figure=fig, 
+                          height_ratios=height_ratios,
+                          hspace=0.4, wspace=0.3)
+    
+    # Create axes for data plots (skip first and last rows)
+    axes = []
+    for row in range(1, nrows + 1):
+        for col in range(ncols):
+            ax = fig.add_subplot(gs[row, col])
+            axes.append(ax)
     
     # Quartile binning
     bin_edges = df_filtered[target].quantile([0, 0.25, 0.5, 0.75, 1.0]).values
@@ -107,38 +126,31 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
             else:
                 sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(bin_label), color=color)
         
-        # Add unit to title if available
-        if param in PARAM_UNITS:
-            param_label = f"{param} [{PARAM_UNITS[param]}]"
-        else:
-            param_label = param
+        # Add unit to title with symbol
+        param_label = get_param_label(param, PARAM_UNITS.get(param))
         ax.set_title(param_label, fontsize=10)
         ax.set_xlabel("")
         ax.set_ylabel("Density")
         ax.tick_params(labelsize=8)
     
-    # Hide unused subplots
+    # Hide unused subplots in data rows
     for j in range(n_inputs, len(axes)):
         axes[j].set_visible(False)
     
-    # Add legend
+    # Add title in the reserved top row space
+    target_symbol = get_param_symbol(target)
+    fig.suptitle(f"KDE of Inputs by {target_symbol} quartile for {file_type}", fontsize=14, y=0.97)
+    
+    # Add legend in the reserved bottom row space
     handles, labels = axes[0].get_legend_handles_labels()
-    legend_title = f"{target} quartile [{target_unit}]"
+    target_label = get_param_label(target, target_unit)
+    legend_title = f"{target_label} quartile"
     fig.legend(handles, labels,
                title=legend_title,
-               loc='lower right',
+               loc='lower center',
+               bbox_to_anchor=(0.5, 0.03),
+               ncol=2,
                fontsize=12, title_fontsize=14)
-    
-    # Adjust layout
-    fig.suptitle(f"KDE of Inputs by {target} quartile for {file_type}", fontsize=14)
-    plt.subplots_adjust(
-        left=0.05,
-        right=0.85,
-        top=0.88,
-        bottom=0.05,
-        wspace=0.3,
-        hspace=0.4
-    )
     
     plt.savefig(outputs_dir / plot_name, dpi=150)
     plt.close(fig)
