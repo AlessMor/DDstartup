@@ -153,7 +153,7 @@ plots:
   importance: true       # Effect-size importance matrix (Cohen's d)
   kmeans: true           # KMeans clustering analysis
   contour: true          # 2D pairwise contour plots
-  shap: true             # SHAP (SHapley Additive exPlanations) plots
+  shap: true            # SHAP (SHapley Additive exPlanations) plots
   
   # Plot-specific settings
   kde_settings:

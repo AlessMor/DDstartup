@@ -108,12 +108,17 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
         for target in targets:
             print(f"\n  🎯 Target: {target}")
             
-            # Load and filter data
-            print(f"   Loading data...")
-            df = load_h5_to_dataframe(file_path)
+            # Load and filter data - load only inputs and this target to manage memory
+            print(f"   Loading data (inputs + {target})...")
+            df = load_h5_to_dataframe(file_path, target_variables=[target])
             
             # Apply filters
             df_filtered = apply_filters(df, input_filters, output_filters, target)
+            
+            # Delete the unfiltered dataframe immediately to free memory
+            del df
+            import gc
+            gc.collect()
             
             if len(df_filtered) == 0:
                 print(f"   ⚠️  No data remaining after filtering. Skipping.")
@@ -205,6 +210,11 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                     print(f"   ✅ Generated SHAP plots and CSV files")
                 except Exception as e:
                     print(f"   ❌ Error generating SHAP plots: {e}")
+            
+            # Clean up memory after processing this target
+            del df_filtered
+            gc.collect()
+            print(f"   🧹 Memory cleaned for next target")
 
 
 def main():
