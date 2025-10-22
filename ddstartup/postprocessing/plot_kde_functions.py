@@ -71,29 +71,8 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
         print(f"   No input parameters found for target '{target}'. Skipping KDE plot.")
         return
     
-    # Set up subplot grid with extra row for title and extra row for legend
-    ncols = min(3, n_inputs)
-    nrows = int(np.ceil(n_inputs / ncols))
-    
-    # Add 2 extra rows: one for title at top, one for legend at bottom
-    # Use gridspec to control row heights
+    # Import gridspec for later use
     from matplotlib import gridspec
-    
-    # Define height ratios: first row (title) = 0.07 (minimal for fontsize 14), 
-    # data rows = 1 each, last row (legend) = 0.45 (more space for legend)
-    height_ratios = [0.07] + [1] * nrows + [0.45]
-
-    fig = plt.figure(figsize=(4*ncols, 3*nrows + 2))
-    gs = gridspec.GridSpec(nrows=nrows+2, ncols=ncols, figure=fig, 
-                          height_ratios=height_ratios,
-                          hspace=0.4, wspace=0.3)
-    
-    # Create axes for data plots (skip first and last rows)
-    axes = []
-    for row in range(1, nrows + 1):
-        for col in range(ncols):
-            ax = fig.add_subplot(gs[row, col])
-            axes.append(ax)
     
     # Quartile binning
     bin_edges = df_filtered[target].quantile([0, 0.25, 0.5, 0.75, 1.0]).values
@@ -112,6 +91,45 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
     colorscale = get_discrete_colorscale(4)
     quartile_colors = [colorscale[i*2][1] for i in range(4)]
     color_map = {label: quartile_colors[i] for i, label in enumerate(bin_labels)}
+    
+    # Filter out parameters with zero variance across the entire dataset
+    varying_input_parameters = []
+    for param in input_parameters:
+        if param in df_filtered.columns:
+            # Check if parameter has any variation (relative to mean to handle both small and large values)
+            std_val = df_filtered[param].std()
+            mean_val = abs(df_filtered[param].mean())
+            if std_val > 1e-10 and (mean_val == 0 or std_val / mean_val > 1e-6):
+                varying_input_parameters.append(param)
+            else:
+                print(f"   Skipping {param} (zero variance: all values ≈ {df_filtered[param].iloc[0]:.6g})")
+    
+    if len(varying_input_parameters) == 0:
+        print(f"   No varying parameters to plot. Skipping KDE plot.")
+        return
+    
+    # Update input_parameters to only include varying ones
+    input_parameters = varying_input_parameters
+    n_inputs = len(input_parameters)
+    
+    # Update subplot grid based on actual number of varying parameters
+    ncols = min(3, n_inputs)
+    nrows = int(np.ceil(n_inputs / ncols))
+    
+    # Recreate gridspec with updated dimensions
+    height_ratios = [0.07] + [1] * nrows + [0.45]
+
+    fig = plt.figure(figsize=(4*ncols, 3*nrows + 2))
+    gs = gridspec.GridSpec(nrows=nrows+2, ncols=ncols, figure=fig, 
+                          height_ratios=height_ratios,
+                          hspace=0.4, wspace=0.3)
+    
+    # Create axes for data plots (skip first and last rows)
+    axes = []
+    for row in range(1, nrows + 1):
+        for col in range(ncols):
+            ax = fig.add_subplot(gs[row, col])
+            axes.append(ax)
     
     # Plot KDE for each input parameter
     for i, param in enumerate(input_parameters):
