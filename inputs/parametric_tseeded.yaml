@@ -6,7 +6,7 @@ method: parametric       # parametric or sobol
 
 
 # Analysis-specific parameters
-vector_length: 100      # default is 100
+vector_length: 100      # Maintains data quality
 total_time: 315360000  # in seconds. default is 315360000 (10 years)
 
 # Performance settings
