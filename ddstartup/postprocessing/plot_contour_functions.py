@@ -15,7 +15,7 @@ from matplotlib.ticker import FuncFormatter
 from scipy.interpolate import griddata
 import itertools, math
 
-from ddstartup.utils.parameter_symbols import get_param_label, get_param_symbol
+from ddstartup.utils.parameter_registry import get_registry
 from ddstartup.utils.tools import PARAM_UNITS
 
 
@@ -65,6 +65,8 @@ def _format_title(text, max_length=40):
 def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, interpolate=True, ax=None):
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)
+    
+    registry = get_registry()
 
     if x not in df.columns or y not in df.columns or target not in df.columns:
         raise ValueError('Required columns missing')
@@ -87,22 +89,22 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         cp = ax.contourf(X, Y, Z, cmap='viridis')
         
         # Colorbar with custom formatter for clean scientific notation
-        target_symbol = get_param_symbol(target)
+        target_symbol = registry.get_symbol(target)
         target_unit = PARAM_UNITS.get(target)
-        cbar_label = get_param_label(target, target_unit, use_symbol=True)
+        cbar_label = registry.get_param_label(target, target_unit, use_symbol=True)
         cbar = plt.colorbar(cp, ax=ax, format=FuncFormatter(_format_scientific))
         cbar.set_label(cbar_label, fontsize=10)
         cbar.ax.tick_params(labelsize=8)
         
         # Split long title into two lines with symbols
-        x_symbol = get_param_symbol(x)
-        y_symbol = get_param_symbol(y)
+        x_symbol = registry.get_symbol(x)
+        y_symbol = registry.get_symbol(y)
         title = _format_title(f'{target_symbol} over {x_symbol} vs {y_symbol}')
         ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
-        x_label = get_param_label(x, PARAM_UNITS.get(x))
-        y_label = get_param_label(y, PARAM_UNITS.get(y))
+        x_label = registry.get_param_label(x, PARAM_UNITS.get(x))
+        y_label = registry.get_param_label(y, PARAM_UNITS.get(y))
         ax.set_xlabel(x_label, fontsize=10)
         ax.set_ylabel(y_label, fontsize=10)
         
@@ -117,22 +119,22 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         pivot = df.pivot_table(index=y, columns=x, values=target, aggfunc='mean')
         
         # Heatmap with custom formatter for clean scientific notation
-        target_symbol = get_param_symbol(target)
+        target_symbol = registry.get_symbol(target)
         target_unit = PARAM_UNITS.get(target)
-        cbar_label = get_param_label(target, target_unit, use_symbol=True)
+        cbar_label = registry.get_param_label(target, target_unit, use_symbol=True)
         sns.heatmap(pivot, cmap='viridis', 
                    cbar_kws={'label': cbar_label, 'format': FuncFormatter(_format_scientific)},
                    fmt='.2g', ax=ax)
         
         # Split long title into two lines with symbols
-        x_symbol = get_param_symbol(x)
-        y_symbol = get_param_symbol(y)
+        x_symbol = registry.get_symbol(x)
+        y_symbol = registry.get_symbol(y)
         title = _format_title(f'{target_symbol} over {x_symbol} vs {y_symbol} (cell means)')
         ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
-        x_label = get_param_label(x, PARAM_UNITS.get(x))
-        y_label = get_param_label(y, PARAM_UNITS.get(y))
+        x_label = registry.get_param_label(x, PARAM_UNITS.get(x))
+        y_label = registry.get_param_label(y, PARAM_UNITS.get(y))
         ax.set_xlabel(x_label, fontsize=10)
         ax.set_ylabel(y_label, fontsize=10)
         ax.tick_params(labelsize=10)
@@ -161,6 +163,8 @@ def plot_pairwise_contours(df, inputs, target, outputs_dir, max_pairs=None, inte
     """
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)
+    
+    registry = get_registry()
 
     # Filter inputs to those present in df
     inputs_present = [p for p in inputs if p in df.columns]
@@ -192,8 +196,8 @@ def plot_pairwise_contours(df, inputs, target, outputs_dir, max_pairs=None, inte
             plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, interpolate=interpolate, ax=ax)
         except Exception as e:
             ax.text(0.5, 0.5, f'Error: {e}', ha='center')
-            x_symbol = get_param_symbol(x)
-            y_symbol = get_param_symbol(y)
+            x_symbol = registry.get_symbol(x)
+            y_symbol = registry.get_symbol(y)
             ax.set_title(f'{x_symbol} vs {y_symbol}')
 
     # Hide unused axes

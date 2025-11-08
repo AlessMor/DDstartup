@@ -92,7 +92,7 @@ def load_config(yaml_path: Path) -> Dict[str, Any]:
     
     # Set defaults for optional fields
     config.setdefault('vector_length', 100)
-    config.setdefault('total_time', 10 * 365 * 24 * 3600)
+    config.setdefault('max_simulation_time', 10 * 365 * 24 * 3600)
     config.setdefault('verbose', False)
     config.setdefault('output_dir', 'outputs')
     config.setdefault('n_jobs', None)
@@ -100,106 +100,95 @@ def load_config(yaml_path: Path) -> Dict[str, Any]:
     config.setdefault('batch_size', 500)
     config.setdefault('N_SAMPLES', 100000)
     config.setdefault('order', 3)
+    config.setdefault('filter', None)  # Parameter filter expression
     
     return config
 
 
 def load_parameter_fields(param_module_path: Path) -> Dict[str, Any]:
     """
-    Load ParameterField objects from specified config module.
+    Load parameter fields from YAML configuration file.
     
     Args:
-        param_module_path: Path to parameter configuration Python file
+        param_module_path: Path to YAML parameter configuration file
         
     Returns:
-        Dictionary mapping field names to ParameterField objects or values
+        Dictionary mapping field names to tuples of (values_array, unit_string, metadata)
+        or scalar values for simple parameters
         
     Raises:
-        ImportError: If the module cannot be imported
+        FileNotFoundError: If YAML file doesn't exist
+        ValueError: If file format is unsupported or YAML structure is invalid
     """
-    # Convert path to module name
-    if str(param_module_path).endswith('.py'):
-        param_module_path = Path(param_module_path)
-        # Extract module name from path (e.g., inputs/config.py -> config)
-        module_name = param_module_path.stem
-        # Get the parent directory to add to path if needed
-        parent_dir = str(param_module_path.parent.absolute())
-        if parent_dir not in os.sys.path:
-            os.sys.path.insert(0, parent_dir)
-    else:
-        module_name = str(param_module_path)
+    param_path = Path(param_module_path)
     
-    try:
-        # Try importing as inputs.module_name first
-        try:
-            config_module = importlib.import_module(f"inputs.{module_name}")
-        except ImportError:
-            # Fall back to direct import if path was added
-            config_module = importlib.import_module(module_name)
-    except ImportError as e:
-        raise ImportError(f"Cannot import parameter config: {module_name}\nError: {e}")
+    # Only YAML files are supported
+    if param_path.suffix not in ['.yaml', '.yml']:
+        raise ValueError(
+            f"Only YAML parameter files are supported (.yaml or .yml), got: {param_path.suffix}\n"
+            f"Legacy Python parameter files (.py) are no longer supported.\n"
+            f"Please convert to YAML format. See inputs/README_YAML.md for migration guide."
+        )
     
-    # Load all ParameterField variables
-    param_fields = {}
-    field_names = [
-        'V_plasma_field', 'T_i_field', 'n_tot_field', 'tau_p_T_field',
-        'tau_p_He3_field', 'P_aux_field', 'P_aux_DT_eq_field',
-        'TBR_DT_field', 'TBR_DDn_field', 'tau_ifc_field', 'tau_ofc_field',
-        'eta_th_field', 'capacity_factor_field', 'cost_of_electricity_field',
-        'I_target_field', 'total_time'
-    ]
-    
-    for field_name in field_names:
-        param_fields[field_name] = getattr(config_module, field_name, None)
-    
-    return param_fields
+    from .parameter_loader import ParameterLoader
+    return ParameterLoader.load_from_yaml(param_path)
 
 
 def prepare_input_data(param_fields: Dict[str, Any], analysis_type: str) -> Dict[str, np.ndarray]:
     """
     Prepare input data dictionary based on analysis type.
     
+    Converts parameter field tuples (values, unit, metadata) to numpy arrays with proper units.
+    
     Args:
-        param_fields: Dictionary of ParameterField objects
+        param_fields: Dictionary of parameter field tuples from YAML loader
         analysis_type: Type of analysis ('T_seeded' or 'lump')
         
     Returns:
-        Dictionary mapping parameter names to numpy arrays with converted units
+        Dictionary mapping parameter names to numpy arrays in correct units
         
     Raises:
         ValueError: If analysis_type is not recognized
     """
+    from .units_and_constants import u
+    
+    def convert_to_unit(field_data: tuple, target_unit: str) -> np.ndarray:
+        """Convert parameter field data to target unit."""
+        values, unit_str, metadata = field_data
+        quantity = values * u(unit_str)
+        return quantity.to(target_unit).magnitude
+    
     if analysis_type == 'T_seeded':
         input_data = {
-            'V_plasma': param_fields['V_plasma_field'].data.to('m^3').magnitude,
-            'T_i': param_fields['T_i_field'].data.to('keV').magnitude,
-            'n_tot': param_fields['n_tot_field'].data.to('1/m^3').magnitude,
-            'tau_p_T': param_fields['tau_p_T_field'].data.to('s').magnitude,
-            'P_aux': param_fields['P_aux_field'].data.to('W').magnitude,
-            'P_aux_DT_eq': param_fields['P_aux_DT_eq_field'].data.to('W').magnitude,
-            'TBR_DT': param_fields['TBR_DT_field'].data.to_base_units().magnitude,
-            'TBR_DDn': param_fields['TBR_DDn_field'].data.to_base_units().magnitude,
-            'tau_ifc': param_fields['tau_ifc_field'].data.to('s').magnitude,
-            'tau_ofc': param_fields['tau_ofc_field'].data.to('s').magnitude,
-            'eta_th': param_fields['eta_th_field'].data.to_base_units().magnitude,
-            'capacity_factor': param_fields['capacity_factor_field'].data.to_base_units().magnitude,
-            'cost_of_electricity': param_fields['cost_of_electricity_field'].data.to('1/J').magnitude
+            'V_plasma': convert_to_unit(param_fields['V_plasma_field'], 'm^3'),
+            'T_i': convert_to_unit(param_fields['T_i_field'], 'keV'),
+            'n_tot': convert_to_unit(param_fields['n_tot_field'], '1/m^3'),
+            'tau_p_T': convert_to_unit(param_fields['tau_p_T_field'], 's'),
+            'P_aux': convert_to_unit(param_fields['P_aux_field'], 'W'),
+            'P_aux_DT_eq': convert_to_unit(param_fields['P_aux_DT_eq_field'], 'W'),
+            'TBR_DT': convert_to_unit(param_fields['TBR_DT_field'], 'dimensionless'),
+            'TBR_DDn': convert_to_unit(param_fields['TBR_DDn_field'], 'dimensionless'),
+            'tau_ifc': convert_to_unit(param_fields['tau_ifc_field'], 's'),
+            'tau_ofc': convert_to_unit(param_fields['tau_ofc_field'], 's'),
+            'eta_th': convert_to_unit(param_fields['eta_th_field'], 'dimensionless'),
+            'capacity_factor': convert_to_unit(param_fields['capacity_factor_field'], 'dimensionless'),
+            'price_of_electricity': convert_to_unit(param_fields['price_of_electricity_field'], '1/J')
         }
     elif analysis_type == 'lump':
         input_data = {
-            'V_plasma': param_fields['V_plasma_field'].data.to('m^3').magnitude,
-            'T_i': param_fields['T_i_field'].data.to('keV').magnitude,
-            'n_tot': param_fields['n_tot_field'].data.to('1/m^3').magnitude,
-            'tau_p_T': param_fields['tau_p_T_field'].data.to('s').magnitude,
-            'tau_p_He3': param_fields['tau_p_He3_field'].data.to('s').magnitude,
-            'P_aux': param_fields['P_aux_field'].data.to('W').magnitude,
-            'P_aux_DT_eq': param_fields['P_aux_DT_eq_field'].data.to('W').magnitude,
-            'TBR_DT': param_fields['TBR_DT_field'].data.to_base_units().magnitude,
-            'TBR_DDn': param_fields['TBR_DDn_field'].data.to_base_units().magnitude,
-            'I_target': param_fields['I_target_field'].data.to('kg').magnitude,
-            'eta_th': param_fields['eta_th_field'].data.to_base_units().magnitude,
-            'capacity_factor': param_fields['capacity_factor_field'].data.to_base_units().magnitude,
-            'cost_of_electricity': param_fields['cost_of_electricity_field'].data.to('1/J').magnitude
+            'V_plasma': convert_to_unit(param_fields['V_plasma_field'], 'm^3'),
+            'T_i': convert_to_unit(param_fields['T_i_field'], 'keV'),
+            'n_tot': convert_to_unit(param_fields['n_tot_field'], '1/m^3'),
+            'tau_p_T': convert_to_unit(param_fields['tau_p_T_field'], 's'),
+            'tau_p_He3': convert_to_unit(param_fields['tau_p_He3_field'], 's'),
+            'P_aux': convert_to_unit(param_fields['P_aux_field'], 'W'),
+            'P_aux_DT_eq': convert_to_unit(param_fields['P_aux_DT_eq_field'], 'W'),
+            'TBR_DT': convert_to_unit(param_fields['TBR_DT_field'], 'dimensionless'),
+            'TBR_DDn': convert_to_unit(param_fields['TBR_DDn_field'], 'dimensionless'),
+            'I_target': convert_to_unit(param_fields['I_target_field'], 'kg'),
+            'eta_th': convert_to_unit(param_fields['eta_th_field'], 'dimensionless'),
+            'capacity_factor': convert_to_unit(param_fields['capacity_factor_field'], 'dimensionless'),
+            'price_of_electricity': convert_to_unit(param_fields['price_of_electricity_field'], '1/J')
         }
     else:
         raise ValueError(f"Unknown analysis type: {analysis_type}")
@@ -231,7 +220,10 @@ def print_configuration(
     print(f"Config file: {config_file}")
     print(f"Analysis type: {config['analysis_type']}")
     print(f"Method: {config['method']}")
-    print(f"Total time: {config['total_time']/365/24/3600:.2f} years")
+    print(f"Max simulation time: {config['max_simulation_time']/365/24/3600:.2f} years")
+    
+    if config.get('filter'):
+        print(f"Filter: {config['filter']}")
     
     if config['method'] == 'sobol':
         print(f"N_SAMPLES: {config['N_SAMPLES']}")

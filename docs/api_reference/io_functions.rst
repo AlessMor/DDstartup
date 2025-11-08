@@ -297,7 +297,7 @@ prepare_input_data
    * ``tau_ofc`` (s) - Outboard first wall campaign time
    * ``eta_th`` (dimensionless) - Thermal efficiency
    * ``capacity_factor`` (dimensionless) - Plant capacity factor
-   * ``cost_of_electricity`` ($/J) - Cost of electricity
+   * ``price_of_electricity`` ($/J) - Price of electricity
    
    **lump** (13 parameters, includes He3):
    
@@ -667,7 +667,7 @@ Supported Units
    * - capacity_factor
      - dimensionless
      - ``.to('dimensionless')``
-   * - cost_of_electricity
+   * - price_of_electricity
      - $/J
      - ``.to('dollar/J')``
    * - I_target
@@ -761,7 +761,6 @@ Best Practices
 See Also
 --------
 
-* :doc:`system_profiler` - System profiling API
 * :doc:`../user_guide/configuration_files` - Configuration file format
 * :doc:`../user_guide/parameter_definitions` - Parameter definitions
 * :doc:`../developer_guide/architecture` - System architecture

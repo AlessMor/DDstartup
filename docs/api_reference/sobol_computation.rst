@@ -330,7 +330,7 @@ Example Workflow
        'tau_ofc': [3600, 172800],
        'eta_th': [0.3, 0.4],
        'capacity_factor': [0.5, 0.9],
-       'cost_of_electricity': [5e-8, 1e-7],
+       'price_of_electricity': [5e-8, 1e-7],
    }
    
    # Convert to arrays

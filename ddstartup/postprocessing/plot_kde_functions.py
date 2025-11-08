@@ -13,7 +13,7 @@ import seaborn as sns
 
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
 from ddstartup.utils.tools import PARAM_UNITS
-from ddstartup.utils.parameter_symbols import get_param_label, get_param_symbol
+from ddstartup.utils.parameter_registry import get_registry
 
 
 def save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_labels, outputs_dir, plot_name):
@@ -66,6 +66,8 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
         file_type: Type of file (for plot title)
         plot_name: Name for saved plot file
     """
+    registry = get_registry()
+    
     n_inputs = len(input_parameters)
     if n_inputs == 0:
         print(f"   No input parameters found for target '{target}'. Skipping KDE plot.")
@@ -145,7 +147,7 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
                 sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(bin_label), color=color)
         
         # Add unit to title with symbol
-        param_label = get_param_label(param, PARAM_UNITS.get(param))
+        param_label = registry.get_param_label(param, PARAM_UNITS.get(param))
         ax.set_title(param_label, fontsize=10)
         ax.set_xlabel("")
         ax.set_ylabel("Density")
@@ -156,12 +158,12 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
         axes[j].set_visible(False)
     
     # Add title in the reserved top row space
-    target_symbol = get_param_symbol(target)
+    target_symbol = registry.get_symbol(target)
     fig.suptitle(f"KDE of Inputs by {target_symbol} quartile for {file_type}", fontsize=14, y=0.97)
     
     # Add legend in the reserved bottom row space
     handles, labels = axes[0].get_legend_handles_labels()
-    target_label = get_param_label(target, target_unit)
+    target_label = registry.get_param_label(target, target_unit)
     legend_title = f"{target_label} quartile"
     fig.legend(handles, labels,
                title=legend_title,

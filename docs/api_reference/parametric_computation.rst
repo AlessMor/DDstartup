@@ -387,30 +387,8 @@ The module uses a producer-consumer pattern for non-blocking HDF5 writes:
 Performance Tuning
 ==================
 
-System Profiler Integration
-----------------------------
-
-The module integrates with ``utils.system_profiler`` to automatically determine optimal parameters:
-
-.. code-block:: python
-
-   from utils.system_profiler import get_optimal_parameters
-   
-   # Auto-detect optimal settings
-   optimal = get_optimal_parameters(
-       analysis_type='T_seeded',
-       method='parametric'
-   )
-   
-   # Returns:
-   {
-       'n_jobs': 11,        # CPU cores - 1
-       'chunk_size': 5500,  # Based on RAM and cores
-       'batch_size': 100    # HDF5 write buffer
-   }
-
-Manual Tuning
--------------
+Performance Tuning
+------------------
 
 **n_jobs** (Parallel Workers):
 
@@ -534,5 +512,4 @@ See Also
 
 - :doc:`physics_tseeded` - T_seeded compute function
 - :doc:`physics_lump` - Lump compute function
-- :doc:`system_profiler` - Performance optimization
 - :doc:`../user_guide/running_analysis` - Usage guide

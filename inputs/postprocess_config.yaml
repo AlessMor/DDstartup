@@ -110,7 +110,7 @@ input_filters:
     min: null      # Minimum capacity factor
     max: null      # Maximum capacity factor
   
-  cost_of_electricity:
+  price_of_electricity:
     min: null      # Minimum electricity cost ($/J)
     max: null      # Maximum electricity cost ($/J)
   

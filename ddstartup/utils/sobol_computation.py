@@ -71,16 +71,16 @@ def run_sobol_analysis(
     
     # Run Sobol analysis using existing physics module
     try:
-        result = physics_sobol_analysis(
+        stats = compute_sobol_indices_parallel(
             input_data=input_data,
             param_names=param_names,
-            N_SAMPLES=int(N_SAMPLES),
+            N_SAMPLES=N_SAMPLES,
             order=order,
             analysis_type=analysis_type,
-            total_time=total_time,
-            compute_single_combination=compute_function,
-            output_file=output_file,
+            max_simulation_time=max_simulation_time,
             vector_length=vector_length,
+            compute_single_combination=compute_single_combination,
+            n_jobs=n_jobs,
             verbose=verbose
         )
     except Exception as e:

@@ -315,7 +315,7 @@ if __name__ == "__main__":
                 "tau_ofc", # 9
                 "eta_th", # 10
                 "capacity_factor", # 11
-                "cost_of_electricity", # 12
+                "price_of_electricity", # 12
                ]
     TARGET = "unrealized_profits" # "unrealized_profits" # "t_startup"
     X, y = load_from_h5(H5_PATH, x_key=FEATURES, y_key=TARGET)

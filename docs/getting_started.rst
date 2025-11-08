@@ -78,17 +78,18 @@ Directory Structure
    │   ├── outputs/                  # Generated results (HDF5 files)
    │   ├── utils/                    # Utility modules
    │   │   ├── io_functions.py       # I/O operations
-   │   │   ├── system_profiler.py    # Hardware profiling
+   │   │   ├── parameter_registry.py # Parameter schema
    │   │   ├── custom_classes.py     # ParameterField class
    │   │   └── units_and_constants.py
    │   ├── physics/                  # Physics computations
    │   │   ├── lump_functions.py     # Lump analysis
    │   │   ├── Tseeded_functions.py  # T-seeded analysis
-   │   │   └── sobol_functions.py    # Sobol sensitivity
+   │   │   └── reactivity_functions.py
    │   └── tests/                    # Test suite
-   │       ├── test_io_functions.py
-   │       ├── test_main.py
-   │       └── test_system_profiler.py
+   │       └── unit/
+   │           ├── physics/
+   │           ├── io/
+   │           └── utils/
    ├── docs/                         # Documentation
    └── requirements.txt              # Python dependencies
 
@@ -100,19 +101,10 @@ Verify Installation
 
 .. code-block:: bash
 
-   cd ddstartup
-   python main.py config_test parametric_tseeded --dry-run
+   cd dd_startup
+   python -m ddstartup params_test parametric_tseeded
 
-Expected output:
-
-.. code-block:: text
-
-   ============================================================
-   SYSTEM PROFILE
-   ============================================================
-   Hardware:
-     CPU Cores: 12
-     Total RAM: 8.2 GB
+Expected: Analysis completes successfully and generates HDF5 output file.
      Available RAM: 2.9 GB (35.5% free)
    
    Recommended Parallel Processing Parameters:
@@ -131,11 +123,16 @@ Run Tests
    # Run all tests
    pytest tests/
 
-   # Run with coverage
-   pytest tests/ --cov=. --cov-report=html
+Run Tests
+~~~~~~~~~
 
-   # Run specific test file
-   pytest tests/test_system_profiler.py -v
+.. code-block:: bash
+
+   # Run all tests
+   python -m pytest tests/ -v
+
+   # Run with coverage
+   pytest tests/ --cov=ddstartup --cov-report=html
 
 Next Steps
 ----------

@@ -13,12 +13,14 @@ from pathlib import Path
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
-from ddstartup.utils.parameter_symbols import get_param_symbol
+from ddstartup.utils.parameter_registry import get_registry
 
 
 def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot_name=None, save_csv=True):
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)
+    
+    registry = get_registry()
 
     X = df[inputs].copy()
     # Drop columns not present
@@ -46,7 +48,7 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
     fig, ax = plt.subplots(figsize=(8, 4))
     ctab.plot.bar(stacked=True, ax=ax, color=quartile_colors)
     ax.set_ylabel('Proportion')
-    target_symbol = get_param_symbol(target)
+    target_symbol = registry.get_symbol(target)
     ax.set_title(f'Quartile Distribution per Cluster (k={n_clusters}) — {target_symbol}')
     plt.tight_layout()
     png_name = outputs_dir / (plot_name + '.png' if plot_name else f'kmeans_{target}.png')

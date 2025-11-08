@@ -9,9 +9,9 @@ Overview
 
 The T_seeded approach models the detailed evolution of tritium through different fuel cycle stages:
 
-- **Out-of-fuel-cycle inventory** (N_ofc): Tritium in breeding blankets
-- **In-fuel-cycle inventory** (N_ifc): Tritium in processing systems  
-- **Stored inventory** (N_st): Tritium available for injection
+- **Outer fuel-cycle inventory** (N_ofc)
+- **Inner fuel-cycle inventory** (N_ifc)
+- **Storage inventory** (N_st): Tritium available for injection
 - **Plasma tritium density** (n_T): Tritium concentration in plasma
 
 The system evolves from pure DD operation (n_T = 0) until D-T operation is reached (n_T = n_D = 0.5*n_tot).
@@ -19,128 +19,100 @@ The system evolves from pure DD operation (n_T = 0) until D-T operation is reach
 Core Functions
 ==============
 
-compute_single_combination
---------------------------
-
-.. code-block:: python
-
-   def compute_single_combination(
-       linear_index: int,
-       input_arrays_flat: List[np.ndarray],
-       param_shapes_array: np.ndarray,
-       total_time: float = 10*365*24*3600,
-       vector_length: int = 100
-   ) -> Dict[str, Any]
-
-**Purpose**: Compute T_seeded analysis for a single parameter combination.
-
-This is the core function called by parallel workers during parametric analysis. It:
-
-1. Converts linear index to multi-dimensional parameter indices
-2. Extracts parameter values from flattened arrays
-3. Computes temperature-dependent reaction rates
-4. Solves the ODE system for tritium inventory evolution
-5. Computes fusion powers and economic metrics
-6. Returns comprehensive results dictionary
-
-**Arguments**:
-
-- ``linear_index``: Integer index (0 to n_combinations-1) identifying parameter set
-- ``input_arrays_flat``: List of 1D arrays, one per parameter
-- ``param_shapes_array``: Array of parameter grid shapes for index conversion
-- ``total_time``: Maximum simulation time in seconds (default: 10 years)
-- ``vector_length``: Number of time points in output arrays (default: 100)
-
-**Returns**: Dictionary containing:
-
-- **Input echoes**: V_plasma, T_i, n_tot, tau_p_T, P_aux, P_aux_DT_eq, TBR_DT, TBR_DDn, tau_ifc, tau_ofc, eta_th, capacity_factor, cost_of_electricity
-- **Time series** (length = vector_length):
-  
-  - N_ofc, N_ifc, N_stor: Tritium inventories (atoms)
-  - n_T, n_D: Tritium and deuterium densities (m⁻³)
-  - P_DDn, P_DDp, P_DT: Fusion powers (W)
-  - TBE: Tritium breeding efficiency
-
-- **Scalars**:
-  
-  - t_startup: Time to reach D-T operation (s)
-  - P_DT_eq: Equivalent D-T fusion power (W)
-  - Q_DD: Energy gain factor during DD startup
-  - Q_DT_eq: Energy gain factor for equivalent D-T operation
-  - E_lost: Energy lost due to DD startup (J)
-  - unrealized_gains: Economic cost of startup ($)
-
-- **Status**:
-  
-  - linear_index: Echo of input index
-  - sol_success: Boolean indicating successful computation
-  - error: Error message if computation failed (empty string if successful)
-
-**Example**:
-
-.. code-block:: python
-
-   from physics.Tseeded_functions import compute_single_combination
-   import numpy as np
-   
-   # Prepare inputs
-   linear_index = 0
-   input_arrays_flat = [
-       np.array([150.0]),      # V_plasma
-       np.array([17.0]),       # T_i
-       np.array([1.7e20]),     # n_tot
-       np.array([0.1, 1.0]),   # tau_p_T (2 values)
-       # ... other parameters
-   ]
-   param_shapes_array = np.array([1, 1, 1, 2, ...])
-   
-   # Compute
-   result = compute_single_combination(
-       linear_index, 
-       input_arrays_flat, 
-       param_shapes_array,
-       total_time=10*365*24*3600,
-       vector_length=100
-   )
-   
-   # Access results
-   print(f"Startup time: {result['t_startup']/86400:.1f} days")
-   print(f"Q factor: {result['Q_DD']:.2f}")
-   print(f"Success: {result['sol_success']}")
-
 solve_ode_system
 ----------------
 
 .. code-block:: python
 
    def solve_ode_system(
-       total_time: float,
        V_plasma: float, n_tot: float, tau_p_T: float,
-       P_aux: float, P_aux_DT_eq: float,
        TBR_DT: float, TBR_DDn: float,
        tau_ifc: float, tau_ofc: float,
-       eta_th: float, capacity_factor: float, cost_of_electricity: float,
        sigmav_DD_p: float, sigmav_DD_n: float, sigmav_DT: float,
-       injection_rate_max: float, vector_length: int,
+       injection_rate_max: float,
+       total_time: float = 10*365*24*3600,
        N_st_min: float = 0.001/tritium_mass
    ) -> Dict[str, Any]
 
-**Purpose**: Solve tritium inventory ODE system and compute startup metrics.
+**Purpose**: Solve the ODE system for tritium inventory evolution during DD startup.
 
-Integrates the coupled ODEs for tritium evolution until D-T operation is reached (n_T = 0.5*n_tot) or total_time is exceeded. Handles three termination conditions:
+Integrates the coupled ODEs describing tritium evolution through the fuel cycle until 
+D-T operation is reached (n_T = 0.5*n_tot) or total_time is exceeded.
 
-1. **Success**: D-T operation reached
-2. **Timeout**: Total time exceeded without reaching D-T
-3. **Failure**: Negative inventories or integration errors
-
-**Integration Method**: BDF (Backward Differentiation Formula) - suitable for stiff systems
+**Integration Method**: BDF - best for stiff systems
 
 **Event Detection**:
 
-- ``DT_reached_event``: Triggers when n_T = 0.5*n_tot
-- ``negative_event``: Triggers if any inventory becomes negative
+- ``DT_reached_event``: Triggers when n_T = 0.5*n_tot (success)
+- ``negative_event``: Triggers if any inventory becomes negative (failure)
 
-**Returns**: Dictionary with time series arrays and scalar metrics (see compute_single_combination for details)
+**Termination Conditions**:
+
+1. **Success**: D-T operation reached (n_T = 0.5*n_tot)
+2. **Timeout**: Total time exceeded without reaching D-T
+3. **Failure**: Negative inventories or integration errors
+
+**Returns**: ``Dict[str, Any]`` with keys:
+
+- **Time series arrays**:
+  
+  - ``t``: Time points (s) - 1D array (variable length)
+  - ``N_ofc``: Out-of-fuel-cycle tritium (atoms) - 1D array
+  - ``N_ifc``: In-fuel-cycle tritium (atoms) - 1D array
+  - ``N_stor``: Storage tritium (atoms) - 1D array
+  - ``n_T``: Tritium density in plasma (m⁻³) - 1D array
+
+- **Scalar results**:
+  
+  - ``t_startup``: Time to reach D-T operation (s)
+  - ``sol_success``: True if D-T reached, False otherwise
+  - ``error``: Error message if failed, None if successful
+
+**Example**:
+
+.. code-block:: python
+
+   from ddstartup.physics.Tseeded_functions import solve_ode_system
+   from ddstartup.physics.reactivity_functions import (
+       sigmav_DT_BoschHale, sigmav_DD_BoschHale
+   )
+   import numpy as np
+   
+   # Define parameters
+   V_plasma = 150.0  # m³
+   n_tot = 2e20      # m⁻³
+   T_i = 17.0        # keV
+   tau_p_T = 0.5     # s
+   TBR_DT = 1.1
+   TBR_DDn = 0.7
+   tau_ifc = 1.0 * 86400    # 1 day
+   tau_ofc = 10.0 * 86400   # 10 days
+   injection_rate_max = 1e20  # atoms/s
+   total_time = 10 * 365 * 86400  # 10 years
+   
+   # Compute reaction rates
+   sigmav_DT = sigmav_DT_BoschHale(np.array([T_i]))[0]
+   _, sigmav_DD_p, sigmav_DD_n = sigmav_DD_BoschHale(np.array([T_i]))
+   sigmav_DD_p = sigmav_DD_p[0]
+   sigmav_DD_n = sigmav_DD_n[0]
+   
+   # Solve ODE system
+   result = solve_ode_system(
+       V_plasma=V_plasma, n_tot=n_tot, tau_p_T=tau_p_T,
+       TBR_DT=TBR_DT, TBR_DDn=TBR_DDn,
+       tau_ifc=tau_ifc, tau_ofc=tau_ofc,
+       sigmav_DD_p=sigmav_DD_p, sigmav_DD_n=sigmav_DD_n,
+       sigmav_DT=sigmav_DT, injection_rate_max=injection_rate_max,
+       total_time=total_time
+   )
+   
+   # Check results
+   if result['sol_success']:
+       print(f"Startup time: {result['t_startup']/86400:.1f} days")
+       print(f"Final tritium density: {result['n_T'][-1]:.2e} m⁻³")
+       print(f"Number of time points: {len(result['t'])}")
+   else:
+       print(f"Solution failed: {result['error']}")
 
 ode_system
 ----------
@@ -176,123 +148,14 @@ where:
 - :math:`\\dot{T}_{burn} = n_D n_T \\langle\\sigma v\\rangle_{DT} V_{plasma}` (consumption by D-T)
 - :math:`\\dot{I}_{inj} = \\min(\\max(0, N_{ifc}/\\tau_{ifc} - \\lambda_T N_{st}), \\dot{I}_{max})` (injection rate)
 
-**Compilation**: JIT-compiled with Numba for ~100x speedup. Cached after first run.
+**Optional adjustments**:
 
-postprocess_fusion_results_Tseeded
------------------------------------
-
-.. code-block:: python
-
-   @njit(cache=True)
-   def postprocess_fusion_results_Tseeded(
-       t_startup: float, N_ofc: np.ndarray, N_ifc: np.ndarray,
-       N_st: np.ndarray, n_T: np.ndarray, n_tot: float,
-       V_plasma: float, sigmav_DD_p: float, sigmav_DD_n: float,
-       sigmav_DT: float, TBR_DT: float, TBR_DDn: float,
-       tau_ifc: float, eta_th: float, capacity_factor: float,
-       cost_of_electricity: float, P_aux: float, P_aux_DT_eq: float,
-       E_DDn: float, E_DDp: float, E_DT: float,
-       injection_rate_max: float, N_st_min: float, vector_length: int
-   ) -> Tuple
-
-**Purpose**: JIT-compiled postprocessing for performance.
-
-Computes fusion powers, energy integrals, Q factors, and economic metrics from ODE solution. Uses trapezoidal integration over time to compute total energies.
-
-**Returns**: Tuple of (P_DDn, P_DDp, P_DT, P_DT_eq, Q_DD, Q_DT_eq, E_lost, unrealized_gains, TBE_vector, n_D)
-
-Parallel Computation
-====================
-
-The T_seeded module is designed for efficient parallel execution:
-
-**Data Layout**:
-
-- Parameters stored as 1D arrays (flattened)
-- Linear indexing: 0, 1, 2, ..., n_combinations-1
-- Minimal data transfer between processes
-
-**Worker Execution**:
-
-1. Each worker receives ``compute_single_combination``
-2. Worker converts linear_index → multi-dimensional indices
-3. Worker extracts parameters and runs physics
-4. Worker returns result dictionary
-5. Main process collects and writes to HDF5
-
-**Performance**:
-
-- Numba JIT compilation: ~100x speedup for ODE system
-- Parallel workers: ~10x speedup (11 cores)
-- Overall: ~1000x faster than naive Python
-
-**Memory Efficiency**:
-
-- Shared read-only parameter arrays
-- Each worker holds only one result at a time
-- Buffered HDF5 writing (1000 results)
-
-Example Workflow
-================
-
-.. code-block:: python
-
-   # 1. Prepare parameter grid
-   from utils.io_functions import prepare_input_data
-   
-   param_fields = {
-       'V_plasma': np.linspace(100, 200, 5),
-       'T_i': np.linspace(14, 20, 3),
-       'tau_p_T': np.logspace(-1, 0, 10),
-       # ... other parameters
-   }
-   
-   input_data = prepare_input_data(param_fields, 'T_seeded')
-   
-   # 2. Run parametric analysis (parallel execution happens automatically)
-   from utils.parametric_computation import run_parametric_analysis
-   from physics.Tseeded_functions import compute_single_combination
-   
-   stats = run_parametric_analysis(
-       input_data=input_data,
-       output_file='results.h5',
-       config={'total_time': 10*365*24*3600, 'n_jobs': 11},
-       compute_function=compute_single_combination,
-       verbose=True
-   )
-   
-   # 3. Access results
-   import h5py
-   with h5py.File('results.h5', 'r') as f:
-       t_startup = f['t_startup'][:]
-       Q_DD = f['Q_DD'][:]
-       success = f['sol_success'][:]
-
-Performance Notes
-=================
-
-**Typical Performance** (256 combinations, 11 workers):
-
-- Total time: ~10 seconds
-- Per combination: ~40 ms
-- Success rate: ~85-90%
-
-**Optimization Tips**:
-
-1. Use ``vector_length=100`` for balance of detail vs. speed
-2. Set ``total_time`` appropriately (10 years typical)
-3. Let system profiler auto-detect ``n_jobs``
-4. Use HDF5 compression for large parameter sweeps
-
-**Common Failure Modes**:
-
-- **Timeout**: D-T not reached within total_time
-- **Negative inventories**: Unphysical parameter combinations
-- **Integration errors**: Stiff ODE solver issues
+1. Set ``total_time`` appropriately (10 years is typical)
+2. Adjust ``N_st_min`` if injection control causes issues
+3. Modify initial inventories (N_ifc, N_ofc, N_st) - they are hardcoded to small nonzero values to avoid division by zero at t=0.
 
 See Also
 ========
 
-- :doc:`physics_lump` - Simplified lumped parameter model
-- :doc:`parametric_computation` - Parallel execution framework
-- :doc:`../user_guide/analysis_types` - Choosing between T_seeded and lump
+- :doc:`physics_lump` - Simplified steady-state model
+- :doc:`physics_reactivity` - Reaction rate functions

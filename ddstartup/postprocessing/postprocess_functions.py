@@ -273,7 +273,7 @@ def load_h5_to_dataframe(h5_path, chunk_size=500000, target_variables=None):
     # Define input parameter names
     INPUT_PARAMS = ['V_plasma', 'n_tot', 'T_i', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq', 
                     'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'capacity_factor', 
-                    'cost_of_electricity', 'I_target']
+                    'price_of_electricity', 'I_target']
     
     data = {}
     expected_length = None
@@ -358,7 +358,7 @@ def filter_finite(df, target_variable, filter_dict=None):
 
 def get_input_parameters(df, target_variable, filename=None):
     DESIRED_ORDER = [
-        'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_DT_eq', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'capacity_factor', 'cost_of_electricity',  'I_target',
+        'V_plasma','n_tot', 'T_i', 'tau_p_T','tau_p_He3','P_aux', 'P_aux_DT_eq', 'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'capacity_factor', 'price_of_electricity',  'I_target',
     ]
     base_inputs = [col for col in df.columns if col in DESIRED_ORDER and col != target_variable]
     input_parameters = [p for p in DESIRED_ORDER if p in base_inputs] + [p for p in base_inputs if p not in DESIRED_ORDER]
@@ -369,7 +369,7 @@ def get_input_parameters(df, target_variable, filename=None):
         elif 'lump' in filename:
             REMOVE_PARAMS = ['tau_ifc', 'tau_ofc']
     if target_variable == 't_startup':
-        REMOVE_PARAMS += ['eta_th', 'capacity_factor', 'cost_of_electricity','P_aux', 'P_aux_DT_eq']
+        REMOVE_PARAMS += ['eta_th', 'capacity_factor', 'price_of_electricity','P_aux', 'P_aux_DT_eq']
     
     # Filter out constant parameters (zero variance)
     # This automatically excludes parameters with a single value across all samples

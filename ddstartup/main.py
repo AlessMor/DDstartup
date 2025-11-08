@@ -45,9 +45,10 @@ def main():
     # ============================================================================
     # Resolve parameter and configuration file paths
     # - Parameter file: contains physics parameters (e.g., V_plasma, T_i, n_tot)
+    #   Supports both Python (.py) and YAML (.yaml, .yml) formats
     # - Config file: contains analysis settings (e.g., method, n_jobs, verbose)
     try:
-        param_file = resolve_file_path(args.params, 'inputs', ['.py'])
+        param_file = resolve_file_path(args.params, 'inputs', ['.yaml', '.yml', '.py'])
         config_file = resolve_file_path(args.config, 'inputs', ['.yaml', '.yml'])
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -92,9 +93,9 @@ def main():
         print(f"Error loading parameter fields: {e}", file=sys.stderr)
         return 1
     
-    # Override total_time from parameter config if it exists
-    if param_fields['total_time'] is not None:
-        config['total_time'] = param_fields['total_time']
+    # Override max_simulation_time from parameter config if it exists
+    if 'max_simulation_time' in param_fields and param_fields['max_simulation_time'] is not None:
+        config['max_simulation_time'] = param_fields['max_simulation_time']
     
     # Prepare input data arrays for analysis
     # This converts parameter fields into proper format for computation
@@ -107,15 +108,34 @@ def main():
     # ============================================================================
     # SYSTEM PROFILING AND OPTIMIZATION
     # ============================================================================
-    # Profile system hardware (CPU cores, memory) and determine optimal
-    # parallelization parameters (n_jobs, chunk_size, batch_size)
+    # Only profile system if performance parameters are not specified in config
+    # This avoids unnecessary overhead when user provides explicit values
     try:
-        optimal_params = get_optimal_parameters(
-            analysis_method=config['method'],
-            verbose=verbose
+        needs_profiling = (
+            config.get('n_jobs') is None or 
+            config.get('chunk_size') is None or 
+            config.get('batch_size') is None or
+            (config['method'] == 'sobol' and config.get('N_SAMPLES') is None)
         )
-        # Override optimal parameters with user-specified config values if provided
-        optimal_params = override_with_config(optimal_params, config)
+        
+        if needs_profiling:
+            # Profile system hardware and determine optimal parameters
+            optimal_params = get_optimal_parameters(
+                analysis_method=config['method'],
+                verbose=verbose
+            )
+            # Use config values if provided, otherwise use profiled optimal values
+            optimal_params = override_with_config(optimal_params, config)
+        else:
+            # Use user-provided values directly (no profiling needed)
+            optimal_params = {
+                'n_jobs': config['n_jobs'],
+                'chunk_size': config['chunk_size'],
+                'batch_size': config['batch_size'],
+            }
+            if config['method'] == 'sobol':
+                optimal_params['N_SAMPLES'] = config.get('N_SAMPLES')
+                optimal_params['order'] = config.get('order')
         
         # Update config with final parallelization parameters
         config.update({
@@ -170,19 +190,7 @@ def main():
     # 
     # This design minimizes data transfer between processes while allowing
     # thousands of combinations to be computed in parallel.
-    try:
-        if config['analysis_type'] == 'T_seeded':
-            from ddstartup.physics.Tseeded_functions import compute_single_combination
-        elif config['analysis_type'] == 'lump':
-            from ddstartup.physics.lump_functions import compute_single_combination
-        else:
-            print(f"Error: Unknown analysis type: {config['analysis_type']}", file=sys.stderr)
-            return 1
-    except ImportError as e:
-        print(f"Error importing compute function: {e}", file=sys.stderr)
-        print(f"Please ensure the required physics modules are available.", file=sys.stderr)
-        return 1
-
+    
     #############################################################################################
     #                                           ANALYSIS EXECUTION
     #############################################################################################
@@ -194,10 +202,13 @@ def main():
             # PARAMETRIC ANALYSIS - PARALLEL GRID COMPUTATION
             # ----------------------------------------------------------------
             # Performs a full parameter sweep across all combinations
+            # The compute function is now created internally by run_parametric_analysis
+            # based on the analysis_type (lump or T_seeded).
+            # 
             # Uses joblib.Parallel to:
             #   1. Spawn n_jobs worker processes
             #   2. Distribute linear indices (0, 1, 2, ..., n_combinations-1)
-            #   3. Each worker calls compute_single_combination(index, ...)
+            #   3. Each worker calls the dynamically created compute function
             #   4. Results are collected and written to HDF5 in batches
             # 
             # Output: HDF5 file with complete grid of results
@@ -205,8 +216,8 @@ def main():
                 input_data=input_data,
                 output_file=output_file,
                 config=config,
-                compute_function=compute_single_combination,
-                verbose=verbose
+                verbose=verbose,
+                filter_expr=config.get('filter')
             )
             
             # Print analysis summary statistics
@@ -220,7 +231,22 @@ def main():
             # Latin Hypercube Sampling to efficiently explore parameter space
             # Computes first-order and total-order sensitivity indices
             # 
+            # Note: Sobol analysis still requires compute_function import
+            # TODO: Refactor sobol_computation.py to use internal factory like parametric
+            # 
             # Output: HDF5 file with sampled results and sensitivity indices
+            try:
+                if config['analysis_type'] == 'T_seeded':
+                    from ddstartup.physics.Tseeded_functions import compute_single_combination
+                elif config['analysis_type'] == 'lump':
+                    from ddstartup.physics.lump_functions import compute_single_combination
+                else:
+                    print(f"Error: Unknown analysis type: {config['analysis_type']}", file=sys.stderr)
+                    return 1
+            except ImportError as e:
+                print(f"Error importing compute function for Sobol: {e}", file=sys.stderr)
+                return 1
+            
             stats = run_sobol_analysis(
                 input_data=input_data,
                 output_file=output_file,

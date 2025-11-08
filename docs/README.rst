@@ -129,7 +129,7 @@ Documentation Structure
    ├── api_reference/               # API documentation
    │   ├── index.rst
    │   ├── io_functions.rst
-   │   ├── system_profiler.rst
+   │   ├── parametric_computation.rst
    │   ├── custom_classes.rst
    │   ├── units_and_constants.rst
    │   └── tools.rst
@@ -231,7 +231,7 @@ Document Python modules automatically:
 
 .. code-block:: rst
 
-   .. automodule:: ddstartup.utils.system_profiler
+   .. automodule:: ddstartup.utils.io_functions
       :members:
       :undoc-members:
       :show-inheritance:
@@ -240,7 +240,7 @@ Document specific functions:
 
 .. code-block:: rst
 
-   .. autofunction:: ddstartup.utils.system_profiler.get_system_info
+   .. autofunction:: ddstartup.utils.io_functions.load_config
 
 Document classes:
 

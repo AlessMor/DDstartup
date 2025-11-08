@@ -12,6 +12,7 @@ Welcome to the DD Startup Analysis Tool documentation. This tool provides a comm
    api_reference/index
    developer_guide/index
    examples/index
+   bibliography
 
 Features
 --------

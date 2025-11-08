@@ -2,3 +2,4 @@
 sphinx>=7.0.0
 sphinx_rtd_theme>=2.0.0
 sphinx-autodoc-typehints>=1.25.0
+sphinxcontrib-bibtex>=2.6.0

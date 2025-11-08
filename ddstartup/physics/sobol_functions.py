@@ -25,7 +25,7 @@ def convert_sobol_sample_to_linear_index(sample_idx, n_samples):
 
 
 def run_sample_optimized(sample_idx, sample_values, 
-                         compute_single_combination, analysis_type, total_time, vector_length):
+                         compute_single_combination, analysis_type, max_simulation_time, vector_length):
     """
     Optimized single sample evaluation for Sobol analysis.
     
@@ -38,7 +38,7 @@ def run_sample_optimized(sample_idx, sample_values,
         sample_values: Array of parameter values for this sample (all parameters)
         compute_single_combination: JIT-compiled worker function
         analysis_type: 'T_seeded' or 'lump'
-        total_time: Maximum simulation time
+        max_simulation_time: Maximum simulation time
         vector_length: Length of vector outputs
         
     Returns:
@@ -53,7 +53,7 @@ def run_sample_optimized(sample_idx, sample_values,
         # Direct call with linear index = 0 (single sample evaluation)
         if analysis_type == 'T_seeded':
             result = compute_single_combination(0, input_arrays_sobol, 
-                                               param_shapes_array, total_time, vector_length)
+                                               param_shapes_array, max_simulation_time, vector_length)
         else:
             result = compute_single_combination(0, input_arrays_sobol, 
                                                param_shapes_array)
@@ -64,34 +64,27 @@ def run_sample_optimized(sample_idx, sample_values,
         error_msg = f"{str(e)} | Traceback: {traceback.format_exc()}"
         return {'sample_idx': sample_idx, 'error': error_msg, 'sol_success': False}
 
-def sobol_analysis(
-    input_data, param_names, N_SAMPLES, order, analysis_type, total_time,
-    compute_single_combination, output_file, vector_length, verbose=True
+def compute_sobol_indices_parallel(
+    input_data, param_names, N_SAMPLES, order, analysis_type, max_simulation_time,
+    vector_length, compute_single_combination, n_jobs, verbose
 ):
     """
-    Optimized Sobol sensitivity analysis with JIT compilation and parallel execution.
+    Compute Sobol sensitivity indices using parallel computation.
     
-    Performance improvements:
-    - Uses joblib.Parallel for better load balancing vs ProcessPoolExecutor
-    - Vectorized result extraction
-    - Efficient PCE fitting on variable parameters only
-    - Parallel sample evaluation with minimal memory overhead
-    - HDF5 storage (consistent with parametric analysis)
+    Generates Sobol samples, computes outputs in parallel, then analyzes sensitivities
+    using SALib.
     
     Args:
-        input_data: Dict of parameter arrays (distributions)
+        input_data: Dictionary with parameter arrays and metadata
         param_names: List of parameter names
-        N_SAMPLES: Number of Sobol samples
-        order: PCE expansion order
-        analysis_type: 'T_seeded' or 'lump'
-        total_time: Maximum simulation time
-        compute_single_combination: JIT-compiled worker function
-        output_file: Path to HDF5 output file
-        vector_length: Length of vector outputs
-        verbose: Print progress information
-        
-    Returns:
-        Dictionary with Sobol indices and statistics
+        N_SAMPLES: Number of Sobol samples to generate
+        order: Sobol analysis order (2 or 3)
+        analysis_type: 'lump' or 'T_seeded'
+        max_simulation_time: Maximum simulation time
+        vector_length: Number of time points (T_seeded only)
+        compute_single_combination: Physics compute function
+        n_jobs: Number of parallel jobs
+        verbose: Whether to print progress
     """
     t_start = time.time()
     
@@ -192,7 +185,7 @@ def sobol_analysis(
                 sample,  # Pass full sample array directly
                 compute_single_combination,
                 analysis_type,
-                total_time,
+                max_simulation_time,
                 vector_length
             )
             for i, sample in zip(chunk_indices, chunk_samples)

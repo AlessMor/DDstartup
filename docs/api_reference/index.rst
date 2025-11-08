@@ -10,7 +10,6 @@ Core Modules
    :maxdepth: 2
 
    io_functions
-   system_profiler
    parametric_computation
    sobol_computation
 
@@ -20,6 +19,7 @@ Physics Modules
 .. toctree::
    :maxdepth: 2
 
+   physics_reactivity
    physics_tseeded
    physics_lump
 

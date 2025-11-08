@@ -28,6 +28,7 @@ extensions = [
     'sphinx.ext.mathjax',
     'sphinx.ext.ifconfig',
     'sphinx.ext.githubpages',
+    'sphinxcontrib.bibtex',
 ]
 
 templates_path = ['_templates']
@@ -75,3 +76,8 @@ intersphinx_mapping = {
 
 # Todo extension
 todo_include_todos = True
+
+# Bibliography (bibtex) settings
+bibtex_bibfiles = ['references.bib']
+bibtex_default_style = 'plain'
+bibtex_reference_style = 'author_year'

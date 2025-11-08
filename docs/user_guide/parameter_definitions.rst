@@ -4,7 +4,273 @@ Parameter Definitions
 Overview
 --------
 
+Parameter definition files specify the simulation parameter space using either **YAML files** (recommended) or Python modules with ``ParameterField`` objects. These files define values and ranges for physical and operational parameters.
+
+.. note::
+   **YAML format is now the recommended approach** for all new parameter files due to better separation of configuration from code, improved readability, and easier maintenance. Python parameter files are still fully supported for backward compatibility.
+
+YAML Parameter Files (Recommended)
+-----------------------------------
+
+Quick Start
+~~~~~~~~~~~
+
+Create a YAML parameter file (e.g., ``params.yaml``):
+
+.. code-block:: yaml
+
+   parameters:
+     V_plasma_field:
+       type: linear
+       min: 100
+       max: 200
+       points: 5
+       unit: m^3
+       description: Plasma volume
+     
+     T_i_field:
+       type: linear
+       min: 15
+       max: 20
+       points: 3
+       unit: keV
+       description: Ion temperature
+     
+     n_tot_field:
+       type: linear
+       min: 1.3e20
+       max: 2.0e20
+       points: 3
+       unit: 1/m^3
+       description: Total particle density
+
+Run with the YAML file:
+
+.. code-block:: bash
+
+   python -m ddstartup params.yaml parametric_tseeded.yaml
+
+Parameter Types
+~~~~~~~~~~~~~~~
+
+YAML parameters support four field types:
+
+**scalar** - Single fixed value:
+
+.. code-block:: yaml
+
+   V_plasma_field:
+     type: scalar
+     value: 150
+     unit: m^3
+     description: Plasma volume
+
+**linear** - Uniformly spaced range:
+
+.. code-block:: yaml
+
+   T_i_field:
+     type: linear
+     min: 14
+     max: 20
+     points: 10
+     unit: keV
+     description: Ion temperature
+
+**normal** - Normally distributed values:
+
+.. code-block:: yaml
+
+   tau_p_T_field:
+     type: normal
+     mean: 0.5
+     std: 0.1
+     points: 5
+     unit: s
+     description: Particle confinement time
+
+**vector** - Explicit list of values:
+
+.. code-block:: yaml
+
+   TBR_DT_field:
+     type: vector
+     values: [1.05, 1.10, 1.15, 1.20]
+     unit: ""
+     description: DT tritium breeding ratio
+
+Special Features
+~~~~~~~~~~~~~~~~
+
+**Automatic P_aux Calculation**
+
+Set P_aux to NaN to calculate from power balance:
+
+.. code-block:: yaml
+
+   P_aux_field:
+     type: scalar
+     value: .nan  # Will be calculated automatically
+     unit: MW
+     description: Auxiliary heating power
+
+The system will calculate: ``P_aux = P_rad + 3*n_tot*T_i*V_plasma - P_charged``
+
+**Scientific Notation**
+
+YAML supports scientific notation:
+
+.. code-block:: yaml
+
+   n_tot_field:
+     type: linear
+     min: 1.3e20
+     max: 2.0e20
+     points: 5
+     unit: 1/m^3
+
+**Multi-line Descriptions**
+
+Use YAML multi-line syntax for long descriptions:
+
+.. code-block:: yaml
+
+   tau_ifc_field:
+     type: vector
+     values: [3600, 21600, 43200]
+     unit: s
+     description: |
+       In-fuel cycle time.
+       Represents time between fuel processing cycles.
+       Values: 1, 6, 12 hours converted to seconds.
+
+Complete Example
+~~~~~~~~~~~~~~~~
+
+File: ``inputs/params.yaml``
+
+.. code-block:: yaml
+
+   # DD Startup Analysis Parameters
+   # Complete configuration for T_seeded parametric analysis
+   
+   parameters:
+     # Plasma parameters
+     V_plasma_field:
+       type: linear
+       min: 100
+       max: 200
+       points: 5
+       unit: m^3
+       description: Plasma volume
+     
+     T_i_field:
+       type: linear
+       min: 14
+       max: 20
+       points: 10
+       unit: keV
+       description: Ion temperature
+     
+     n_tot_field:
+       type: linear
+       min: 1.3e20
+       max: 2.0e20
+       points: 5
+       unit: 1/m^3
+       description: Total particle density
+     
+     # Confinement
+     tau_p_T_field:
+       type: normal
+       mean: 0.5
+       std: 0.1
+       points: 5
+       unit: s
+       description: Tritium particle confinement time
+     
+     # Auxiliary power
+     P_aux_field:
+       type: linear
+       min: 20e6
+       max: 100e6
+       points: 5
+       unit: W
+       description: Auxiliary heating power
+     
+     P_aux_DT_eq_field:
+       type: scalar
+       value: 60e6
+       unit: W
+       description: DT-equivalent auxiliary power
+     
+     # Breeding ratios
+     TBR_DT_field:
+       type: vector
+       values: [1.05, 1.10, 1.15]
+       unit: ""
+       description: DT tritium breeding ratio
+     
+     TBR_DDn_field:
+       type: vector
+       values: [0.5, 0.7, 0.9]
+       unit: ""
+       description: DDn tritium breeding ratio
+     
+     # Fuel cycle times
+     tau_ifc_field:
+       type: vector
+       values: [3600, 21600, 43200]
+       unit: s
+       description: Inner fuel cycle time (1, 6, 12 hours)
+     
+     tau_ofc_field:
+       type: vector
+       values: [3600, 43200, 86400]
+       unit: s
+       description: Outer fuel cycle time (1, 12, 24 hours)
+     
+     # Economic parameters
+     eta_th_field:
+       type: vector
+       values: [0.30, 0.35, 0.40]
+       unit: ""
+       description: Thermal conversion efficiency
+     
+     capacity_factor_field:
+       type: vector
+       values: [0.5, 0.7, 0.9]
+       unit: ""
+       description: Plant capacity factor
+     
+     price_of_electricity_field:
+       type: vector
+       values: [50, 75, 100]
+       unit: $/MWh
+       description: Price of electricity
+
+Advantages of YAML
+~~~~~~~~~~~~~~~~~~~
+
+**Compared to Python parameter files:**
+
+1. **Clean and readable** - No Python syntax required
+2. **Safe** - No code execution risks
+3. **Portable** - Can be used by other tools
+4. **Version control friendly** - Cleaner git diffs
+5. **Easy validation** - Programmatic structure checking
+6. **Better separation** - Configuration separate from code
+
+Python Parameter Files (Legacy)
+--------------------------------
+
+Overview
+~~~~~~~~
+
 Parameter definition files are Python modules that define the simulation parameter space using ``ParameterField`` objects. These files specify the values and ranges for physical and operational parameters.
+
+.. note::
+   Python parameter files are still fully supported but YAML format is recommended for new configurations.
 
 ParameterField Class
 --------------------
@@ -210,12 +476,12 @@ File: ``inputs/config.py``
        description='Plant capacity factor'
    )
    
-   cost_of_electricity_field = ParameterField(
-       name='cost_of_electricity',
+   price_of_electricity_field = ParameterField(
+       name='price_of_electricity',
        field_type='array',
        value=[50, 75, 100],  # $/MWh
        unit='$/kWh',
-       description='Cost of electricity'
+       description='Price of electricity'
    )
    
    # Simulation time
@@ -252,7 +518,7 @@ Reduced parameter space for quick testing:
    
    eta_th_field = ParameterField('eta_th', 'linear', (0.3, 0.4, 2), '')
    capacity_factor_field = ParameterField('capacity_factor', 'linear', (0.5, 0.9, 2), '')
-   cost_of_electricity_field = ParameterField('cost_of_electricity', 'linear', (50, 100, 2), '$/kWh')
+   price_of_electricity_field = ParameterField('price_of_electricity', 'linear', (50, 100, 2), '$/kWh')
    
    # Additional lump-specific parameter
    I_target_field = ParameterField('I_target', 'linear', (0.5, 2.0, 2), 'kg')
@@ -284,7 +550,7 @@ Required parameter fields for T_seeded analysis:
    tau_ofc_field          # Outer fuel cycle time [s]
    eta_th_field           # Thermal efficiency [-]
    capacity_factor_field  # Capacity factor [-]
-   cost_of_electricity_field  # Electricity cost [$/J]
+   price_of_electricity_field  # Electricity cost [$/J]
 
 lump Analysis
 ~~~~~~~~~~~~~
@@ -305,7 +571,7 @@ Required parameter fields for lump analysis:
    I_target_field         # Target inventory [kg]
    eta_th_field           # Thermal efficiency [-]
    capacity_factor_field  # Capacity factor [-]
-   cost_of_electricity_field  # Electricity cost [$/J]
+   price_of_electricity_field  # Electricity cost [$/J]
 
 Unit Conversions
 ----------------

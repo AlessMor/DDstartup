@@ -24,21 +24,26 @@ Package Structure
    │   ├── __init__.py                # Package initialization
    │   ├── main.py                    # Application entry point
    │   ├── utils/                     # Utilities package
-   │   │   ├── __init__.py            # Auto-export utilities
-   │   │   ├── units_and_constants.py # Pint units, constants
-   │   │   ├── custom_classes.py      # ParameterField class
+   │   │   ├── __init__.py            # Package initialization
+   │   │   ├── units_and_constants.py # Physical constants
+   │   │   ├── parameter_registry.py  # Parameter schema
    │   │   ├── io_functions.py        # I/O operations
-   │   │   └── system_profiler.py     # Hardware profiling
+   │   │   ├── tools.py               # Utility functions
+   │   │   └── system_profiler.py     # Performance optimization
+   │   ├── physics/                   # Physics models
+   │   │   ├── Tseeded_functions.py   # Time-dependent model
+   │   │   ├── lump_functions.py      # Steady-state model
+   │   │   └── reactivity_functions.py # Fusion reactivity
    │   ├── inputs/                    # Configuration files
    │   │   ├── __init__.py            # Path setup
-   │   │   ├── config_test.py         # Test parameters
-   │   │   └── *.yaml                 # Configuration files
+   │   │   └── *.yaml                 # YAML configs
    │   ├── outputs/                   # Analysis results
    │   └── tests/                     # Test suite
    │       ├── conftest.py            # Pytest fixtures
-   │       ├── test_io_functions.py   # I/O tests
-   │       ├── test_main.py           # Integration tests
-   │       └── test_system_profiler.py # Profiler tests
+   │       └── unit/                  # Unit tests
+   │           ├── physics/           # Physics tests
+   │           ├── io/                # I/O tests
+   │           └── utils/             # Utility tests
    └── docs/                          # Sphinx documentation
 
 Module Responsibilities
@@ -63,60 +68,37 @@ Core Modules
          # ... orchestrate workflow
          return 0
 
-**utils/__init__.py** - Package Exports
-
-  * Auto-exports utilities
-  * Simplifies imports
-  * Defines public API
-
-  .. code-block:: python
-  
-     from .units_and_constants import *
-     from .custom_classes import *
-     from .io_functions import *
-     from .system_profiler import *
-     
-     __all__ = ['u', 'ParameterField', 'load_config', ...]
-
 Utility Modules
 ~~~~~~~~~~~~~~~
 
-**utils/units_and_constants.py** - Physical Units
+**utils/units_and_constants.py** - Physical Constants
 
-  * Pint unit registry (``u``)
-  * Physical constants
-  * Unit conversions
+  * Physical constants (c, e, ε₀, etc.)
+  * Mathematical constants (π, e)
+  * Conversion factors
+  * Unit definitions
+
+**utils/parameter_registry.py** - Parameter Schema
+
+  * Central parameter registry
+  * Parameter definitions and metadata
+  * Type validation
+  * Unit handling
 
   .. code-block:: python
   
-     import pint
-     u = pint.UnitRegistry()
+     from ddstartup.utils.parameter_registry import get_registry
      
-     # Usage
-     energy = 17.0 * u.keV
-     volume = 150.0 * u.m**3
-
-**utils/custom_classes.py** - Data Structures
-
-  * ``ParameterField`` class
-  * Parameter metadata
-  * Data validation
-
-  .. code-block:: python
-  
-     class ParameterField:
-         """Stores parameter data with units and metadata"""
-         def __init__(self, unit, name, parametrization_type, ...):
-             self.unit = unit
-             self.name = name
-             # ...
+     registry = get_registry()
+     result_dict = registry.make_result_dict(
+         param_values, outputs
+     )
 
 **utils/io_functions.py** - Input/Output Operations
 
-  * File path resolution
   * YAML configuration loading
-  * Parameter module loading
-  * Data extraction with unit conversion
+  * File path resolution
+  * Data extraction
   * Configuration display
 
   Key functions:
@@ -127,24 +109,22 @@ Utility Modules
   * ``prepare_input_data()`` - Data extraction
   * ``print_configuration()`` - Display utility
 
-**utils/system_profiler.py** - Hardware Profiling
+**utils/tools.py** - Utility Functions
 
-  * CPU/RAM detection
-  * Optimal parameter calculation
-  * User override support
+  * Parameter parsing and indexing
+  * Vector length fixing
+  * General helper functions
 
-  Key functions:
-  
-  * ``get_system_info()`` - Hardware information
-  * ``get_optimal_parameters()`` - Calculate recommendations
-  * ``print_system_profile()`` - Display profile
+**utils/system_profiler.py** - Performance Optimization
+
+  * Hardware detection
+  * Optimal parameter calculation for parallel processing
+  * Used internally for performance tuning
 
 Import System
 -------------
 
-The import system is designed for simplicity and flexibility.
-
-Package Initialization
+The import system is designed for simplicity and explicit imports.Package Initialization
 ~~~~~~~~~~~~~~~~~~~~~~
 
 **utils/__init__.py** Configuration:
@@ -152,87 +132,41 @@ Package Initialization
 .. code-block:: python
 
    """
-   Utils package initialization - exports all utilities
+   Utils package initialization
    """
    
-   # Import and re-export everything
-   from .units_and_constants import *
-   from .custom_classes import *
-   from .io_functions import *
-   from .system_profiler import *
-   
-   # Define explicit exports
-   __all__ = [
-       # Units and constants
-       'u',
-       
-       # Classes
-       'ParameterField',
-       
-       # I/O functions
-       'resolve_file_path',
-       'load_config',
-       'load_parameter_fields',
-       'prepare_input_data',
-       'print_configuration',
-       
-       # System profiler
-       'get_system_info',
-       'calculate_optimal_n_jobs',
-       'calculate_optimal_chunk_size',
-       'calculate_optimal_batch_size',
-       'calculate_optimal_sobol_samples',
-       'calculate_optimal_sobol_order',
-       'get_optimal_parameters',
-       'override_with_config',
-       'print_system_profile',
-   ]
+   # Package marker - explicit imports preferred
 
 Import Patterns
 ~~~~~~~~~~~~~~~
 
-Three import styles are supported:
+Use explicit imports for clarity:
 
-**1. Wildcard Import (Simplest)**
-
-.. code-block:: python
-
-   from ddstartup.utils import *
-   
-   # Now use directly
-   field = ParameterField(unit=u.keV, ...)
-
-Pros: Clean, minimal code
-Cons: Less explicit, potential namespace pollution
-
-**2. Explicit Import (Recommended)**
+**Direct Module Import (Recommended)**
 
 .. code-block:: python
 
-   from ddstartup.utils import u, ParameterField
+   from ddstartup.utils.parameter_registry import get_registry
+   from ddstartup.utils.io_functions import load_config
    
-   # Explicit about dependencies
-   field = ParameterField(unit=u.keV, ...)
+   # Clear and explicit
+   registry = get_registry()
+   config = load_config('config.yaml')
 
-Pros: Clear dependencies, IDE-friendly
-Cons: Slightly more verbose
-
-**3. Module Import (Most Explicit)**
+**Function-level Import**
 
 .. code-block:: python
 
-   from ddstartup import utils
+   from ddstartup.physics.lump_functions import compute_lump
+   from ddstartup.physics.Tseeded_functions import compute_Tseeded
    
-   # Fully qualified names
-   field = utils.ParameterField(unit=utils.u.keV, ...)
-
-Pros: No namespace pollution, very explicit
-Cons: Most verbose
+   # Direct function access
+   result = compute_lump(params)
 
 Usage Examples
 ~~~~~~~~~~~~~~
 
-**In configuration files (inputs/config.py):**
+**In analysis scripts:**
 
 .. code-block:: python
 
@@ -262,18 +196,9 @@ Usage Examples
 .. code-block:: python
 
    # Explicit imports for clarity
-   from utils.io_functions import (
-       resolve_file_path,
-       load_config,
-       load_parameter_fields,
-       prepare_input_data,
-       print_configuration
-   )
-   from utils.system_profiler import (
-       get_optimal_parameters,
-       override_with_config,
-       print_system_profile
-   )
+   from ddstartup.utils.io_functions import load_config
+   from ddstartup.utils.parameter_registry import get_registry
+   from ddstartup.physics.lump_functions import compute_lump
 
 Best Practices
 --------------
@@ -283,40 +208,35 @@ Import Guidelines
 
 ✅ **DO:**
 
-* Use explicit imports in library code:
+* Use explicit imports:
 
   .. code-block:: python
   
-     from ddstartup.utils import u, ParameterField
-
-* Use wildcard imports in convenience scripts/config files:
-
-  .. code-block:: python
-  
-     from ddstartup.utils import *
-
-* Keep ``__all__`` updated when adding exports:
-
-  .. code-block:: python
-  
-     __all__ = ['u', 'ParameterField', 'new_function']
+     from ddstartup.utils.parameter_registry import get_registry
+     from ddstartup.utils.io_functions import load_config
 
 * Use type hints for all functions:
 
   .. code-block:: python
   
+     from pathlib import Path
+     from typing import Dict, Any
+     
      def load_config(yaml_path: Path) -> Dict[str, Any]:
+         """Load YAML configuration file"""
+         ...
+
+* Keep imports organized (stdlib, third-party, local)
 
 ⚠️ **AVOID:**
 
-* Mixing import styles unnecessarily:
+* Wildcard imports in library code:
 
   .. code-block:: python
   
-     from ddstartup.utils import u
-     from ddstartup.utils.units_and_constants import u  # Redundant!
+     from ddstartup.utils import *  # Avoid in library code
 
-* Importing from private modules directly:
+* Importing from private modules:
 
   .. code-block:: python
   
@@ -414,24 +334,15 @@ To add a new utility module:
 .. code-block:: python
 
    # utils/__init__.py
-   from .units_and_constants import *
-   from .custom_classes import *
-   from .io_functions import *
-   from .system_profiler import *
-   from .new_module import *  # Add new import
+   # Package marker - explicit imports preferred
    
-   __all__ = [
-       'u',
-       'ParameterField',
-       # ... existing exports
-       'new_function',  # Add new export
-   ]
+   # When adding new modules, import them explicitly where needed
 
 **Step 3: Write Tests**
 
 .. code-block:: python
 
-   # tests/test_new_module.py
+   # tests/unit/utils/test_new_module.py
    from ddstartup.utils.new_module import new_function
    
    def test_new_function():
@@ -546,9 +457,10 @@ Test Organization
 
    tests/
    ├── conftest.py                  # Shared fixtures
-   ├── test_io_functions.py         # Unit tests
-   ├── test_main.py                 # Integration tests
-   └── test_system_profiler.py      # Unit tests
+   └── unit/                        # Unit tests
+       ├── physics/                 # Physics tests
+       ├── io/                      # I/O tests
+       └── utils/                   # Utility tests
 
 Fixture Strategy
 ~~~~~~~~~~~~~~~~

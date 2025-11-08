@@ -1,0 +1,98 @@
+# Parameter configuration for testing automatic P_aux calculation
+# P_aux and P_aux_DT_eq are set to 'nan' to trigger calculation from power balance
+
+parameters:
+  V_plasma_field:
+    type: vector
+    values: [100, 150, 500, 1000, 1500]
+    unit: m^3
+    description: Plasma volume test values
+  
+  T_i_field:
+    type: vector
+    values: [10, 15, 20]
+    unit: keV
+    description: Ion temperature test values
+  
+  n_tot_field:
+    type: vector
+    values: [8.0e19, 1.0e20, 2e20]
+    unit: 1/m^3
+    description: Total particle density test values
+  
+  tau_p_T_field:
+    type: vector
+    values: [0.1, 0.5, 1.0, 2.0]
+    unit: s
+    description: Tritium particle confinement time test values
+  
+  tau_p_He3_field:
+    type: scalar
+    value: 1.0
+    unit: s
+    description: Helium-3 particle confinement time (constant)
+  
+  P_aux_field:
+    type: scalar
+    value: .nan
+    unit: MW
+    description: Auxiliary heating power (will be calculated from power balance)
+  
+  P_aux_DT_eq_field:
+    type: scalar
+    value: .nan
+    unit: MW
+    description: Auxiliary power for DT equilibrium (will be calculated from power balance)
+  
+  TBR_DT_field:
+    type: vector
+    values: [1.05, 1.07, 1.09, 1.11, 1.13, 1.15]
+    unit: dimensionless
+    description: Tritium breeding ratio for DT reactions test values
+  
+  TBR_DDn_field:
+    type: vector
+    values: [0.5, 0.9]
+    unit: dimensionless
+    description: Tritium breeding ratio for DD neutron branch test values
+  
+  tau_ifc_field:
+    type: vector
+    values: [14400, 21600, 43200] # 4h, 6h, 12h
+    unit: s
+    description: In-fuel cycle time test values (1, 24, 48 hours in seconds)
+  
+  tau_ofc_field:
+    type: vector
+    values: [21600, 86400] # 6h, 24h
+    unit: s
+    description: Out-of-fuel cycle time test values (1, 12, 24 hours in seconds)
+  
+  eta_th_field:
+    type: vector
+    values: [0., 0.35, 0.4]
+    unit: dimensionless
+    description: Thermal conversion efficiency (constant)
+  
+  capacity_factor_field:
+    type: vector
+    values: [0.15, 0.35, 0.8, 0.9]
+    unit: dimensionless
+    description: Plant capacity factor (constant)
+  
+  price_of_electricity_field:
+    type: vector
+    values: [0.1, 0.25, 0.4]
+    unit: 1/kWh
+    description: Price of electricity (0.15 $/kWh = 4.167e-8 $/J)
+  
+  I_target_field:
+    type: vector
+    values: [0.1, 0.5, 1.0, 2.5, 5, 10]
+    unit: kg
+    description: Target tritium inventory test values
+  
+  max_simulation_time_field:
+    value: 315360000
+    unit: s
+    description: Max simulation time (10 years in seconds)

@@ -379,4 +379,3 @@ See Also
 
 * :doc:`command_line_interface` - CLI usage
 * :doc:`parameter_definitions` - Parameter file format
-* :doc:`../api_reference/system_profiler` - System profiler documentation

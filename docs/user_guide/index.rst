@@ -9,6 +9,8 @@ This section provides comprehensive usage documentation for the DD Startup Analy
    command_line_interface
    configuration_files
    parameter_definitions
+   parameter_filtering
+   parametric_analysis_workflow
    analysis_methods
    output_files
    postprocessing_workflow
