@@ -1,0 +1,482 @@
+"""
+Elementary Effects (Morris) Method for Sensitivity Analysis.
+
+This module implements the Elementary Effects method (also known as Morris method)
+for global sensitivity analysis. It uses One-At-a-Time (OAT) perturbations along
+random trajectories through parameter space.
+
+The method provides:
+- μ (mu): Mean of elementary effects (indicates overall influence with direction)
+- μ* (mu_star): Mean of absolute elementary effects (main sensitivity metric)
+- σ (sigma): Standard deviation (indicates parameter interactions)
+
+Reference:
+Morris, M. D. (1991). Factorial sampling plans for preliminary computational experiments.
+Technometrics, 33(2), 161-174.
+"""
+
+import numpy as np
+import time
+import h5py
+from typing import Dict, Any, Tuple, List
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
+
+
+# Module-level wrapper functions for pickling
+def _evaluate_lump_point(params_dict: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Evaluate lump model at a single point."""
+    from ddstartup.methods.parametric_computation import _compute_lump
+    
+    # Use the exact parameter order expected by _compute_lump
+    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq',
+                   'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'capacity_factor', 'price_of_electricity']
+    
+    param_vector = [params_dict[name] for name in param_names]
+    temp_arrays = [np.array([val]) for val in param_vector]
+    param_shapes = tuple([1] * len(param_names))
+    
+    result = _compute_lump(
+        linear_index=0,
+        input_arrays_flat=temp_arrays,
+        param_shapes_array=param_shapes,
+        reactivity_lookup=None
+    )
+    return result
+
+
+def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
+    """Evaluate T-seeded model at a single point."""
+    from ddstartup.methods.parametric_computation import _compute_tseeded
+    
+    # Use the exact parameter order expected by _compute_tseeded
+    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq',
+                   'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'capacity_factor', 'price_of_electricity']
+    
+    param_vector = [params_dict[name] for name in param_names]
+    temp_arrays = [np.array([val]) for val in param_vector]
+    param_shapes = tuple([1] * len(param_names))
+    
+    result = _compute_tseeded(
+        linear_index=0,
+        input_arrays_flat=temp_arrays,
+        param_shapes_array=param_shapes,
+        reactivity_lookup=None
+    )
+    return result
+
+
+def generate_trajectory(
+    param_ranges: Dict[str, Tuple[float, float]],
+    p: int = 4,
+    seed: int = None
+) -> Tuple[List[np.ndarray], List[str]]:
+    """
+    Generate a single Elementary Effects trajectory through parameter space.
+    
+    A trajectory consists of (k+1) points, where k is the number of parameters.
+    Starting from a random base point, each parameter is perturbed one at a time.
+    
+    Args:
+        param_ranges: Dictionary with parameter names as keys and (min, max) tuples
+        p: Grid levels for discretization (default: 4, giving Δ = 1/(p-1))
+        seed: Random seed for reproducibility
+        
+    Returns:
+        Tuple of (points_list, param_order) where:
+        - points_list: List of (k+1) parameter vectors
+        - param_order: Order in which parameters were perturbed
+    """
+    if seed is not None:
+        np.random.seed(seed)
+    
+    param_names = list(param_ranges.keys())
+    num_params = len(param_names)
+    
+    # Generate random base point
+    base_point = np.zeros(num_params)
+    for i, name in enumerate(param_names):
+        min_val, max_val = param_ranges[name]
+        base_point[i] = min_val + np.random.random() * (max_val - min_val)
+    
+    # Random permutation of parameters
+    param_order = np.random.permutation(num_params).tolist()
+    
+    # Initialize trajectory with base point
+    points = [base_point.copy()]
+    
+    # Generate trajectory by perturbing one parameter at a time
+    current_point = base_point.copy()
+    
+    for param_idx in param_order:
+        param_name = param_names[param_idx]
+        min_val, max_val = param_ranges[param_name]
+        param_range = max_val - min_val
+        
+        # Calculate perturbation size
+        delta = p / (2 * (p - 1)) * param_range
+        
+        # Apply perturbation, ensuring bounds
+        if current_point[param_idx] + delta <= max_val:
+            current_point[param_idx] = current_point[param_idx] + delta
+        else:
+            current_point[param_idx] = current_point[param_idx] - delta
+        
+        points.append(current_point.copy())
+    
+    return points, [param_names[i] for i in param_order]
+
+
+def compute_trajectory_worker(
+    args: Tuple[int, List[np.ndarray], List[str], List[str], str]
+) -> Dict[str, Any]:
+    """
+    Worker function to compute a single trajectory.
+    
+    Args:
+        args: Tuple containing:
+            - traj_id: Trajectory ID
+            - points: List of parameter vectors in trajectory
+            - param_order: Order of parameter perturbations
+            - param_names: List of all parameter names
+            - analysis_type: 'lump' or 'T_seeded'
+            
+    Returns:
+        Dictionary with elementary effects for each parameter
+    """
+    traj_id, points, param_order, param_names, analysis_type = args
+    
+    # Select appropriate evaluation function
+    if analysis_type == 'lump':
+        evaluate_func = _evaluate_lump_point
+    else:  # T_seeded
+        evaluate_func = _evaluate_tseeded_point
+    
+    # Dictionary to store elementary effects for this trajectory
+    ee_dict = {name: [] for name in param_names}
+    
+    # Convert numpy array to parameter dictionary
+    def point_to_dict(point_array):
+        return {name: float(val) for name, val in zip(param_names, point_array)}
+    
+    # Evaluate base point
+    try:
+        base_params_dict = point_to_dict(points[0])
+        base_result = evaluate_func(base_params_dict, {})
+        # Check if computation was successful
+        if not base_result.get('sol_success', False):
+            return {'success': False, 'traj_id': traj_id, 'error': 'Base point failed'}
+        
+        base_output = base_result
+    except Exception as e:
+        return {'success': False, 'traj_id': traj_id, 'error': str(e)}
+    
+    # Evaluate each perturbation
+    current_output = base_output
+    current_point = points[0]
+    
+    for i, param_name in enumerate(param_order):
+        perturbed_point = points[i + 1]
+        param_idx = param_names.index(param_name)
+        
+        try:
+            perturbed_params_dict = point_to_dict(perturbed_point)
+            perturbed_result = evaluate_func(perturbed_params_dict, {})
+            # Check if computation was successful
+            if not perturbed_result.get('sol_success', False):
+                continue
+            
+            perturbed_output = perturbed_result
+        except Exception as e:
+            continue
+        
+        # Calculate elementary effect for each output metric
+        parameter_change = perturbed_point[param_idx] - current_point[param_idx]
+        
+        if parameter_change != 0:
+            # Store elementary effects for all output variables
+            ee_dict[param_name].append({
+                'point': current_point.copy(),
+                'outputs': current_output,
+                'perturbed_outputs': perturbed_output,
+                'delta': parameter_change
+            })
+        
+        # Move to next point
+        current_point = perturbed_point
+        current_output = perturbed_output
+    
+    return {'success': True, 'traj_id': traj_id, 'ee_dict': ee_dict}
+
+
+def run_elementary_effects_analysis(
+    input_data: Dict[str, np.ndarray],
+    output_file: str,
+    config: Dict[str, Any],
+    verbose: bool = True
+) -> Dict[str, Any]:
+    """
+    Run Elementary Effects (Morris) sensitivity analysis.
+    
+    Args:
+        input_data: Dictionary of parameter arrays (min/max ranges)
+        output_file: Path to output HDF5 file
+        config: Configuration dictionary with:
+            - num_trajectories: Number of trajectories (default: 10)
+            - p_levels: Grid levels (default: 4)
+            - n_jobs: Number of parallel workers
+            - analysis_type: 'T_seeded' or 'lump'
+            - output_metrics: List of metrics to analyze (e.g., ['t_startup', 'unrealized_gains'])
+        verbose: Whether to print progress
+        
+    Returns:
+        Dictionary with sensitivity metrics and statistics
+    """
+    # Extract configuration
+    analysis_type = config['analysis_type']
+    num_trajectories = config.get('num_trajectories', 10)
+    p_levels = config.get('p_levels', 4)
+    n_jobs = config.get('n_jobs', 1)
+    output_metrics = config.get('output_metrics', ['t_startup', 'unrealized_gains'])
+    
+    # Validate analysis type
+    if analysis_type not in ['lump', 'T_seeded']:
+        raise ValueError(f"Unknown analysis type: {analysis_type}")
+    
+    # Prepare parameter names and ranges
+    param_names = list(input_data.keys())
+    param_ranges = {}
+    for name, values in input_data.items():
+        if len(values) > 0:
+            param_ranges[name] = (float(np.min(values)), float(np.max(values)))
+        else:
+            raise ValueError(f"Parameter {name} has no values")
+    
+    num_params = len(param_names)
+    total_evaluations = num_trajectories * (num_params + 1)
+    
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"ELEMENTARY EFFECTS SENSITIVITY ANALYSIS")
+        print(f"{'='*60}")
+        print(f"Analysis type: {analysis_type}")
+        print(f"Parameters: {num_params}")
+        print(f"Trajectories: {num_trajectories}")
+        print(f"Grid levels (p): {p_levels}")
+        print(f"Total evaluations: {total_evaluations}")
+        print(f"Parallel workers: {n_jobs}")
+        print(f"Output metrics: {output_metrics}")
+        print(f"{'='*60}\n")
+    
+    start_time = time.time()
+    
+    # Generate all trajectories
+    if verbose:
+        print("Generating trajectories...")
+    
+    trajectories = []
+    for traj_id in range(num_trajectories):
+        points, param_order = generate_trajectory(param_ranges, p=p_levels, seed=traj_id)
+        trajectories.append((traj_id, points, param_order, param_names, analysis_type))
+    
+    # Compute trajectories in parallel
+    if verbose:
+        print(f"Computing {num_trajectories} trajectories using {n_jobs} workers...")
+    
+    results = []
+    successful_trajectories = 0
+    
+    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+        futures = {executor.submit(compute_trajectory_worker, traj): traj[0] 
+                   for traj in trajectories}
+        
+        with tqdm(total=num_trajectories, desc="Trajectories", disable=not verbose) as pbar:
+            for future in as_completed(futures):
+                result = future.result()
+                results.append(result)
+                if result.get('success', False):
+                    successful_trajectories += 1
+                pbar.update(1)
+    
+    if verbose:
+        print(f"\nSuccessful trajectories: {successful_trajectories}/{num_trajectories}")
+    
+    # Calculate sensitivity metrics for each output metric
+    sensitivity_results = {}
+    
+    for metric in output_metrics:
+        # Collect all elementary effects for this metric
+        all_ee = {name: [] for name in param_names}
+        
+        for result in results:
+            if not result.get('success', False):
+                continue
+            
+            ee_dict = result['ee_dict']
+            for param_name, ee_list in ee_dict.items():
+                for ee_data in ee_list:
+                    # Extract metric value from outputs
+                    current_val = ee_data['outputs'].get(metric, np.nan)
+                    perturbed_val = ee_data['perturbed_outputs'].get(metric, np.nan)
+                    delta = ee_data['delta']
+                    
+                    if np.isfinite(current_val) and np.isfinite(perturbed_val) and delta != 0:
+                        ee = (perturbed_val - current_val) / delta
+                        if np.isfinite(ee):
+                            all_ee[param_name].append(ee)
+        
+        # Normalize by output range
+        all_values = []
+        for param_ee in all_ee.values():
+            all_values.extend(param_ee)
+        
+        if len(all_values) > 0:
+            output_range = np.max(all_values) - np.min(all_values)
+            if output_range == 0:
+                output_range = 1.0
+        else:
+            output_range = 1.0
+        
+        # Calculate sensitivity metrics
+        mu = {}
+        mu_star = {}
+        sigma = {}
+        sigma_star = {}
+        
+        for param_name in param_names:
+            effects = np.array(all_ee[param_name])
+            
+            if len(effects) > 0:
+                # Normalize by output range
+                normalized_effects = effects / output_range
+                
+                mu[param_name] = float(np.mean(normalized_effects))
+                mu_star[param_name] = float(np.mean(np.abs(normalized_effects)))
+                sigma[param_name] = float(np.std(normalized_effects))
+                sigma_star[param_name] = float(np.std(np.abs(normalized_effects)))
+            else:
+                mu[param_name] = np.nan
+                mu_star[param_name] = np.nan
+                sigma[param_name] = np.nan
+                sigma_star[param_name] = np.nan
+        
+        sensitivity_results[metric] = {
+            'mu': mu,
+            'mu_star': mu_star,
+            'sigma': sigma,
+            'sigma_star': sigma_star,
+            'raw_effects': all_ee,
+            'output_range': output_range
+        }
+    
+    computation_time = time.time() - start_time
+    
+    # Save results to HDF5
+    if verbose:
+        print(f"\nSaving results to {output_file}...")
+    
+    with h5py.File(output_file, 'w') as f:
+        # Save metadata
+        f.attrs['analysis_type'] = analysis_type
+        f.attrs['method'] = 'elementary_effects'
+        f.attrs['num_trajectories'] = num_trajectories
+        f.attrs['num_parameters'] = num_params
+        f.attrs['p_levels'] = p_levels
+        f.attrs['total_evaluations'] = total_evaluations
+        f.attrs['successful_trajectories'] = successful_trajectories
+        f.attrs['computation_time'] = computation_time
+        
+        # Save parameter names and ranges
+        f.create_dataset('parameter_names', data=np.array(param_names, dtype='S'))
+        
+        ranges_group = f.create_group('parameter_ranges')
+        for name, (min_val, max_val) in param_ranges.items():
+            ranges_group.create_dataset(name, data=[min_val, max_val])
+        
+        # Save sensitivity results for each metric
+        for metric, sens_data in sensitivity_results.items():
+            metric_group = f.create_group(metric)
+            
+            # Save sensitivity indices
+            for metric_name in ['mu', 'mu_star', 'sigma', 'sigma_star']:
+                indices = sens_data[metric_name]
+                param_names_array = np.array(list(indices.keys()), dtype='S')
+                values_array = np.array(list(indices.values()))
+                
+                metric_group.create_dataset(f'{metric_name}_params', data=param_names_array)
+                metric_group.create_dataset(f'{metric_name}_values', data=values_array)
+            
+            metric_group.attrs['output_range'] = sens_data['output_range']
+    
+    # Prepare statistics dictionary
+    stats = {
+        'analysis_type': analysis_type,
+        'method': 'elementary_effects',
+        'num_trajectories': num_trajectories,
+        'num_parameters': num_params,
+        'total_evaluations': total_evaluations,
+        'successful_trajectories': successful_trajectories,
+        'computation_time': computation_time,
+        'sensitivity_results': sensitivity_results,
+        'output_file': output_file
+    }
+    
+    # Generate plots automatically
+    try:
+        from ddstartup.postprocessing.plot_elementary_effects import create_all_plots
+        output_dir = Path(output_file).parent
+        if verbose:
+            print(f"\nGenerating plots...")
+        create_all_plots(stats, output_dir, verbose=verbose)
+    except Exception as e:
+        print(f"⚠️  Warning: Could not generate plots: {e}")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+    
+    return stats
+
+
+def print_elementary_effects_summary(stats: Dict[str, Any], verbose: bool = True):
+    """
+    Print summary of Elementary Effects analysis results.
+    
+    Args:
+        stats: Statistics dictionary from run_elementary_effects_analysis
+        verbose: Whether to print detailed information
+    """
+    if not verbose:
+        return
+    
+    print(f"\n{'='*60}")
+    print("ELEMENTARY EFFECTS ANALYSIS SUMMARY")
+    print(f"{'='*60}")
+    print(f"Analysis type: {stats['analysis_type']}")
+    print(f"Trajectories: {stats['successful_trajectories']}/{stats['num_trajectories']}")
+    print(f"Parameters analyzed: {stats['num_parameters']}")
+    print(f"Total evaluations: {stats['total_evaluations']}")
+    print(f"Computation time: {stats['computation_time']:.2f} seconds")
+    print(f"{'='*60}\n")
+    
+    # Print sensitivity rankings for each output metric
+    sensitivity_results = stats.get('sensitivity_results', {})
+    
+    for metric, sens_data in sensitivity_results.items():
+        print(f"\nSensitivity Analysis for: {metric}")
+        print("-" * 60)
+        
+        # Sort parameters by mu_star (main sensitivity metric)
+        mu_star = sens_data['mu_star']
+        sorted_params = sorted(mu_star.items(), key=lambda x: abs(x[1]), reverse=True)
+        
+        print("\nParameter Ranking by μ* (mean absolute effect):")
+        print(f"{'Rank':<6} {'Parameter':<20} {'μ*':<12} {'σ*':<12}")
+        print("-" * 60)
+        
+        for rank, (param_name, mu_star_val) in enumerate(sorted_params, 1):
+            if np.isfinite(mu_star_val):
+                sigma_star_val = sens_data['sigma_star'][param_name]
+                print(f"{rank:<6} {param_name:<20} {mu_star_val:>11.6f} {sigma_star_val:>11.6f}")
+        
+        print()

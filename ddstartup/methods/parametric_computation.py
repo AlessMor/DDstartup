@@ -23,8 +23,8 @@ from tqdm import tqdm
 import time
 
 # Import centralized parameter management
-from .parameter_registry import get_registry
-from .filters import apply_filter_to_combinations
+from ddstartup.utils.parameter_registry import get_registry
+from ddstartup.utils.filters import apply_filter_to_combinations
 
 
 def _compute_lump(linear_index, input_arrays_flat, param_shapes_array, reactivity_lookup=None):

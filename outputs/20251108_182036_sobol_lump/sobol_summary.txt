@@ -1,0 +1,24 @@
+============================================================
+SOBOL SENSITIVITY ANALYSIS SUMMARY
+============================================================
+Analysis type: lump
+Samples: 7500/14000
+Parameters analyzed: 13
+Computation time: 7.86 seconds
+============================================================
+
+
+Sensitivity Analysis for: t_startup
+------------------------------------------------------------
+Valid samples: 7500
+
+Rank   Parameter            S1 (First)   ST (Total)  
+------------------------------------------------------------
+
+
+Sensitivity Analysis for: unrealized_profits
+------------------------------------------------------------
+Valid samples: 7500
+
+Rank   Parameter            S1 (First)   ST (Total)  
+------------------------------------------------------------

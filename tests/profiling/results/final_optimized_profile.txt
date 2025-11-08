@@ -1,0 +1,352 @@
+================================================================================
+DD STARTUP PROFILING SUITE
+================================================================================
+Project root: /home/alessmor/Scrivania/dd_startup
+Profiling output: /home/alessmor/Scrivania/dd_startup/tests/profiling/results
+
+================================================================================
+PROFILING T-SEEDED ANALYSIS (10,000 combinations)
+================================================================================
+================================================================================
+DD STARTUP PROFILING
+================================================================================
+
+Parameter file: tests/fixtures/params_test.yaml
+Config file: tests/fixtures/parametric_tseeded.yaml
+
+============================================================
+SYSTEM PROFILE
+============================================================
+Hardware:
+  CPU Cores: 12
+  Total RAM: 8.2 GB
+  Available RAM: 4.2 GB (51.4% free)
+
+Recommended Parallel Processing Parameters:
+  n_jobs: 11 (parallel workers)
+  chunk_size: 5500 (computations per chunk)
+  batch_size: 500 (results buffer size)
+============================================================
+
+
+============================================================
+DD STARTUP ANALYSIS CONFIGURATION
+============================================================
+Parameter file: tests/fixtures/params_test.yaml
+Config file: tests/fixtures/parametric_tseeded.yaml
+Analysis type: T_seeded
+Method: parametric
+Max simulation time: 10.00 years
+Vector length: 200
+n_jobs: 11
+chunk_size: 5500
+batch_size: 500
+Output directory: /tmp/ddstartup_profiling_tseeded
+
+Input parameter fields:
+  V_plasma            : shape=(10,), range=[1.400e+02, 1.600e+02]
+  T_i                 : shape=(5,), range=[1.400e+01, 2.000e+01]
+  n_tot               : shape=(5,), range=[1.500e+20, 2.000e+20]
+  tau_p_T             : shape=(4,), range=[5.000e-01, 1.000e+00]
+  P_aux               : shape=(1,), range=[6.500e+07, 6.500e+07]
+  P_aux_DT_eq         : shape=(1,), range=[6.500e+07, 6.500e+07]
+  TBR_DT              : shape=(1,), range=[1.100e+00, 1.100e+00]
+  TBR_DDn             : shape=(1,), range=[7.000e-01, 7.000e-01]
+  tau_ifc             : shape=(1,), range=[1.080e+04, 1.080e+04]
+  tau_ofc             : shape=(1,), range=[1.080e+04, 1.080e+04]
+  eta_th              : shape=(1,), range=[3.650e-01, 3.650e-01]
+  capacity_factor     : shape=(1,), range=[7.500e-01, 7.500e-01]
+  price_of_electricity: shape=(1,), range=[6.750e-08, 6.750e-08]
+
+Total parameter combinations: 1,000
+============================================================
+
+Output directory: /tmp/ddstartup_profiling_tseeded/20251108_123404_parametric_T_seeded
+Output file: /tmp/ddstartup_profiling_tseeded/20251108_123404_parametric_T_seeded/ddstartup_20251108_123404_parametric_T_seeded.h5
+
+============================================================
+STARTING PARAMETRIC ANALYSIS
+============================================================
+Total combinations: 1,000
+Parallel workers: 11
+Chunk size: 5500
+Batch size: 500
+============================================================
+
+⚠️  hdf5plugin not found - using gzip compression
+   Install with: pip install hdf5plugin
+   LZ4 is 10x faster than gzip!
+
+🔧 Building reactivity lookup table for 5 unique T_i values...
+✅ Reactivity lookup table created (5 temperatures)
+Priming Numba compilation...
+Starting BATCH PIPELINE computation with 11 workers...
+Processing 1,000 combinations in batches of 5,000
+Compression: gzip-1 (fast fallback) with VECTORIZED bulk writes
+Architecture: COMPUTE phase (all 11 cores) → WRITE phase (<1s)
+Expected: First ~22 tasks slow (Numba compilation), then fast
+Monitor the speed - smooth progress with minimal write overhead!
+🔄 COMPUTE:   0%|          | 0/1000 [00:00<?, ?comb/s]🔄 COMPUTE:   5%|▌         | 50/1000 [00:00<00:15, 60.67comb/s]🔄 COMPUTE:  10%|█         | 100/1000 [00:01<00:12, 70.85comb/s]🔄 COMPUTE:  15%|█▌        | 150/1000 [00:01<00:10, 81.33comb/s]🔄 COMPUTE:  20%|██        | 202/1000 [00:02<00:08, 88.76comb/s]🔄 COMPUTE:  25%|██▌       | 252/1000 [00:03<00:08, 89.69comb/s]🔄 COMPUTE:  30%|███       | 302/1000 [00:03<00:08, 83.46comb/s]🔄 COMPUTE:  35%|███▌      | 352/1000 [00:04<00:07, 83.20comb/s]🔄 COMPUTE:  40%|████      | 402/1000 [00:04<00:06, 86.62comb/s]🔄 COMPUTE:  45%|████▌     | 452/1000 [00:05<00:06, 81.47comb/s]🔄 COMPUTE:  50%|█████     | 502/1000 [00:06<00:06, 82.34comb/s]🔄 COMPUTE:  55%|█████▌    | 552/1000 [00:06<00:05, 82.67comb/s]🔄 COMPUTE:  60%|██████    | 602/1000 [00:07<00:04, 82.06comb/s]🔄 COMPUTE:  65%|██████▌   | 652/1000 [00:07<00:04, 82.11comb/s]🔄 COMPUTE:  70%|███████   | 702/1000 [00:08<00:03, 77.18comb/s]🔄 COMPUTE:  75%|███████▌  | 752/1000 [00:09<00:03, 78.36comb/s]🔄 COMPUTE:  80%|████████  | 802/1000 [00:09<00:02, 79.82comb/s]🔄 COMPUTE:  85%|████████▌ | 852/1000 [00:10<00:01, 76.48comb/s]🔄 COMPUTE:  90%|█████████ | 902/1000 [00:11<00:01, 79.28comb/s]🔄 COMPUTE:  96%|█████████▌| 955/1000 [00:11<00:00, 85.23comb/s]💾 WRITE: :  98%|█████████▊| 978/1000 [00:11<00:00, 85.23comb/s]💾 WRITE: :  98%|█████████▊| 978/1000 [00:11<00:00, 85.23comb/s]🔄 COMPUTE (write: 0.70s, ✓ 98.5%): :  98%|█████████▊| 978/1000 [00:12<00:00, 85.23comb/s]💾 WRITE: : 100%|██████████| 1000/1000 [00:12<00:00, 85.23comb/s]                         💾 WRITE: : 100%|██████████| 1000/1000 [00:12<00:00, 85.23comb/s]🔄 COMPUTE (write: 0.64s, ✓ 98.5%): : 100%|██████████| 1000/1000 [00:13<00:00, 85.23comb/s]🔄 COMPUTE (write: 0.64s, ✓ 98.5%): : 100%|██████████| 1000/1000 [00:13<00:00, 75.43comb/s]
+
+============================================================
+PARAMETRIC ANALYSIS COMPLETE
+============================================================
+✅ Processed: 1,000 combinations
+✅ Successful: 985 (98.5%)
+⏱️  Computation time: 17.01 seconds
+📁 Results saved to: /tmp/ddstartup_profiling_tseeded/20251108_123404_parametric_T_seeded/ddstartup_20251108_123404_parametric_T_seeded.h5
+💾 File size: 19.1 MB (compressed with LZ4/gzip-1)
+============================================================
+
+
+✅ Analysis completed successfully!
+📁 Results saved to: /tmp/ddstartup_profiling_tseeded/20251108_123404_parametric_T_seeded/ddstartup_20251108_123404_parametric_T_seeded.h5
+
+================================================================================
+PROFILING RESULTS (Total time: 17.50s)
+================================================================================
+
+--------------------------------------------------------------------------------
+Top 20 functions by cumulative time:
+--------------------------------------------------------------------------------
+         5696725 function calls (5438802 primitive calls) in 17.489 seconds
+
+   Ordered by: cumulative time
+   List reduced from 5449 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.001    0.001   17.496   17.496 /home/alessmor/Scrivania/dd_startup/ddstartup/main.py:30(main)
+        1    0.038    0.038   17.014   17.014 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:337(run_parametric_analysis)
+      946    0.068    0.000   11.726    0.012 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/_base.py:263(wait)
+      947    0.005    0.000   11.539    0.012 /home/alessmor/anaconda3/lib/python3.11/threading.py:611(wait)
+     4791   11.532    0.002   11.532    0.002 {method 'acquire' of '_thread.lock' objects}
+      947    0.010    0.000   11.532    0.012 /home/alessmor/anaconda3/lib/python3.11/threading.py:295(wait)
+        1    0.000    0.000    3.736    3.736 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:169(_compute_tseeded)
+        6    0.000    0.000    3.651    0.609 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/dispatcher.py:388(_compile_for_args)
+     96/6    0.002    0.000    3.603    0.601 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/dispatcher.py:907(compile)
+ 1052/278    0.004    0.000    3.353    0.012 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler_lock.py:32(_acquire_compile_lock)
+        4    0.000    0.000    3.332    0.833 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/typed/typeddict.py:176(__getitem__)
+     28/1    0.000    0.000    3.331    3.331 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/dispatcher.py:124(compile)
+     28/1    0.000    0.000    3.331    3.331 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/dispatcher.py:131(_compile_cached)
+     28/1    0.001    0.000    3.331    3.331 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/dispatcher.py:146(_compile_core)
+     28/1    0.000    0.000    3.331    3.331 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler.py:725(compile_extra)
+     29/1    0.000    0.000    3.330    3.330 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler.py:439(compile_extra)
+     29/1    0.000    0.000    3.330    3.330 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler.py:508(_compile_bytecode)
+     29/1    0.001    0.000    3.330    3.330 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler.py:462(_compile_core)
+     30/1    0.004    0.000    3.330    3.330 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler_machinery.py:342(run)
+   686/26    0.027    0.000    3.329    0.128 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/compiler_machinery.py:268(_runPass)
+
+
+
+--------------------------------------------------------------------------------
+Top 20 functions by internal time:
+--------------------------------------------------------------------------------
+         5696725 function calls (5438802 primitive calls) in 17.489 seconds
+
+   Ordered by: internal time
+   List reduced from 5449 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     4791   11.532    0.002   11.532    0.002 {method 'acquire' of '_thread.lock' objects}
+       68    1.165    0.017    1.214    0.018 /home/alessmor/anaconda3/lib/python3.11/site-packages/h5py/_hl/dataset.py:848(__setitem__)
+9212/9207    0.388    0.000    0.635    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/llvmlite/binding/ffi.py:190(__call__)
+121833/19837    0.129    0.000    0.177    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/ir.py:317(_rec_list_vars)
+   746479    0.093    0.000    0.135    0.000 {built-in method builtins.isinstance}
+      625    0.083    0.000    0.085    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/llvmlite/ir/values.py:781(__init__)
+        2    0.075    0.038    1.326    0.663 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:784(_write_results_to_hdf5)
+69529/35056    0.069    0.000    0.175    0.000 /home/alessmor/anaconda3/lib/python3.11/pprint.py:551(_safe_repr)
+    91062    0.068    0.000    0.156    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/event.py:243(notify)
+      946    0.068    0.000   11.726    0.012 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/_base.py:263(wait)
+195376/195137    0.057    0.000    0.089    0.000 {built-in method builtins.getattr}
+     8503    0.052    0.000    0.143    0.000 {built-in method builtins.sorted}
+      352    0.049    0.000    0.049    0.000 {built-in method marshal.loads}
+   119915    0.041    0.000    0.054    0.000 {method 'get' of 'dict' objects}
+     1217    0.039    0.000    0.040    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/base.py:138(append)
+    22150    0.038    0.000    0.197    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/numba/core/event.py:209(broadcast)
+        1    0.038    0.038   17.014   17.014 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:337(run_parametric_analysis)
+     3727    0.035    0.000    0.036    0.000 /home/alessmor/anaconda3/lib/python3.11/enum.py:686(__call__)
+       68    0.033    0.000    0.039    0.001 {method 'make_selection' of 'h5py._selector.Selector' objects}
+18604/760    0.030    0.000    0.340    0.000 /home/alessmor/anaconda3/lib/python3.11/pprint.py:168(_format)
+
+
+
+================================================================================
+PROFILING LUMP ANALYSIS (10,000 combinations)
+================================================================================
+================================================================================
+DD STARTUP PROFILING
+================================================================================
+
+Parameter file: tests/fixtures/params_test.yaml
+Config file: tests/fixtures/parametric_lump.yaml
+
+============================================================
+SYSTEM PROFILE
+============================================================
+Hardware:
+  CPU Cores: 12
+  Total RAM: 8.2 GB
+  Available RAM: 4.3 GB (52.3% free)
+
+Recommended Parallel Processing Parameters:
+  n_jobs: 11 (parallel workers)
+  chunk_size: 5500 (computations per chunk)
+  batch_size: 500 (results buffer size)
+============================================================
+
+
+============================================================
+DD STARTUP ANALYSIS CONFIGURATION
+============================================================
+Parameter file: tests/fixtures/params_test.yaml
+Config file: tests/fixtures/parametric_lump.yaml
+Analysis type: lump
+Method: parametric
+Max simulation time: 1.00 years
+Vector length: 200
+n_jobs: 11
+chunk_size: 5500
+batch_size: 500
+Output directory: /tmp/ddstartup_profiling_lump
+
+Input parameter fields:
+  V_plasma            : shape=(10,), range=[1.400e+02, 1.600e+02]
+  T_i                 : shape=(5,), range=[1.400e+01, 2.000e+01]
+  n_tot               : shape=(5,), range=[1.500e+20, 2.000e+20]
+  tau_p_T             : shape=(4,), range=[5.000e-01, 1.000e+00]
+  tau_p_He3           : shape=(10,), range=[8.000e-01, 1.200e+00]
+  P_aux               : shape=(1,), range=[6.500e+07, 6.500e+07]
+  P_aux_DT_eq         : shape=(1,), range=[6.500e+07, 6.500e+07]
+  TBR_DT              : shape=(1,), range=[1.100e+00, 1.100e+00]
+  TBR_DDn             : shape=(1,), range=[7.000e-01, 7.000e-01]
+  I_target            : shape=(1,), range=[1.250e+00, 1.250e+00]
+  eta_th              : shape=(1,), range=[3.650e-01, 3.650e-01]
+  capacity_factor     : shape=(1,), range=[7.500e-01, 7.500e-01]
+  price_of_electricity: shape=(1,), range=[6.750e-08, 6.750e-08]
+
+Total parameter combinations: 10,000
+============================================================
+
+Output directory: /tmp/ddstartup_profiling_lump/20251108_123423_parametric_lump
+Output file: /tmp/ddstartup_profiling_lump/20251108_123423_parametric_lump/ddstartup_20251108_123423_parametric_lump.h5
+
+============================================================
+STARTING PARAMETRIC ANALYSIS
+============================================================
+Total combinations: 10,000
+Parallel workers: 11
+Chunk size: 5500
+Batch size: 500
+============================================================
+
+⚠️  hdf5plugin not found - using gzip compression
+   Install with: pip install hdf5plugin
+   LZ4 is 10x faster than gzip!
+
+🔧 Building reactivity lookup table for 5 unique T_i values...
+✅ Reactivity lookup table created (5 temperatures)
+Starting BATCH PIPELINE computation with 11 workers...
+Processing 10,000 combinations in batches of 5,000
+Compression: gzip-1 (fast fallback) with VECTORIZED bulk writes
+Architecture: COMPUTE phase (all 11 cores) → WRITE phase (<1s)
+Expected: First ~22 tasks slow (Numba compilation), then fast
+Monitor the speed - smooth progress with minimal write overhead!
+🔄 COMPUTE:   0%|          | 0/10000 [00:00<?, ?comb/s]🔄 COMPUTE:   0%|          | 50/10000 [00:06<21:51,  7.59comb/s]🔄 COMPUTE:   6%|▌         | 597/10000 [00:07<01:22, 113.86comb/s]🔄 COMPUTE:  12%|█▏        | 1213/10000 [00:07<00:35, 250.92comb/s]🔄 COMPUTE:  19%|█▉        | 1887/10000 [00:08<00:19, 414.38comb/s]🔄 COMPUTE:  26%|██▌       | 2580/10000 [00:08<00:12, 584.84comb/s]🔄 COMPUTE:  33%|███▎      | 3252/10000 [00:09<00:09, 736.92comb/s]🔄 COMPUTE:  40%|████      | 4032/10000 [00:09<00:06, 919.69comb/s]🔄 COMPUTE:  47%|████▋     | 4682/10000 [00:10<00:05, 1011.30comb/s]💾 WRITE: :  50%|█████     | 5010/10000 [00:10<00:04, 1011.30comb/s]💾 WRITE: :  50%|█████     | 5010/10000 [00:10<00:04, 1011.30comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  50%|█████     | 5010/10000 [00:11<00:04, 1011.30comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  50%|█████     | 5011/10000 [00:11<00:06, 732.54comb/s] 🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  59%|█████▉    | 5949/10000 [00:11<00:04, 989.71comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  69%|██████▉   | 6889/10000 [00:12<00:02, 1206.51comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  77%|███████▋  | 7726/10000 [00:12<00:01, 1326.23comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  85%|████████▍ | 8475/10000 [00:13<00:01, 1371.58comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  93%|█████████▎| 9288/10000 [00:13<00:00, 1441.20comb/s]🔄 COMPUTE (write: 0.85s, ✓ 100.0%): :  99%|█████████▉| 9927/10000 [00:14<00:00, 1394.54comb/s]💾 WRITE: : 100%|█████████▉| 9984/10000 [00:14<00:00, 1394.54comb/s]                           💾 WRITE: : 100%|█████████▉| 9984/10000 [00:14<00:00, 1394.54comb/s]🔄 COMPUTE (write: 1.02s, ✓ 100.0%): : 100%|█████████▉| 9984/10000 [00:15<00:00, 1394.54comb/s]🔄 COMPUTE (write: 1.02s, ✓ 100.0%): : 100%|█████████▉| 9985/10000 [00:15<00:00, 780.05comb/s] 💾 WRITE: : 100%|██████████| 10000/10000 [00:15<00:00, 780.05comb/s]                          💾 WRITE: : 100%|██████████| 10000/10000 [00:15<00:00, 780.05comb/s]🔄 COMPUTE (write: 0.17s, ✓ 100.0%): : 100%|██████████| 10000/10000 [00:15<00:00, 780.05comb/s]🔄 COMPUTE (write: 0.17s, ✓ 100.0%): : 100%|██████████| 10000/10000 [00:15<00:00, 651.86comb/s]
+
+============================================================
+PARAMETRIC ANALYSIS COMPLETE
+============================================================
+✅ Processed: 10,000 combinations
+✅ Successful: 10,000 (100.0%)
+⏱️  Computation time: 15.36 seconds
+📁 Results saved to: /tmp/ddstartup_profiling_lump/20251108_123423_parametric_lump/ddstartup_20251108_123423_parametric_lump.h5
+💾 File size: 1.6 MB (compressed with LZ4/gzip-1)
+============================================================
+
+
+✅ Analysis completed successfully!
+📁 Results saved to: /tmp/ddstartup_profiling_lump/20251108_123423_parametric_lump/ddstartup_20251108_123423_parametric_lump.h5
+
+================================================================================
+PROFILING RESULTS (Total time: 15.93s)
+================================================================================
+
+--------------------------------------------------------------------------------
+Top 20 functions by cumulative time:
+--------------------------------------------------------------------------------
+         2951074 function calls (2942780 primitive calls) in 15.926 seconds
+
+   Ordered by: cumulative time
+   List reduced from 2364 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000   15.931   15.931 /home/alessmor/Scrivania/dd_startup/ddstartup/main.py:30(main)
+        1    0.128    0.128   15.366   15.366 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:337(run_parametric_analysis)
+     3001    0.176    0.000   11.656    0.004 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/_base.py:263(wait)
+     2763    0.015    0.000   11.189    0.004 /home/alessmor/anaconda3/lib/python3.11/threading.py:611(wait)
+     2763    0.024    0.000   11.166    0.004 /home/alessmor/anaconda3/lib/python3.11/threading.py:295(wait)
+    21053   11.161    0.001   11.161    0.001 {method 'acquire' of '_thread.lock' objects}
+        3    0.381    0.127    2.013    0.671 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:784(_write_results_to_hdf5)
+      102    1.230    0.012    1.420    0.014 /home/alessmor/anaconda3/lib/python3.11/site-packages/h5py/_hl/dataset.py:848(__setitem__)
+    10000    0.030    0.000    1.373    0.000 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:651(submit_task)
+    10000    0.084    0.000    1.343    0.000 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/process.py:788(submit)
+    10001    0.013    0.000    1.051    0.000 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/process.py:82(wakeup)
+    10001    0.043    0.000    1.038    0.000 /home/alessmor/anaconda3/lib/python3.11/multiprocessing/connection.py:182(send_bytes)
+    10001    0.028    0.000    0.989    0.000 /home/alessmor/anaconda3/lib/python3.11/multiprocessing/connection.py:406(_send_bytes)
+    10001    0.018    0.000    0.949    0.000 /home/alessmor/anaconda3/lib/python3.11/multiprocessing/connection.py:381(_send)
+    10001    0.929    0.000    0.929    0.000 {built-in method posix.write}
+        1    0.000    0.000    0.541    0.541 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/io_functions.py:108(load_parameter_fields)
+    365/6    0.002    0.000    0.503    0.084 <frozen importlib._bootstrap>:1165(_find_and_load)
+    337/6    0.002    0.000    0.503    0.084 <frozen importlib._bootstrap>:1120(_find_and_load_unlocked)
+    329/5    0.002    0.000    0.502    0.100 <frozen importlib._bootstrap>:666(_load_unlocked)
+    265/4    0.001    0.000    0.501    0.125 <frozen importlib._bootstrap_external>:934(exec_module)
+
+
+
+--------------------------------------------------------------------------------
+Top 20 functions by internal time:
+--------------------------------------------------------------------------------
+         2951074 function calls (2942780 primitive calls) in 15.926 seconds
+
+   Ordered by: internal time
+   List reduced from 2364 to 20 due to restriction <20>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+    21053   11.161    0.001   11.161    0.001 {method 'acquire' of '_thread.lock' objects}
+      102    1.230    0.012    1.420    0.014 /home/alessmor/anaconda3/lib/python3.11/site-packages/h5py/_hl/dataset.py:848(__setitem__)
+    10001    0.929    0.000    0.929    0.000 {built-in method posix.write}
+        3    0.381    0.127    2.013    0.671 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:784(_write_results_to_hdf5)
+     3001    0.176    0.000   11.656    0.004 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/_base.py:263(wait)
+      102    0.170    0.002    0.180    0.002 {method 'make_selection' of 'h5py._selector.Selector' objects}
+        1    0.128    0.128   15.366   15.366 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:337(run_parametric_analysis)
+   383647    0.108    0.000    0.108    0.000 {method 'get' of 'dict' objects}
+    10000    0.084    0.000    1.343    0.000 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/process.py:788(submit)
+    12769    0.055    0.000    0.067    0.000 /home/alessmor/anaconda3/lib/python3.11/threading.py:243(__init__)
+    83505    0.048    0.000    0.076    0.000 /home/alessmor/anaconda3/lib/python3.11/threading.py:271(__enter__)
+    10001    0.043    0.000    1.038    0.000 /home/alessmor/anaconda3/lib/python3.11/multiprocessing/connection.py:182(send_bytes)
+    83505    0.042    0.000    0.055    0.000 /home/alessmor/anaconda3/lib/python3.11/threading.py:274(__exit__)
+   449546    0.035    0.000    0.036    0.000 {built-in method builtins.isinstance}
+    10000    0.035    0.000    0.084    0.000 /home/alessmor/anaconda3/lib/python3.11/queue.py:122(put)
+    10000    0.033    0.000    0.058    0.000 /home/alessmor/anaconda3/lib/python3.11/concurrent/futures/_base.py:428(result)
+      265    0.033    0.000    0.033    0.000 {built-in method marshal.loads}
+       11    0.033    0.003    0.034    0.003 {built-in method posix.fork}
+    10000    0.032    0.000    0.050    0.000 /home/alessmor/anaconda3/lib/python3.11/site-packages/tqdm/std.py:1195(update)
+    10000    0.030    0.000    1.373    0.000 /home/alessmor/Scrivania/dd_startup/ddstartup/utils/parametric_computation.py:651(submit_task)
+
+
+
+================================================================================
+PROFILING COMPLETE
+================================================================================
+Results saved to: /home/alessmor/Scrivania/dd_startup/tests/profiling/results
+
+total 88K
+-rw-r--r-- 1 alessmor alessmor  25K Nov  8 12:34 final_optimized_profile.txt
+-rw-r--r-- 1 alessmor alessmor  12K Nov  8 12:28 lump_after_lz4.txt
+-rw-r--r-- 1 alessmor alessmor  12K Nov  8 12:34 lump_profile.txt
+-rw-r--r-- 1 alessmor alessmor 1.4K Nov  8 12:31 ode_detailed_profile.txt
+-rw-r--r-- 1 alessmor alessmor  13K Nov  8 12:32 tseeded_after_lz4.txt
+-rw-r--r-- 1 alessmor alessmor  13K Nov  8 12:34 tseeded_profile.txt
+
+Cleaning up temporary files...
+✅ Cleanup complete

@@ -1,0 +1,52 @@
+================================================================================
+T-SEEDED ODE SOLVER PROFILING
+================================================================================
+
+1. Single case detailed profiling:
+--------------------------------------------------------------------------------
+Getting reactivities...
+  Reactivity lookup: 0.04 ms
+
+Running ODE solver...
+  ODE solver: 166.77 ms
+
+Results:
+  Success: True
+  t_startup: 1926.5 hours
+  Time points: 216
+  Error: None
+
+
+2. Batch profiling:
+--------------------------------------------------------------------------------
+================================================================================
+BATCH T-SEEDED PROFILING
+================================================================================
+
+Testing 75 parameter combinations...
+  Completed 10/75 cases...
+  Completed 20/75 cases...
+  Completed 30/75 cases...
+  Completed 40/75 cases...
+  Completed 50/75 cases...
+  Completed 60/75 cases...
+  Completed 70/75 cases...
+
+================================================================================
+RESULTS
+================================================================================
+Total cases: 75
+Success rate: 100.0%
+
+Timing statistics:
+  Mean: 28.6 ms/case
+  Median: 26.2 ms/case
+  Min: 21.0 ms/case
+  Max: 74.0 ms/case
+  Std: 7.8 ms
+
+ODE time points:
+  Mean: 201
+  Median: 200
+  Min: 182
+  Max: 221

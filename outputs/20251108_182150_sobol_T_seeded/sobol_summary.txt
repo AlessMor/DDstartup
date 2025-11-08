@@ -1,0 +1,24 @@
+============================================================
+SOBOL SENSITIVITY ANALYSIS SUMMARY
+============================================================
+Analysis type: T_seeded
+Samples: 7669/28000
+Parameters analyzed: 13
+Computation time: 165.71 seconds
+============================================================
+
+
+Sensitivity Analysis for: t_startup
+------------------------------------------------------------
+Valid samples: 0
+
+Rank   Parameter            S1 (First)   ST (Total)  
+------------------------------------------------------------
+
+
+Sensitivity Analysis for: unrealized_profits
+------------------------------------------------------------
+Valid samples: 0
+
+Rank   Parameter            S1 (First)   ST (Total)  
+------------------------------------------------------------

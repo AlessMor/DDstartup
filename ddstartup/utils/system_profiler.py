@@ -115,6 +115,9 @@ def calculate_optimal_batch_size(system_info: Optional[Dict] = None) -> int:
     """
     Calculate optimal batch size for buffered operations.
     
+    Increased batch sizes reduce lock contention by collecting more results
+    before synchronization, improving parallelization efficiency.
+    
     Args:
         system_info: System information dictionary
         
@@ -127,21 +130,21 @@ def calculate_optimal_batch_size(system_info: Optional[Dict] = None) -> int:
     n_cores = system_info['n_cores']
     available_ram_gb = system_info['available_ram_gb']
     
-    # Base batch size on cores
+    # Base batch size on cores (increased 2x to reduce lock contention)
     if n_cores >= 16:
-        batch_size = 1000
+        batch_size = 2000  # was 1000
     elif n_cores >= 8:
-        batch_size = 500
+        batch_size = 1000  # was 500
     elif n_cores >= 4:
-        batch_size = 250
+        batch_size = 500   # was 250
     else:
-        batch_size = 100
+        batch_size = 200   # was 100
     
     # Reduce if low memory
     if available_ram_gb < 4:
-        batch_size = min(batch_size, 100)
+        batch_size = min(batch_size, 200)   # was 100
     elif available_ram_gb < 8:
-        batch_size = min(batch_size, 250)
+        batch_size = min(batch_size, 500)   # was 250
     
     return batch_size
 

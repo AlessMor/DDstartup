@@ -19,8 +19,8 @@ from ddstartup.utils.io_functions import (
     generate_output_path
 )
 from ddstartup.utils.system_profiler import get_optimal_parameters, override_with_config
-from ddstartup.utils.parametric_computation import run_parametric_analysis, print_parametric_summary
-from ddstartup.utils.sobol_computation import run_sobol_analysis, print_sobol_summary
+from ddstartup.methods.parametric_computation import run_parametric_analysis, print_parametric_summary
+from ddstartup.methods.sobol_computation import run_sobol_analysis, print_sobol_summary
 from ddstartup.utils.tools import parse_arguments
 
 # Suppress warnings
@@ -227,36 +227,54 @@ def main():
             # ----------------------------------------------------------------
             # SENSITIVITY ANALYSIS - SOBOL/LHS SAMPLING
             # ----------------------------------------------------------------
-            # Performs global sensitivity analysis using Sobol sequences or
-            # Latin Hypercube Sampling to efficiently explore parameter space
-            # Computes first-order and total-order sensitivity indices
+            # Performs global sensitivity analysis using Sobol sequences
+            # (Saltelli sampling scheme) to efficiently explore parameter space.
+            # Computes first-order (S1) and total-order (ST) sensitivity indices.
             # 
-            # Note: Sobol analysis still requires compute_function import
-            # TODO: Refactor sobol_computation.py to use internal factory like parametric
+            # Total evaluations: N × (2k + 2) where N = n_samples, k = n_params
             # 
-            # Output: HDF5 file with sampled results and sensitivity indices
-            try:
-                if config['analysis_type'] == 'T_seeded':
-                    from ddstartup.physics.Tseeded_functions import compute_single_combination
-                elif config['analysis_type'] == 'lump':
-                    from ddstartup.physics.lump_functions import compute_single_combination
-                else:
-                    print(f"Error: Unknown analysis type: {config['analysis_type']}", file=sys.stderr)
-                    return 1
-            except ImportError as e:
-                print(f"Error importing compute function for Sobol: {e}", file=sys.stderr)
-                return 1
+            # Output: HDF5 file with Sobol indices for each output metric
             
             stats = run_sobol_analysis(
                 input_data=input_data,
                 output_file=output_file,
                 config=config,
-                compute_function=compute_single_combination,
+                compute_function=None,  # Not used - internal evaluation
                 verbose=verbose
             )
             
             # Print sensitivity analysis summary
             print_sobol_summary(stats, verbose)
+            
+        elif config['method'] == 'elementary_effects':
+            # ----------------------------------------------------------------
+            # ELEMENTARY EFFECTS (MORRIS) - ONE-AT-A-TIME SENSITIVITY
+            # ----------------------------------------------------------------
+            # Performs Elementary Effects sensitivity analysis using random
+            # trajectories through parameter space with one-at-a-time (OAT)
+            # perturbations. Computes:
+            #   - μ (mu): mean effect (with direction)
+            #   - μ* (mu_star): mean absolute effect (main sensitivity)
+            #   - σ (sigma): standard deviation (interaction effects)
+            # 
+            # This method is computationally cheaper than Sobol but still
+            # provides global sensitivity information.
+            # 
+            # Output: HDF5 file with sensitivity indices for each parameter
+            from ddstartup.methods.elemeffects_computation import (
+                run_elementary_effects_analysis,
+                print_elementary_effects_summary
+            )
+            
+            stats = run_elementary_effects_analysis(
+                input_data=input_data,
+                output_file=output_file,
+                config=config,
+                verbose=verbose
+            )
+            
+            # Print elementary effects summary
+            print_elementary_effects_summary(stats, verbose)
             
         else:
             print(f"Error: Unknown analysis method: {config['method']}", file=sys.stderr)

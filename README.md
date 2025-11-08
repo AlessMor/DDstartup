@@ -78,326 +78,111 @@ The code will then build the iterator element by creating all possible combinati
 ### Basic Usage
 
 ```bash
-# Run parametric analysis with config file
+# Run parametric analysis
 python -m ddstartup params_test parametric_tseeded
 
-# Run with parameter filtering (NEW!)
+# Run with parameter filtering
 python -m ddstartup params_test parametric_tseeded_filtered
 
 # Verify configuration without running
 python -m ddstartup params_test parametric_tseeded --dry-run
+
+# Run Sobol sensitivity analysis
+python -m ddstartup params_sobol sobol_tseeded
 ```
 
-### 🆕 Parameter Filtering (NEW FEATURE!)
-
-**Filter parameter combinations BEFORE computation** to focus on physically meaningful cases and save time!
-
-**Quick Example:**
-```yaml
-# Add to your config YAML file:
-filter: "P_aux_DT_eq < P_aux"
-```
-
-This will **only compute** combinations where DT equilibrium power is less than DD power, potentially **reducing computation time by 50-90%**!
-
-**More Examples:**
-```yaml
-# High-temperature regime
-filter: "T_i > 15 and T_i < 25"
-
-# Economic viability
-filter: "eta_th > 0.35 and capacity_factor > 0.6"
-
-# Complex constraints
-filter: "(P_aux > 1e6 and T_i > 15) or (n_tot > 5e20)"
-```
-
-**Documentation:**
-- 📖 Complete guide: [`docs/PARAMETER_FILTERING_GUIDE.md`](docs/PARAMETER_FILTERING_GUIDE.md)
-- ⚡ Quick reference: [`docs/FILTERING_QUICK_REFERENCE.md`](docs/FILTERING_QUICK_REFERENCE.md)
-- 💡 Example config: [`inputs/parametric_tseeded_filtered.yaml`](inputs/parametric_tseeded_filtered.yaml)
-
-**Performance Impact:**
-- ✅ Skip invalid combinations
-- ✅ Reduce computation time by 50-90%
-- ✅ Smaller output files
-- ✅ Focus on interesting parameter regimes
-
----
 
 ## Command Reference
 
 ### 1. Running Analysis
 
-#### Using Configuration Files
-
-**Parametric Analysis (Lump Method):**
+**Quick start:**
 ```bash
-python -m ddstartup.main config inputs/config_parametric_lump.yaml
+# Parametric T-seeded method
+python -m ddstartup params_test parametric_tseeded
+
+# Parametric lump method  
+python -m ddstartup params_test parametric_lump
+
+# Sobol sensitivity analysis
+python -m ddstartup params_sobol sobol_tseeded
 ```
 
-**Parametric Analysis (T-seeded Method):**
+**Command structure:**
 ```bash
-python -m ddstartup.main config inputs/config_parametric_tseeded.yaml
+python -m ddstartup <parameter_file> <config_file> [--verbose] [--dry-run]
 ```
 
-**Sobol Sensitivity Analysis (Lump):**
-```bash
-python -m ddstartup.main config inputs/config_sobol_lump.yaml
-```
-
-**Sobol Sensitivity Analysis (T-seeded):**
-```bash
-python -m ddstartup.main config inputs/config_sobol_tseeded.yaml
-```
-
-#### Using Command Line Arguments
-
-**Parametric Lump Method:**
-```bash
-python -m ddstartup.main parametric_lump \
-    --V_plasma 50 100 5 \
-    --n_tot 5e20 1e21 3 \
-    --tau_p_T 0.5 2.0 4 \
-    --tau_p_He3 0.5 2.0 4 \
-    --P_aux 30e6 50e6 3 \
-    --P_aux_DT_eq 40e6 60e6 3 \
-    --TBR_DT 1.05 1.15 3 \
-    --TBR_DDn 0.7 0.9 3 \
-    --I_target 1.0 3.0 3 \
-    --eta_th 0.35 0.45 3 \
-    --capacity_factor 0.7 0.9 3 \
-    --price_of_electricity 0.10 0.20 3
-```
-
-**Parametric T-seeded Method:**
-```bash
-python -m ddstartup.main parametric_tseeded \
-    --V_plasma 50 100 5 \
-    --n_tot 5e20 1e21 3 \
-    --tau_p_T 0.5 2.0 4 \
-    --P_aux 30e6 50e6 3 \
-    --P_aux_DT_eq 40e6 60e6 3 \
-    --TBR_DT 1.05 1.15 3 \
-    --TBR_DDn 0.7 0.9 3 \
-    --tau_ifc 3600 86400 4 \
-    --tau_ofc 43200 172800 4 \
-    --eta_th 0.35 0.45 3 \
-    --capacity_factor 0.7 0.9 3 \
-    --price_of_electricity 0.10 0.20 3
-```
-
-**Sobol Sensitivity Analysis:**
-```bash
-# Lump method
-python -m ddstartup.main sobol_lump \
-    --V_plasma 50 150 \
-    --n_tot 5e20 1e21 \
-    --N_samples 1024
-
-# T-seeded method
-python -m ddstartup.main sobol_tseeded \
-    --V_plasma 50 150 \
-    --n_tot 5e20 1e21 \
-    --N_samples 1024
-```
-
-#### Command Line Options
-
-- Parameter format: `--param_name min max n_points`
-- All parameters are optional (defaults from system profiler will be used)
-- Outputs saved to `outputs/YYYYMMDD_HHMMSS_<method>/`
+**Files:**
+- Parameter files (`.yaml`): `inputs/params_test.yaml`, `inputs/params.yaml`
+- Config files (`.yaml`): `inputs/parametric_tseeded.yaml`, `inputs/sobol_tseeded.yaml`
 
 ---
 
-### 2. Postprocessing
+### 2. Output Files
 
-All postprocessing functions are in `ddstartup/postprocessing/`.
+Results saved to `outputs/YYYYMMDD_HHMMSS_<method>/`:
+- `ddstartup_*.h5`: HDF5 data file with inputs, outputs, and time series
+- `config_used.yaml`: Configuration snapshot
+- `runtime_info.txt`: Execution metadata
 
-#### Interactive Notebooks
+**Key variables in HDF5:**
+- Inputs: `V_plasma`, `T_i`, `n_tot`, `tau_p_T`, `P_aux`, `TBR_DT`, etc.
+- Outputs: `t_startup`, `E_lost`, `unrealized_profits`, `Q_DD`, `Q_DT_eq`
+- Time series: `N_ofc`, `N_ifc`, `N_stor`, `n_T`, `n_D`, `P_DDn`, `P_DT`
 
-Use the manual verification notebooks in `tests/`:
-- `manual_kde_plots_verification.ipynb` - KDE quartile plots
-- `manual_parcoords_plots_verification.ipynb` - Parallel coordinates
-- `manual_pdf_plots_verification.ipynb` - PDF comparison plots
+---
+
+### 3. Postprocessing
+
+**Load and analyze results:**
+```python
+import h5py
+import numpy as np
+
+with h5py.File('outputs/latest/ddstartup_*.h5', 'r') as f:
+    t_startup = f['t_startup'][:]
+    success = f['sol_success'][:]
+    print(f"Success rate: {np.sum(success)/len(success)*100:.1f}%")
+```
+
+**Visualization tools** (in `ddstartup/postprocessing/`):
+- `plot_kde_functions.py`: Kernel density estimation
+- `plot_parcoords_functions.py`: Parallel coordinates
+- `plot_shap_functions.py`: SHAP analysis
+- `plot_contour_functions.py`: 2D parameter contours
+
+---
+
+### 4. Tests
 
 ```bash
-# Launch Jupyter
-jupyter notebook tests/
+pytest                                    # Run all tests
+pytest --cov=ddstartup --cov-report=html  # With coverage
+pytest tests/test_*.py -v                 # Specific tests
 ```
 
 ---
 
-### 3. Running Tests
+### 5. Common Workflows
 
-#### Run All Tests
-
+**Parameter sweep:**
 ```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run with coverage
-pytest --cov=ddstartup --cov-report=html
-
-# Run with coverage (terminal report)
-pytest --cov=ddstartup --cov-report=term-missing
+python -m ddstartup params_test parametric_tseeded
+# Analyze with Python/Jupyter using HDF5 output
 ```
 
-#### Run Specific Test Files
-
+**Sensitivity analysis:**
 ```bash
-# Test postprocessing functions
-pytest tests/test_postprocess_functions.py -v
-
-# Test KDE plotting
-pytest tests/test_plot_kde_functions.py -v
-
-# Test parallel coordinates plotting
-pytest tests/test_plot_parcoords_functions.py -v
-
-# Test PDF plotting
-pytest tests/test_plot_pdf_functions.py -v
+python -m ddstartup params_sobol sobol_tseeded
+# Calculate Sobol indices from output
 ```
 
-#### Run Specific Tests
-
+**Compare methods:**
 ```bash
-# Run specific test by name
-pytest tests/test_postprocess_functions.py::test_find_latest_output_folder -v
-
-# Run tests matching pattern
-pytest -k "test_kde" -v
-
-# Run tests with markers (if defined)
-pytest -m "slow" -v
-```
-
-#### Coverage Reports
-
-```bash
-# Generate HTML coverage report
-pytest --cov=ddstartup --cov-report=html
-# View report: open htmlcov/index.html
-
-# Generate XML coverage report (for CI/CD)
-pytest --cov=ddstartup --cov-report=xml
-
-# Show missing lines in terminal
-pytest --cov=ddstartup --cov-report=term-missing
-
-# Coverage for specific module
-pytest tests/test_postprocess_functions.py \
-    --cov=ddstartup.postprocessing.postprocess_functions \
-    --cov-report=html
-```
-
-#### Test Options
-
-```bash
-# Stop at first failure
-pytest -x
-
-# Show local variables on failure
-pytest -l
-
-# Run last failed tests only
-pytest --lf
-
-# Parallel execution (requires pytest-xdist)
-pytest -n auto
-
-# Disable warnings
-pytest --disable-warnings
-```
-
----
-
-### 4. Documentation
-
-#### Build Documentation
-
-```bash
-cd docs
-
-# Build HTML documentation
-make html
-
-# Build PDF documentation (requires LaTeX)
-make latexpdf
-
-# Clean build artifacts
-make clean
-
-# View documentation
-python -m http.server 8000 --directory _build/html
-# Open browser to http://localhost:8000
-```
-
-#### Documentation Structure
-
-```
-docs/
-├── index.rst              # Main documentation page
-├── user_guide/            # User guides
-│   ├── installation.rst
-│   ├── quickstart.rst
-│   └── postprocessing_workflow.rst
-├── api_reference/         # API documentation
-│   ├── physics.rst
-│   ├── postprocessing.rst
-│   └── utils.rst
-└── conf.py               # Sphinx configuration
-```
-
----
-
-### 5. Development Workflow
-
-#### Setting Up Development Environment
-
-```bash
-# Install development dependencies
-pip install -r requirements.txt
-pip install pytest pytest-cov sphinx sphinx-rtd-theme
-
-# Install package in editable mode
-pip install -e .
-```
-
-#### Code Quality Checks
-
-```bash
-# Run tests before committing
-pytest
-
-# Check code coverage
-pytest --cov=ddstartup --cov-report=term-missing
-
-# Format code (if using black)
-black ddstartup/
-
-# Lint code (if using flake8)
-flake8 ddstartup/
-```
-
-#### Git Workflow
-
-```bash
-# Create feature branch
-git checkout -b feature/my-new-feature
-
-# Make changes and commit
-git add .
-git commit -m "Add new feature"
-
-# Run tests
-pytest
-
-# Push changes
-git push origin feature/my-new-feature
+python -m ddstartup params_test parametric_lump
+python -m ddstartup params_test parametric_tseeded
+# Compare outputs/*/ddstartup_*.h5 files
 ```
 
 ---
@@ -406,169 +191,88 @@ git push origin feature/my-new-feature
 
 ```
 dd_startup/
-├── ddstartup/                 # Main package
+├── ddstartup/                    # Main package
 │   ├── __init__.py
-│   ├── main.py               # Entry point
-│   ├── physics/              # Physics models
-│   │   ├── lump_functions.py
-│   │   ├── Tseeded_functions.py
-│   │   └── reactivity_functions.py
-│   ├── postprocessing/       # Data analysis
-│   │   ├── postprocess_functions.py
-│   │   ├── plot_kde_functions.py
-│   │   ├── plot_parcoords_functions.py
-│   │   └── plot_pdf_functions.py
-│   └── utils/                # Utilities
-│       ├── io_functions.py
-│       ├── parametric_computation.py
-│       ├── sobol_computation.py
-│       └── tools.py
-├── inputs/                   # Configuration files
-│   ├── config_parametric_lump.yaml
-│   ├── config_parametric_tseeded.yaml
-│   ├── config_sobol_lump.yaml
-│   └── config_sobol_tseeded.yaml
-├── outputs/                  # Analysis results (HDF5)
-├── tests/                    # Test suite
-│   ├── test_postprocess_functions.py
-│   ├── test_plot_kde_functions.py
-│   ├── test_plot_parcoords_functions.py
-│   ├── test_plot_pdf_functions.py
-│   └── conftest.py
-├── docs/                     # Documentation
-│   ├── conf.py
-│   ├── index.rst
-│   ├── user_guide/
-│   └── api_reference/
-├── requirements.txt          # Dependencies
-└── README.md                # This file
+│   ├── __main__.py              # Entry point (python -m ddstartup)
+│   ├── main.py                  # CLI argument parsing and workflow
+│   ├── physics/                 # Physics models
+│   │   ├── lump_functions.py       # Lump method (steady-state)
+│   │   ├── Tseeded_functions.py    # T-seeded method (time-dependent ODE)
+│   │   ├── reactivity_functions.py # Fusion reactivity calculations
+│   │   ├── radiation.py            # Radiation losses
+│   │   ├── power_balance.py        # Power balance calculations
+│   │   └── sobol_functions.py      # Sobol wrappers
+│   ├── methods/                 # Analysis methods
+│   │   ├── parametric_computation.py   # Parametric sweeps
+│   │   ├── sobol_computation.py        # Sobol sensitivity
+│   │   └── elemeffects_computation.py  # Elementary effects
+│   ├── economics/               # Economic models
+│   │   └── economics_functions.py  # Cost calculations
+│   ├── postprocessing/          # Data analysis and visualization
+│   │   ├── postprocess_functions.py    # Data loading/filtering
+│   │   ├── plot_kde_functions.py       # KDE plots
+│   │   ├── plot_parcoords_functions.py # Parallel coordinates
+│   │   ├── plot_pdf_functions.py       # PDF comparisons
+│   │   ├── plot_contour_functions.py   # Contour plots
+│   │   ├── plot_shap_functions.py      # SHAP analysis
+│   │   ├── plot_kmeans_functions.py    # K-means clustering
+│   │   ├── plot_importance_matrix.py   # Feature importance
+│   │   ├── plot_elementary_effects.py  # EE plots
+│   │   ├── fit_ML_method.py            # ML surrogate models
+│   │   └── cli.py                      # Postprocessing CLI
+│   └── utils/                   # Utilities
+│       ├── io_functions.py             # File I/O and config loading
+│       ├── parameter_loader.py         # YAML parameter parsing
+│       ├── parameter_registry.py       # Parameter validation
+│       ├── reactivity_lookup.py        # Reactivity caching
+│       ├── physics_cache.py            # Physics result caching
+│       ├── filters.py                  # Parameter filtering
+│       ├── system_profiler.py          # Hardware optimization
+│       ├── profiling.py                # Performance profiling
+│       ├── tools.py                    # CLI tools
+│       └── units_and_constants.py      # Physical constants
+├── inputs/                      # Configuration files
+│   ├── params_test.yaml            # Test parameters (2 points each)
+│   ├── params.yaml                 # Full parameters
+│   ├── parametric_tseeded.yaml     # T-seeded config
+│   ├── parametric_lump.yaml        # Lump method config
+│   ├── sobol_tseeded.yaml          # Sobol config
+│   └── postprocess_config.yaml     # Postprocessing config
+├── outputs/                     # Analysis results (HDF5 files)
+├── tests/                       # Test suite
+└── docs/                        # Documentation
 ```
 
 ---
 
-### 7. Output Files
+### 7. Troubleshooting
 
-Analysis results are saved to `outputs/YYYYMMDD_HHMMSS_<method>/`:
-
-```
-outputs/20241008_143015_parametric_T_seeded/
-├── parametric_T_seeded.h5           # Main data file (HDF5)
-├── config_used.yaml                  # Configuration snapshot
-└── runtime_info.txt                  # Execution metadata
-```
-
-**HDF5 File Structure:**
-- Input parameters: `V_plasma`, `n_tot`, `tau_p_T`, etc.
-- Output variables: `t_startup`, `unrealized_profits`, `E_lost`, etc.
-- Time series (T-seeded): `N_ofc`, `N_ifc`, `N_stor`, `n_T`, `n_D`
-- Metadata: `sol_success`, `linear_index`
-
----
-
-### 8. Common Workflows
-
-#### Workflow 1: Parameter Sweep
-
+**Import errors:**
 ```bash
-# 1. Run parametric analysis
-python -m ddstartup.main config inputs/config_parametric_lump.yaml
-
-# 2. Analyze results
-jupyter notebook tests/manual_kde_plots_verification.ipynb
-
-# 3. Generate publication plots
-python -m ddstartup.postprocessing.plot_kde_functions \
-    outputs/latest/parametric_lump.h5 \
-    --target t_startup \
-    --output plots/
+pip install -e .  # Install package in editable mode
 ```
 
-#### Workflow 2: Sensitivity Analysis
-
+**Memory issues:**
 ```bash
-# 1. Run Sobol analysis
-python -m ddstartup.main config inputs/config_sobol_lump.yaml
-
-# 2. Calculate Sobol indices
-python -m ddstartup.postprocessing.sobol_indices \
-    outputs/latest/sobol_lump.h5
-
-# 3. Plot sensitivity results
-python -m ddstartup.postprocessing.plot_sobol \
-    outputs/latest/sobol_lump.h5 \
-    --output plots/sobol_indices.png
+# Reduce parameter points in YAML config
+# Or use Sobol sampling instead of full parametric sweep
 ```
 
-#### Workflow 3: Comparing Methods
-
+**Slow execution:**
 ```bash
-# 1. Run both methods
-python -m ddstartup.main config inputs/config_parametric_lump.yaml
-python -m ddstartup.main config inputs/config_parametric_tseeded.yaml
-
-# 2. Compare results
-jupyter notebook tests/manual_pdf_plots_verification.ipynb
-# Select both output files for comparison
+# Check system profile output for recommended n_jobs
+# Reduce vector_length in config for faster (less accurate) results
 ```
 
 ---
 
-### 9. Troubleshooting
+### 8. References
 
-#### Common Issues
-
-**Import Errors:**
-```bash
-# Ensure package is installed
-pip install -e .
-
-# Or add to PYTHONPATH
-export PYTHONPATH="${PYTHONPATH}:/path/to/dd_startup"
-```
-
-**Memory Issues:**
-```bash
-# Reduce number of parameter points
-python -m ddstartup.main parametric_lump --V_plasma 50 100 3  # fewer points
-
-# Use Sobol instead of parametric for high dimensions
-python -m ddstartup.main sobol_lump --N_samples 512
-```
-
-**Slow Execution:**
-```bash
-# Check available cores
-python -c "import os; print(os.cpu_count())"
-
-# Set manual thread count
-export OMP_NUM_THREADS=8
-python -m ddstartup.main config inputs/config_parametric_lump.yaml
-```
-
-**Test Failures:**
-```bash
-# Run with verbose output
-pytest -v --tb=short
-
-# Debug specific test
-pytest tests/test_postprocess_functions.py::test_name -vv --tb=long
-```
+See `docs/` for detailed documentation on:
+- Parameter filtering (PARAMETER_FILTERING_GUIDE.md)
+- YAML configuration (YAML_PARAMETERS_GUIDE.md)
+- Physics models (POWER_BALANCE_IMPLEMENTATION.md)
+- Postprocessing (POSTPROCESSING_DOCS_UPDATE.md)
 
 ---
-
-### 10. Contact & Contributing
-
-[WIP]
-
----
-
-### 11. License
-
-[WIP]
-
----
-
-### 12. References
-
-[WIP]
 
