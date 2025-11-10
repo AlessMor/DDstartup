@@ -279,7 +279,7 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
             'Q_DT_eq': np.nan,
             'E_lost': np.nan,
             'unrealized_profits': np.nan,
-            'error': 'ODE solver failed or t_startup infinite'
+            'error': result_dict.get('error', 'ODE solver failed or t_startup infinite')    
         })
         return result_dict
     
