@@ -39,7 +39,7 @@ def calculate_bremsstrahlung_power(n_e, T_e, Z_eff, V_plasma):
 
     Kb = ne20**2 * np.sqrt(T_e) * xrel * V_plasma
     
-    P_brem: float = 5.35e-3 * Z_eff * Kb  # volume-averaged bremsstrahlung radiaton in MW
+    P_brem: float = 5.35e-3 * Z_eff * Kb * 1e6  # volume-averaged bremsstrahlung radiation in Watts
 
     return P_brem
 

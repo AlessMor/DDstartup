@@ -262,6 +262,9 @@ def load_h5_to_dataframe(h5_path, chunk_size=500000, target_variables=None):
     For datasets with >1M rows, loads data in chunks and builds the DataFrame incrementally,
     reducing peak memory usage by ~50%.
     
+    IMPORTANT: For parametric analyses, if input parameter datasets contain NaN values,
+    this function will reconstruct them from linear_index and parameter_fields group.
+    
     Args:
         h5_path: Path to HDF5 file
         chunk_size: Number of rows to load per chunk (default: 500k)
@@ -270,6 +273,12 @@ def load_h5_to_dataframe(h5_path, chunk_size=500000, target_variables=None):
     Returns:
         pandas DataFrame with input parameters and target variables
     """
+    # Try to import hdf5plugin for LZ4 compression support (optional)
+    try:
+        import hdf5plugin
+    except ImportError:
+        pass  # Will still work with gzip compression
+    
     # Define input parameter names
     INPUT_PARAMS = ['V_plasma', 'n_tot', 'T_i', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq', 
                     'tau_ifc', 'tau_ofc', 'TBR_DT', 'TBR_DDn', 'eta_th', 'capacity_factor', 
@@ -344,6 +353,59 @@ def load_h5_to_dataframe(h5_path, chunk_size=500000, target_variables=None):
                 
                 for subkey in param_keys:
                     data[subkey][start_idx:end_idx] = f['parameter_fields'][subkey][start_idx:end_idx]
+        
+        # ========== RECONSTRUCT INPUT PARAMETERS FROM LINEAR INDEX (FIX FOR NaN BUG) ==========
+        # Check if input parameters are all NaN (bug in older parametric analysis runs)
+        # If so, reconstruct them from linear_index and parameter_fields
+        if 'linear_index' in data and 'parameter_fields' in f:
+            need_reconstruction = False
+            for param in INPUT_PARAMS:
+                if param in data:
+                    sample_vals = data[param][:min(100, len(data[param]))]
+                    if np.all(np.isnan(sample_vals)):
+                        need_reconstruction = True
+                        break
+            
+            if need_reconstruction:
+                print("   ⚠️  Input parameters contain NaN - reconstructing from linear_index...")
+                
+                # Get parameter shapes from HDF5 metadata
+                param_shapes = f.attrs.get('parameter_shapes', None)
+                if param_shapes is None:
+                    print("   ❌ Cannot reconstruct: parameter_shapes attribute missing")
+                else:
+                    param_shapes = np.array(param_shapes, dtype=np.int64)
+                    
+                    # Load parameter grid values from parameter_fields group
+                    param_field_names = []
+                    param_grids = []
+                    for key in sorted(f['parameter_fields'].keys()):
+                        if key.endswith('_values'):
+                            param_name = key.replace('_values', '')
+                            param_field_names.append(param_name)
+                            param_grids.append(f['parameter_fields'][key][:])
+                    
+                    # Reconstruct each input parameter using linear_index
+                    linear_indices = data['linear_index']
+                    for i, param_name in enumerate(param_field_names):
+                        if param_name in INPUT_PARAMS and param_name in data:
+                            # Convert linear indices to multi-dimensional indices
+                            # Using same logic as in index_to_params
+                            param_values = np.empty(len(linear_indices))
+                            for j, lin_idx in enumerate(linear_indices):
+                                # Compute multi-index for this parameter
+                                idx = int(lin_idx)
+                                temp_idx = np.zeros(len(param_shapes), dtype=np.int64)
+                                for k in range(len(param_shapes) - 1, -1, -1):
+                                    temp_idx[k] = idx % param_shapes[k]
+                                    idx //= param_shapes[k]
+                                # Get value from parameter grid
+                                param_values[j] = param_grids[i][temp_idx[i]]
+                            
+                            data[param_name] = param_values
+                            print(f"      ✓ Reconstructed {param_name}: {np.unique(param_values)[:5]} ...")
+                
+                print("   ✓ Reconstruction complete")
     
     return pd.DataFrame(data)
 

@@ -211,7 +211,7 @@ def plot_pairwise_contours(df, inputs, target, outputs_dir, max_pairs=None, inte
     return png_name
 
 
-def plot_interactive_pairwise_contours(df, inputs, target, outputs_dir, plot_name=None):
+def plot_interactive_pairwise_contours(df, inputs, target, outputs_dir, plot_name=None, registry=None):
     """Create an interactive HTML plot with dropdown menus to select parameter pairs.
     
     Args:
@@ -220,12 +220,18 @@ def plot_interactive_pairwise_contours(df, inputs, target, outputs_dir, plot_nam
         target: Target variable name
         outputs_dir: Output directory for HTML file
         plot_name: Optional custom plot name
+        registry: ParameterRegistry instance (optional, will create if not provided)
         
     Returns:
         Path to saved HTML file
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
+    
+    # Get registry if not provided
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
     
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)

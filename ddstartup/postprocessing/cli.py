@@ -63,6 +63,7 @@ from ddstartup.postprocessing.postprocess_functions import (
     clean_filters,
     apply_filters
 )
+from ddstartup.utils.parameter_registry import get_registry
 from ddstartup.postprocessing.plot_kde_functions import kde_quartile_plot
 from ddstartup.postprocessing.plot_parcoords_functions import generate_parcoords_plot
 from ddstartup.postprocessing.plot_pdf_functions import generate_pdf_plot
@@ -70,13 +71,14 @@ from ddstartup.postprocessing.plot_importance_matrix import plot_effect_size_mat
 from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_bar
 from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours, plot_interactive_pairwise_contours
 from ddstartup.postprocessing.plot_shap_functions import generate_shap_plots
+from ddstartup.postprocessing.plot_ML_pairwise_functions import generate_ml_pairwise_plots
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 
 def generate_plots(files, targets, input_filters, output_filters, plot_types, output_dir, 
-                   shap_interpolate=False, pdf_smooth=False):
+                   shap_interpolate=False, pdf_smooth=False, ml_pairwise_settings=None):
     """
     Generate requested plots for the given files and targets.
     
@@ -85,11 +87,15 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
         targets: List of target variables
         input_filters: Dictionary of input filters
         output_filters: Dictionary of output filters
-        plot_types: List of plot types to generate ('kde', 'parcoords', 'pdf')
+        plot_types: List of plot types to generate ('kde', 'parcoords', 'pdf', 'ml_pairwise')
         output_dir: Directory to save plots
         shap_interpolate: Whether to use interpolated (smooth) SHAP plots (default: False)
         pdf_smooth: Whether to use KDE smoothing for PDF plots (default: False)
+        ml_pairwise_settings: Dictionary with ML pairwise plot settings (pairs, grid_size, etc.)
     """
+    # Get parameter registry once for all plot functions
+    registry = get_registry()
+    
     print(f"\n{'='*80}")
     print(f"GENERATING PLOTS")
     print(f"{'='*80}")
@@ -136,7 +142,7 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 plot_name = f"kde_quartiles_{file_path.stem}_{target}.png"
                 try:
                     kde_quartile_plot(df_filtered, target, input_parameters, 
-                                    target_unit, output_dir, file_type, plot_name)
+                                    target_unit, output_dir, file_type, plot_name, registry=registry)
                     print(f"   ✅ Saved: {plot_name}")
                 except Exception as e:
                     print(f"   ❌ Error generating KDE plot: {e}")
@@ -146,7 +152,8 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 print(f"   Generating effect-size matrix...")
                 plot_name = f"effects_{file_path.stem}_{target}"
                 try:
-                    plot_effect_size_matrix(df_filtered, target, input_parameters, output_dir, plot_name=plot_name)
+                    plot_effect_size_matrix(df_filtered, target, input_parameters, output_dir, 
+                                          plot_name=plot_name, registry=registry)
                     print(f"   ✅ Saved: {plot_name}.png and CSV")
                 except Exception as e:
                     print(f"   ❌ Error generating effect-size matrix: {e}")
@@ -156,7 +163,8 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 print(f"   Generating KMeans cluster plot...")
                 plot_name = f"kmeans_{file_path.stem}_{target}"
                 try:
-                    cluster_and_quartile_bar(df_filtered, input_parameters, target, output_dir, n_clusters=5, plot_name=plot_name)
+                    cluster_and_quartile_bar(df_filtered, input_parameters, target, output_dir, 
+                                           n_clusters=5, plot_name=plot_name, registry=registry)
                     print(f"   ✅ Saved: {plot_name}.png and cluster centers CSV")
                 except Exception as e:
                     print(f"   ❌ Error generating KMeans plot: {e}")
@@ -166,7 +174,8 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 print(f"   Generating interactive 2D contour/heatmap (with parameter selection)...")
                 plot_name = f"contour_interactive_{file_path.stem}_{target}"
                 try:
-                    plot_interactive_pairwise_contours(df_filtered, input_parameters, target, output_dir, plot_name=plot_name)
+                    plot_interactive_pairwise_contours(df_filtered, input_parameters, target, output_dir, 
+                                                     plot_name=plot_name, registry=registry)
                     print(f"   ✅ Saved: {plot_name}.html (interactive)")
                 except Exception as e:
                     print(f"   ❌ Error generating interactive contour: {e}")
@@ -177,7 +186,7 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 plot_name = f"parcoords_{file_path.stem}_{target}.html"
                 try:
                     generate_parcoords_plot(df_filtered, target, input_parameters, 
-                                          target_unit, file_type, output_dir / plot_name)
+                                          target_unit, file_type, output_dir / plot_name, registry=registry)
                     print(f"   ✅ Saved: {plot_name}")
                 except Exception as e:
                     print(f"   ❌ Error generating parallel coordinates plot: {e}")
@@ -189,7 +198,7 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                 try:
                     generate_pdf_plot({str(file_path): {target: df_filtered[target].values}}, 
                                     target, [f"{file_type}"], output_filters, 
-                                    output_dir / plot_name, smooth=pdf_smooth)
+                                    output_dir / plot_name, smooth=pdf_smooth, registry=registry)
                     print(f"   ✅ Saved: {plot_name}")
                 except Exception as e:
                     print(f"   ❌ Error generating PDF plot: {e}")
@@ -205,11 +214,41 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
                         max_display=20,
                         max_samples=2000,
                         save_csv=True,
-                        interpolate=shap_interpolate
+                        interpolate=shap_interpolate,
+                        registry=registry
                     )
                     print(f"   ✅ Generated SHAP plots and CSV files")
                 except Exception as e:
                     print(f"   ❌ Error generating SHAP plots: {e}")
+            
+            # Generate ML pairwise plots
+            if 'ml_pairwise' in plot_types:
+                print(f"   Generating ML pairwise plots...")
+                plot_name = f"ml_pdp_{file_path.stem}_{target}"
+                try:
+                    # Get ML settings
+                    if ml_pairwise_settings is None:
+                        ml_pairwise_settings = {}
+                    
+                    pairs = ml_pairwise_settings.get('pairs', 'auto')
+                    grid_size = ml_pairwise_settings.get('grid_size', 60)
+                    max_train_samples = ml_pairwise_settings.get('max_train_samples', 100000)
+                    hidden = tuple(ml_pairwise_settings.get('hidden', [256, 256, 128]))
+                    verbose = ml_pairwise_settings.get('verbose', False)
+                    
+                    generate_ml_pairwise_plots(
+                        df_filtered, target, input_parameters, target_unit,
+                        output_dir, file_type, plot_name,
+                        registry=registry,
+                        pairs=pairs,
+                        grid_size=grid_size,
+                        max_train_samples=max_train_samples,
+                        hidden=hidden,
+                        verbose=verbose
+                    )
+                    print(f"   ✅ Generated ML pairwise plots")
+                except Exception as e:
+                    print(f"   ❌ Error generating ML pairwise plots: {e}")
             
             # Clean up memory after processing this target
             del df_filtered
@@ -261,7 +300,7 @@ def main():
     parser.add_argument(
         '--plots', '-p',
         nargs='+',
-        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'all'],
+        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise', 'all'],
         help='Plot types to generate (overrides config file)'
     )
     
@@ -470,7 +509,7 @@ def main():
     
     plots_config = config.get('plots', {})
     if plots_config.get('generate_all', True):
-        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap']
+        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise']
     else:
         plot_types = []
         if plots_config.get('kde', False):
@@ -487,6 +526,8 @@ def main():
             plot_types.append('contour')
         if plots_config.get('shap', False):
             plot_types.append('shap')
+        if plots_config.get('ml_pairwise', False):
+            plot_types.append('ml_pairwise')
     
     print(f"📊 Plot types: {', '.join(plot_types)}")
     
@@ -520,6 +561,13 @@ def main():
     elif 'pdf' in plot_types:
         print(f"🔷 PDF smoothing: DISABLED (histogram bins)")
     
+    # Get ML pairwise settings
+    ml_pairwise_settings = plots_config.get('ml_pairwise_settings', {})
+    
+    if 'ml_pairwise' in plot_types:
+        pairs_mode = ml_pairwise_settings.get('pairs', 'auto')
+        print(f"🔷 ML pairwise mode: {pairs_mode}")
+    
     # ============================================================================
     # DETERMINE OUTPUT DIRECTORY
     # ============================================================================
@@ -548,7 +596,7 @@ def main():
     # ============================================================================
     
     generate_plots(file_paths, targets, input_filters, output_filters, 
-                   plot_types, output_dir, shap_interpolate, pdf_smooth)
+                   plot_types, output_dir, shap_interpolate, pdf_smooth, ml_pairwise_settings)
     
     print(f"\n{'='*80}")
     print(f"✅ POSTPROCESSING COMPLETE")

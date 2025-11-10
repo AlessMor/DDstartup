@@ -53,7 +53,7 @@ def save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_lab
     print(f"   Quartile values saved: {csv_name}")
 
 
-def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, outputs_dir, file_type, plot_name):
+def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, outputs_dir, file_type, plot_name, registry=None):
     """
     Create KDE plots for each input parameter, split by quartiles of the target variable.
     
@@ -65,8 +65,12 @@ def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, output
         outputs_dir: Directory to save plot
         file_type: Type of file (for plot title)
         plot_name: Name for saved plot file
+        registry: ParameterRegistry instance (optional, will create if not provided)
     """
-    registry = get_registry()
+    # Get registry if not provided
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
     
     n_inputs = len(input_parameters)
     if n_inputs == 0:

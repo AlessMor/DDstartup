@@ -50,7 +50,7 @@ exclude_lines =
 
 [html]
 # Directory for HTML output
-directory = htmlcov
+directory = tests/htmlcov
 
 # Title for HTML report
 title = DD Startup Coverage Report

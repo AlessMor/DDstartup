@@ -166,13 +166,49 @@ def lump_solver(
         sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3
     )
     
-    # Create error message if solution failed
+    # Create detailed error message if solution failed
     error = None
     if not sol_success:
         if not np.isfinite(t_startup):
-            error = "Steady-state solution failed: Cannot reach target inventory"
+            # Calculate key physics quantities for diagnosis
+            inv_tau_p_T = 1.0 / tau_p_T
+            n_D = n_tot  # Approximation during DD phase
+            
+            # Production rates
+            Tdot_DDn = TBR_DDn * 0.5 * n_D * n_D * sigmav_DD_n * V_plasma
+            Tdot_DDp = 0.5 * n_D * n_D * sigmav_DD_p * V_plasma
+            Tdot_DT = TBR_DT * n_D * n_T * sigmav_DT * V_plasma
+            Tdot_tot = Tdot_DDn + Tdot_DDp + Tdot_DT
+            
+            # Required inventory
+            N_target = I_target / tritium_mass
+            
+            # Decay vs production
+            decay_rate = N_target * lambda_T
+            ratio = decay_rate / Tdot_tot if Tdot_tot > 0 else np.inf
+            
+            error = f"Physics solver failed: Cannot reach target inventory I_target={I_target:.3e} kg"
+            error += f"; n_T={n_T:.2e}, n_D={n_D:.2e}, n_He3={n_He3:.2e}"
+            error += f"; T_production={Tdot_tot:.2e} atoms/s, Decay_rate={decay_rate:.2e} atoms/s (ratio={ratio:.3f})"
+            
+            if ratio >= 1.0:
+                error += " [DECAY DOMINATES: Production too low to overcome decay]"
+            else:
+                error += " [Calculation error]"
+        elif n_T <= 0 or n_T >= n_tot:
+            error = f"Physical constraint violation: n_T={n_T:.2e} out of range (0, {n_tot:.2e})"
+            error += f"; n_D={n_D:.2e}, n_He3={n_He3:.2e}, t_startup={t_startup:.2e}s"
+        elif n_D < 0 or n_D > n_tot:
+            error = f"Physical constraint violation: n_D={n_D:.2e} out of range [0, {n_tot:.2e}]"
+            error += f"; n_T={n_T:.2e}, n_He3={n_He3:.2e}, t_startup={t_startup:.2e}s"
+        elif n_He3 < 0 or n_He3 > n_tot:
+            error = f"Physical constraint violation: n_He3={n_He3:.2e} out of range [0, {n_tot:.2e}]"
+            error += f"; n_T={n_T:.2e}, n_D={n_D:.2e}, t_startup={t_startup:.2e}s"
+        elif t_startup <= 0:
+            error = f"Physical constraint violation: t_startup={t_startup:.2e}s must be positive"
+            error += f"; n_T={n_T:.2e}, n_D={n_D:.2e}, n_He3={n_He3:.2e}"
         else:
-            error = "Solution found but violates physical constraints"
+            error = f"Solution violates physical constraints: n_T={n_T:.2e}, n_D={n_D:.2e}, n_He3={n_He3:.2e}, t_startup={t_startup:.2e}s"
     
     registry = get_registry()
     return registry.make_result_dict({

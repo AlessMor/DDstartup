@@ -177,7 +177,7 @@ def solve_ode_system(
     negative_population_event.terminal = True
     
     # Initial conditions: Start with pure deuterium plasma
-    y0 =  [1, 1, 1, 1] # [N_ofc, N_ifc, N_stor, n_T]
+    y0 =  [100, 100, 100, 1e5] # [N_ofc, N_ifc, N_stor, n_T]
     
     # Solve ODE system
     try:
@@ -195,8 +195,13 @@ def solve_ode_system(
         if not sol.success:
             error_msg = f"ODE solver failed: {getattr(sol, 'message', 'Unknown error')}"
             if len(sol.t) > 0:
-                error_msg += f" at t={sol.t[-1]:.2e}s"
-            return registry.make_result_dict({
+                t_last = sol.t[-1]
+                error_msg += f" at t={t_last:.2e}s ({t_last/(365.25*24*3600):.3f} years)"
+                # Add state information at failure point
+                if sol.y.shape[1] > 0:
+                    y_last = sol.y[:, -1]
+                    error_msg += f"; State: N_ofc={y_last[0]:.2e}, N_ifc={y_last[1]:.2e}, N_st={y_last[2]:.2e}, n_T={y_last[3]:.2e}"
+            return {
                 'N_ofc': sol.y[0],
                 'N_ifc': sol.y[1],
                 'N_stor': sol.y[2],
@@ -205,11 +210,23 @@ def solve_ode_system(
                 't_startup': np.inf,
                 'sol_success': False,
                 'error': error_msg
-            }, analysis_type='T_seeded')
+            }
         
         # Check for negative population event (physics failure)
         if len(sol.t_events) > 1 and sol.t_events[1].size > 0:
-            return registry.make_result_dict({
+            t_fail = sol.t_events[1][0]
+            y_fail = sol.y_events[1][0]
+            # Identify which population went negative
+            negative_pops = []
+            if y_fail[0] < -100: negative_pops.append("N_ofc")
+            if y_fail[1] < -100: negative_pops.append("N_ifc")
+            if y_fail[2] < -100: negative_pops.append("N_stor")
+            if y_fail[3] < -100: negative_pops.append("n_T")
+            
+            error_msg = f"Physics failure: Negative population ({', '.join(negative_pops)}) at t={t_fail:.2e}s ({t_fail/(365.25*24*3600):.3f} years)"
+            error_msg += f"; State: N_ofc={y_fail[0]:.2e}, N_ifc={y_fail[1]:.2e}, N_st={y_fail[2]:.2e}, n_T={y_fail[3]:.2e}"
+            
+            return {
                 'N_ofc': sol.y[0],
                 'N_ifc': sol.y[1],
                 'N_stor': sol.y[2],
@@ -217,8 +234,8 @@ def solve_ode_system(
                 't': sol.t,
                 't_startup': np.inf,
                 'sol_success': False,
-                'error': f"Negative population at t={sol.t_events[1][0]:.2e}s"
-            }, analysis_type='T_seeded')
+                'error': error_msg
+            }
         
         # Check if DT equilibrium was reached
         if len(sol.t_events) > 0 and sol.t_events[0].size > 0:
@@ -227,7 +244,7 @@ def solve_ode_system(
             
             # Validate t_startup
             if not np.isfinite(t_startup):
-                return registry.make_result_dict({
+                return {
                     'N_ofc': sol.y[0],
                     'N_ifc': sol.y[1],
                     'N_stor': sol.y[2],
@@ -235,8 +252,8 @@ def solve_ode_system(
                     't': sol.t,
                     't_startup': np.inf,
                     'sol_success': False,
-                    'error': "Invalid t_startup (non-finite)"
-                }, analysis_type='T_seeded')
+                    'error': f"Invalid t_startup (non-finite): t_startup={t_startup}, n_T={y_event[3]:.2e}, target={0.5*n_tot:.2e}"
+                }
             
             # Append event point for accurate interpolation
             t = np.append(sol.t, t_startup)
@@ -248,7 +265,7 @@ def solve_ode_system(
             # Sort by time (should already be sorted, but ensure it)
             sort_idx = np.argsort(t)
             
-            return registry.make_result_dict({
+            return {
                 't': t[sort_idx],
                 'N_ofc': N_ofc[sort_idx],
                 'N_ifc': N_ifc[sort_idx],
@@ -257,11 +274,17 @@ def solve_ode_system(
                 't_startup': float(t_startup),
                 'sol_success': True,
                 'error': None
-            }, analysis_type='T_seeded')
+            }
             
             
         # DT equilibrium not reached within max_simulation_time
-        return registry.make_result_dict({
+        t_last = sol.t[-1] if len(sol.t) > 0 else 0.0
+        n_T_last = sol.y[3, -1] if sol.y.shape[1] > 0 else 0.0
+        n_T_target = 0.5 * n_tot
+        error_msg = f"DT equilibrium not reached within max_simulation_time ({max_simulation_time/(365.25*24*3600):.1f} years)"
+        error_msg += f"; Final state at t={t_last:.2e}s: n_T={n_T_last:.2e} (target={n_T_target:.2e}, achieved {100*n_T_last/n_T_target:.1f}%)"
+        
+        return {
             'N_ofc': sol.y[0],
             'N_ifc': sol.y[1],
             'N_stor': sol.y[2],
@@ -269,14 +292,14 @@ def solve_ode_system(
             't': sol.t,
             't_startup': np.inf,
             'sol_success': False,
-            'error': "DT equilibrium not reached within max_simulation_time"
-        }, analysis_type='T_seeded')
+            'error': error_msg
+        }
     
     except Exception as e:
         # Catch-all for unexpected errors
         import traceback
-        return registry.make_result_dict({
+        return {
             't_startup': np.inf,
             'sol_success': False,
             'error': f"Unexpected error: {str(e)}\n{traceback.format_exc()}"
-        })
+        }

@@ -20,8 +20,6 @@ import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 import warnings
 
-from ..utils.parameter_symbols import get_param_label, get_param_symbol
-
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -86,7 +84,7 @@ def normalize_to_range(values):
 
 def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
                                     outputs_dir, plot_name, max_display=20, 
-                                    max_samples=2000, interpolate=False):
+                                    max_samples=2000, interpolate=False, registry=None):
     """
     Create a SHAP-style beeswarm plot showing feature importance.
     
@@ -104,7 +102,18 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
     
     Args:
         df: DataFrame with input and output data
-        input_parameters: List of input parameter names  
+        input_parameters: List of input parameter names
+        target: Target variable name
+        target_unit: Unit for target variable
+        outputs_dir: Directory to save plots
+        plot_name: Base name for saved plots
+        max_display: Maximum number of features to display
+        max_samples: Maximum samples to plot per feature
+        interpolate: If True, create smooth density plot
+        registry: ParameterRegistry instance (must be provided)
+    
+    Returns:
+        Tuple of (fig, ax, importance_dict)  
         target: Target output variable name
         target_unit: Unit string for target variable
         outputs_dir: Directory to save plot
@@ -341,27 +350,27 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
     # Labels need to be reversed because y_pos = n_features - plot_idx - 1
     # so the first feature (plot_idx=0) is at the TOP (highest y_pos)
     ax.set_yticks(range(n_features))
-    y_labels = [f"{get_param_symbol(param)} (|r|={sorted_importance[i]:.3f})" 
+    y_labels = [f"{registry.get_symbol(param)} (|r|={sorted_importance[i]:.3f})" 
                 for i, param in enumerate(sorted_params)]
     y_labels_reversed = y_labels[::-1]  # Reverse the labels!
     ax.set_yticklabels(y_labels_reversed, fontsize=10)
     ax.set_ylim(-0.8, n_features - 0.2)
     
     # Set x-axis label
-    target_label = get_param_symbol(target)
+    target_label = registry.get_symbol(target)
     ax.set_xlabel(f'Impact on {target_label} (correlation × standardized value)', fontsize=12)
     ax.axvline(x=0, color='#888888', linestyle='-', linewidth=1.0, alpha=0.8, zorder=0)
     ax.grid(axis='x', alpha=0.3, linestyle='--', linewidth=0.5)
     
     # Title with explanation
-    target_symbol = get_param_symbol(target)
+    target_symbol = registry.get_symbol(target)
     title_text = f'Feature Importance: {target_symbol}'
     if target_unit:
         title_text += f' [{target_unit}]'
     
     # Add subtitle with correlation info
     top_feature_corr = sorted_importance[0] if len(sorted_importance) > 0 else 0
-    top_feature_symbol = get_param_symbol(sorted_params[0]) if len(sorted_params) > 0 else ''
+    top_feature_symbol = registry.get_symbol(sorted_params[0]) if len(sorted_params) > 0 else ''
     subtitle = f'(Top feature: {top_feature_symbol} with |correlation|={top_feature_corr:.3f})'
     
     ax.set_title(title_text + '\n' + subtitle,
@@ -442,7 +451,7 @@ def save_importance_to_csv(df, input_parameters, target, outputs_dir, plot_name)
 def generate_shap_plots(df_filtered, target, input_parameters, target_unit, 
                        outputs_dir, file_type, plot_name,
                        max_display=20, max_samples=2000, save_csv=True, 
-                       interpolate=False):
+                       interpolate=False, registry=None):
     """
     Main function to generate SHAP-style plots for a target variable.
     
@@ -463,10 +472,16 @@ def generate_shap_plots(df_filtered, target, input_parameters, target_unit,
         max_samples: Maximum samples to plot per feature (default: 2000)
         save_csv: Whether to save importance rankings to CSV (default: True)
         interpolate: If True, create smooth density plot instead of scatter (default: False)
+        registry: ParameterRegistry instance (optional, will create if not provided)
     
     Returns:
         Dictionary with results and statistics
     """
+    # Get registry if not provided
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
+    
     if len(input_parameters) == 0:
         print(f"   No input parameters found for target '{target}'. Skipping SHAP plot.")
         return None
@@ -475,7 +490,7 @@ def generate_shap_plots(df_filtered, target, input_parameters, target_unit,
         # Generate beeswarm plot
         results = create_shap_style_beeswarm_plot(
             df_filtered, input_parameters, target, target_unit,
-            outputs_dir, plot_name, max_display, max_samples, interpolate
+            outputs_dir, plot_name, max_display, max_samples, interpolate, registry
         )
         
         # Save importance to CSV

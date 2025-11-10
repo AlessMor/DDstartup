@@ -9,11 +9,9 @@ import numpy as np
 import plotly.graph_objects as go
 
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
-from ddstartup.utils.tools import PARAM_UNITS
-from ddstartup.utils.parameter_symbols import get_param_symbol
 
 
-def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, file_type, output_path):
+def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, file_type, output_path, registry=None):
     """
     Generate a parallel coordinates plot using Plotly.
     
@@ -24,7 +22,13 @@ def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, 
         target_unit: Unit string for target variable
         file_type: Type of file (for plot title)
         output_path: Path to save HTML plot file
+        registry: ParameterRegistry instance (optional, will create if not provided)
     """
+    # Get registry if not provided
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
+    
     # Sample if too many rows
     max_plot_rows = int(1e6)
     if len(df_filtered) > max_plot_rows:
@@ -55,8 +59,8 @@ def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, 
         unique_vals = np.sort(np.unique(values))
         
         # Use symbol instead of parameter name
-        param_symbol = get_param_symbol(param)
-        unit = PARAM_UNITS.get(param, '')
+        param_symbol = registry.get_symbol(param)
+        unit = registry.get_unit(param)
         label = f"{param_symbol}<br>[{unit}]" if unit else param_symbol
         
         dim = dict(label=label, values=values, range=[values.min(), values.max()])
@@ -66,7 +70,7 @@ def generate_parcoords_plot(df_filtered, target, input_parameters, target_unit, 
     
     # Add target dimension
     values = df_filtered[target]
-    target_symbol = get_param_symbol(target)
+    target_symbol = registry.get_symbol(target)
     target_label = f"{target_symbol}<br>[{target_unit}]"
     dimensions.append(dict(label=target_label, values=values, range=[values.min(), values.max()]))
     

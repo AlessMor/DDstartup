@@ -42,21 +42,21 @@ parameters:
     unit: s
     description: Helium-3 particle confinement time
   
-  P_aux_field:
-    type: linear
-    min: 50
-    max: 80
-    points: 1
-    unit: MW
-    description: Auxiliary heating power
+  # P_aux_field:
+  #   type: linear
+  #   min: 50
+  #   max: 80
+  #   points: 1
+  #   unit: MW
+  #   description: Auxiliary heating power
   
-  P_aux_DT_eq_field:
-    type: linear
-    min: 50
-    max: 80
-    points: 1
-    unit: MW
-    description: Auxiliary power for DT equilibrium phase
+  # P_aux_DT_eq_field:
+  #   type: linear
+  #   min: 50
+  #   max: 80
+  #   points: 1
+  #   unit: MW
+  #   description: Auxiliary power for DT equilibrium phase
   
   TBR_DT_field:
     type: linear

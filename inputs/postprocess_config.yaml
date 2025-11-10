@@ -154,6 +154,7 @@ plots:
   kmeans: true           # KMeans clustering analysis
   contour: true          # 2D pairwise contour plots
   shap: true            # SHAP (SHapley Additive exPlanations) plots
+  ml_pairwise: true      # ML-based pairwise partial dependence plots
   
   # Plot-specific settings
   kde_settings:
@@ -191,6 +192,17 @@ plots:
       # - waterfall      # Waterfall plots for individual predictions
       # - force          # Force plots (interactive HTML)
       # - summary_violin # Violin plot distribution
+  
+  ml_pairwise_settings:
+    pairs: auto          # Pairs to plot: 'auto' (top 5x5), 'all', or list like [[0,1], [2,3]]
+                         # - 'auto': Plots top 5 most important parameters (10-15 plots)
+                         # - 'all': Plots all possible pairs (can be many plots!)
+                         # - Custom list: [[0,1], [2,4]] for specific parameter index pairs
+    grid_size: 60        # Resolution of PDP grid (60x60 = 3600 points per plot)
+    max_train_samples: 100000  # Maximum samples to use for ML model training
+    hidden: [256, 256, 128]    # MLP hidden layer sizes
+    verbose: false       # Print detailed training progress
+                         # Set to true for debugging or monitoring training
 
 
 # ============================================================================

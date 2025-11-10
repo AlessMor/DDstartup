@@ -37,6 +37,7 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+tests/htmlcov/
 htmlcov/
 .tox/
 .nox/
@@ -175,8 +176,9 @@ cython_debug/
 
 # large outputs
 outputs/*.html
-# Coverage reports
-htmlcov/
+
+# Coverage reports (now in tests/)
+tests/htmlcov/
 .coverage
 .coverage.*
 coverage.xml

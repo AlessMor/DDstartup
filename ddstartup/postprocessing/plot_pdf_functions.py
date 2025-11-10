@@ -10,12 +10,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, NullFormatter
 from scipy.stats import gaussian_kde
 
-from ..utils.parameter_symbols import get_param_label, get_param_symbol
-from ..utils.tools import PARAM_UNITS
-
 
 def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path, 
-                     smooth=False, kde_bandwidth='scott'):
+                     smooth=False, kde_bandwidth='scott', registry=None):
     """
     Generate a probability density function plot.
     
@@ -27,7 +24,13 @@ def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path,
         output_path: Path to save plot file
         smooth: If True, use KDE smoothing instead of histogram bins (default: False)
         kde_bandwidth: Bandwidth method for KDE ('scott', 'silverman', or float) (default: 'scott')
+        registry: ParameterRegistry instance (optional, will create if not provided)
     """
+    # Get registry if not provided
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
+    
     vmin = filters.get(var, {}).get('min', None)
     vmax = filters.get(var, {}).get('max', None)
     
@@ -96,17 +99,17 @@ def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path,
                     plt.plot(bin_centers[mask], counts[mask], drawstyle='steps-mid', label=f"{label}")
                     has_data = True
     
-    # Get unit for variable
-    unit = PARAM_UNITS.get(var, None)
+    # Get unit and symbol for variable
+    unit = registry.get_unit(var)
+    symbol = registry.get_symbol(var)
     
     # Format labels with symbols
-    xlabel = get_param_label(var, unit)
+    xlabel = f"{symbol} [{unit}]" if unit else symbol
     plt.xlabel(xlabel)
     plt.ylabel('Probability Density')
     
     # Add subtitle indicating mode
-    var_symbol = get_param_symbol(var)
-    title_text = f'PDF of {var_symbol}'
+    title_text = f'PDF of {symbol}'
     if smooth:
         title_text += '\n(Kernel Density Estimation)'
     

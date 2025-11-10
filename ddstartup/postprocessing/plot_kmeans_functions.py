@@ -16,11 +16,27 @@ from ddstartup.postprocessing.postprocess_functions import get_discrete_colorsca
 from ddstartup.utils.parameter_registry import get_registry
 
 
-def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot_name=None, save_csv=True):
+def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot_name=None, save_csv=True, registry=None):
+    """
+    Cluster data using KMeans and visualize distribution across target quartiles.
+    
+    Args:
+        df: DataFrame with data
+        inputs: List of input parameter names
+        target: Target variable name
+        outputs_dir: Directory to save outputs
+        n_clusters: Number of clusters (default: 5)
+        plot_name: Optional plot name prefix
+        save_csv: Whether to save cluster centers to CSV
+        registry: ParameterRegistry instance (optional, will create if not provided)
+    """
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)
     
-    registry = get_registry()
+    # Get registry if not provided
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
 
     X = df[inputs].copy()
     # Drop columns not present
