@@ -18,24 +18,15 @@ from typing import Dict, Any, List, Optional, Tuple
 from matplotlib.gridspec import GridSpec
 
 
-# LaTeX-style parameter names for consistent plotting
-LATEX_NAMES = {
-    "V_plasma": r"$V_{\mathrm{p}}$",
-    "T_i": r"$T_{\mathrm{i}}$",
-    "n_tot": r"$n_{\mathrm{tot}}$",
-    "tau_p_T": r"$\tau_{\mathrm{p,T}}$",
-    "tau_p_He3": r"$\tau_{\mathrm{p,He3}}$",
-    "P_aux": r"$P_{\mathrm{aux}}$",
-    "P_aux_DT_eq": r"$P_{\mathrm{aux,DT}}$",
-    "TBR_DT": r"$\mathrm{TBR_{DT}}$",
-    "TBR_DDn": r"$\mathrm{TBR_{DDn}}$",
-    "tau_ifc": r"$\tau_{\mathrm{ifc}}$",
-    "tau_ofc": r"$\tau_{\mathrm{ofc}}$",
-    "eta_th": r"$\eta_{\mathrm{th}}$",
-    "capacity_factor": r"$C_{\mathrm{f}}$",
-    "price_of_electricity": r"$c_{\mathrm{e}}$",
-    "I_target": r"$I_{\mathrm{target}}$"
-}
+def _get_latex_name(param_name: str) -> str:
+    """Get LaTeX-formatted parameter name from registry."""
+    try:
+        from ddstartup.utils.parameter_registry import get_registry
+        registry = get_registry()
+        return registry.get_symbol(param_name)
+    except:
+        # Fallback to parameter name if registry not available
+        return param_name
 
 
 def plot_confidence_intervals(
@@ -106,7 +97,7 @@ def plot_confidence_intervals(
     # Sort by mu_star
     sorted_indices = np.argsort(valid_mu_star)[::-1]
     sorted_names = [valid_names[i] for i in sorted_indices]
-    sorted_latex_names = [LATEX_NAMES.get(name, name) for name in sorted_names]
+    sorted_latex_names = [_get_latex_name(name) for name in sorted_names]
     sorted_mu = [valid_mu[i] for i in sorted_indices]
     sorted_mu_star = [valid_mu_star[i] for i in sorted_indices]
     sorted_ci95 = [valid_ci95[i] for i in sorted_indices]
@@ -190,7 +181,7 @@ def plot_morris_scatter(
     
     # Add parameter labels
     for i, name in enumerate(valid_names):
-        latex_name = LATEX_NAMES.get(name, name)
+        latex_name = _get_latex_name(name)
         ax.annotate(latex_name, (valid_mu_star[i], valid_sigma_star[i]), 
                    textcoords="offset points", xytext=(0, 10), ha='center',
                    fontsize=10)
@@ -262,7 +253,7 @@ def plot_box_plots(
                 values = values[(values >= lower_bound) & (values <= upper_bound)]
             
             df_list.append(pd.DataFrame({
-                'Parameter': [LATEX_NAMES.get(param, param)] * len(values),
+                'Parameter': [_get_latex_name(param)] * len(values),
                 'Elementary Effect': values
             }))
     
@@ -273,7 +264,7 @@ def plot_box_plots(
     df = pd.concat(df_list, ignore_index=True)
     
     # Sort by μ*
-    sort_values = {LATEX_NAMES.get(param, param): mu_star.get(param, 0) 
+    sort_values = {_get_latex_name(param): mu_star.get(param, 0) 
                    for param in param_names}
     param_order = sorted(sort_values.keys(), key=lambda p: sort_values[p], reverse=True)
     

@@ -82,7 +82,7 @@ parameters:
   
   capacity_factor_field:
     type: vector
-    values: [0.15, 0.35, 0.8, 0.9]
+    values: [0.15, 0.35, 0.5, 0.7, 0.9]
     unit: dimensionless
     description: Plant capacity factor (constant)
   

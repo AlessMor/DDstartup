@@ -51,17 +51,24 @@ def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any
     from ddstartup.methods.parametric_computation import _compute_tseeded
     
     # Use the exact parameter order expected by _compute_tseeded
-    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq',
-                   'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'capacity_factor', 'price_of_electricity']
+    # Note: T-seeded does NOT use tau_p_He3 or I_target (those are for lump model)
+    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'P_aux', 'P_aux_DT_eq',
+                   'TBR_DT', 'TBR_DDn', 'tau_ifc', 'tau_ofc', 'eta_th', 'capacity_factor', 'price_of_electricity']
     
     param_vector = [params_dict[name] for name in param_names]
     temp_arrays = [np.array([val]) for val in param_vector]
     param_shapes = tuple([1] * len(param_names))
     
+    # Get simulation parameters from config
+    max_simulation_time = config.get('max_simulation_time', 315360000)  # Default: 10 years
+    vector_length = config.get('vector_length', 200)
+    
     result = _compute_tseeded(
         linear_index=0,
         input_arrays_flat=temp_arrays,
         param_shapes_array=param_shapes,
+        max_simulation_time=max_simulation_time,
+        vector_length=vector_length,
         reactivity_lookup=None
     )
     return result
@@ -69,7 +76,7 @@ def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any
 
 def generate_trajectory(
     param_ranges: Dict[str, Tuple[float, float]],
-    p: int = 4,
+    perturbation_perc = 0.7,
     seed: int = None
 ) -> Tuple[List[np.ndarray], List[str]]:
     """
@@ -115,7 +122,8 @@ def generate_trajectory(
         param_range = max_val - min_val
         
         # Calculate perturbation size
-        delta = p / (2 * (p - 1)) * param_range
+        frac = np.random.random() * perturbation_perc
+        delta = frac * param_range
         
         # Apply perturbation, ensuring bounds
         if current_point[param_idx] + delta <= max_val:
@@ -129,7 +137,7 @@ def generate_trajectory(
 
 
 def compute_trajectory_worker(
-    args: Tuple[int, List[np.ndarray], List[str], List[str], str]
+    args: Tuple[int, List[np.ndarray], List[str], List[str], str, Dict[str, Any], Dict[str, Tuple[float, float]]]
 ) -> Dict[str, Any]:
     """
     Worker function to compute a single trajectory.
@@ -141,11 +149,13 @@ def compute_trajectory_worker(
             - param_order: Order of parameter perturbations
             - param_names: List of all parameter names
             - analysis_type: 'lump' or 'T_seeded'
+            - config: Configuration dictionary with simulation parameters
+            - param_ranges: Dictionary of parameter ranges {name: (min, max)}
             
     Returns:
         Dictionary with elementary effects for each parameter
     """
-    traj_id, points, param_order, param_names, analysis_type = args
+    traj_id, points, param_order, param_names, analysis_type, config, param_ranges = args
     
     # Select appropriate evaluation function
     if analysis_type == 'lump':
@@ -163,7 +173,7 @@ def compute_trajectory_worker(
     # Evaluate base point
     try:
         base_params_dict = point_to_dict(points[0])
-        base_result = evaluate_func(base_params_dict, {})
+        base_result = evaluate_func(base_params_dict, config)
         # Check if computation was successful
         if not base_result.get('sol_success', False):
             return {'success': False, 'traj_id': traj_id, 'error': 'Base point failed'}
@@ -182,7 +192,7 @@ def compute_trajectory_worker(
         
         try:
             perturbed_params_dict = point_to_dict(perturbed_point)
-            perturbed_result = evaluate_func(perturbed_params_dict, {})
+            perturbed_result = evaluate_func(perturbed_params_dict, config)
             # Check if computation was successful
             if not perturbed_result.get('sol_success', False):
                 continue
@@ -195,12 +205,17 @@ def compute_trajectory_worker(
         parameter_change = perturbed_point[param_idx] - current_point[param_idx]
         
         if parameter_change != 0:
+            # Get parameter range for normalization
+            param_min, param_max = param_ranges[param_name]
+            param_range = param_max - param_min
+            
             # Store elementary effects for all output variables
             ee_dict[param_name].append({
                 'point': current_point.copy(),
                 'outputs': current_output,
                 'perturbed_outputs': perturbed_output,
-                'delta': parameter_change
+                'delta': parameter_change,
+                'param_range': param_range  # Store range for normalization
             })
         
         # Move to next point
@@ -236,7 +251,7 @@ def run_elementary_effects_analysis(
     # Extract configuration
     analysis_type = config['analysis_type']
     num_trajectories = config.get('num_trajectories', 10)
-    p_levels = config.get('p_levels', 4)
+    perturbation_perc = config.get('perturbation_perc', 0.7)
     n_jobs = config.get('n_jobs', 1)
     output_metrics = config.get('output_metrics', ['t_startup', 'unrealized_gains'])
     
@@ -263,7 +278,7 @@ def run_elementary_effects_analysis(
         print(f"Analysis type: {analysis_type}")
         print(f"Parameters: {num_params}")
         print(f"Trajectories: {num_trajectories}")
-        print(f"Grid levels (p): {p_levels}")
+        print(f"Perturbation percentage: {perturbation_perc}")
         print(f"Total evaluations: {total_evaluations}")
         print(f"Parallel workers: {n_jobs}")
         print(f"Output metrics: {output_metrics}")
@@ -277,8 +292,8 @@ def run_elementary_effects_analysis(
     
     trajectories = []
     for traj_id in range(num_trajectories):
-        points, param_order = generate_trajectory(param_ranges, p=p_levels, seed=traj_id)
-        trajectories.append((traj_id, points, param_order, param_names, analysis_type))
+        points, param_order = generate_trajectory(param_ranges, seed=traj_id)
+        trajectories.append((traj_id, points, param_order, param_names, analysis_type, config, param_ranges))
     
     # Compute trajectories in parallel
     if verbose:
@@ -308,6 +323,8 @@ def run_elementary_effects_analysis(
     for metric in output_metrics:
         # Collect all elementary effects for this metric
         all_ee = {name: [] for name in param_names}
+        output_min = float('inf')
+        output_max = float('-inf')
         
         for result in results:
             if not result.get('success', False):
@@ -320,19 +337,26 @@ def run_elementary_effects_analysis(
                     current_val = ee_data['outputs'].get(metric, np.nan)
                     perturbed_val = ee_data['perturbed_outputs'].get(metric, np.nan)
                     delta = ee_data['delta']
+                    param_range = ee_data['param_range']
                     
                     if np.isfinite(current_val) and np.isfinite(perturbed_val) and delta != 0:
+                        # Track min/max output values to calculate output range
+                        output_min = min(output_min, current_val, perturbed_val)
+                        output_max = max(output_max, current_val, perturbed_val)
+                        
+                        # Calculate elementary effect
                         ee = (perturbed_val - current_val) / delta
+                        
+                        # FIRST NORMALIZATION: Multiply by parameter range
+                        # This makes effects comparable across parameters with different scales
+                        ee = ee * param_range
+                        
                         if np.isfinite(ee):
                             all_ee[param_name].append(ee)
         
-        # Normalize by output range
-        all_values = []
-        for param_ee in all_ee.values():
-            all_values.extend(param_ee)
-        
-        if len(all_values) > 0:
-            output_range = np.max(all_values) - np.min(all_values)
+        # Calculate output range from actual output values
+        if output_min != float('inf') and output_max != float('-inf'):
+            output_range = output_max - output_min
             if output_range == 0:
                 output_range = 1.0
         else:
@@ -348,7 +372,8 @@ def run_elementary_effects_analysis(
             effects = np.array(all_ee[param_name])
             
             if len(effects) > 0:
-                # Normalize by output range
+                # SECOND NORMALIZATION: Divide by output range
+                # This makes effects interpretable as fractional output changes
                 normalized_effects = effects / output_range
                 
                 mu[param_name] = float(np.mean(normalized_effects))
@@ -382,7 +407,7 @@ def run_elementary_effects_analysis(
         f.attrs['method'] = 'elementary_effects'
         f.attrs['num_trajectories'] = num_trajectories
         f.attrs['num_parameters'] = num_params
-        f.attrs['p_levels'] = p_levels
+        f.attrs['perturbation_perc'] = perturbation_perc
         f.attrs['total_evaluations'] = total_evaluations
         f.attrs['successful_trajectories'] = successful_trajectories
         f.attrs['computation_time'] = computation_time
