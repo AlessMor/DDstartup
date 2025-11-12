@@ -84,12 +84,12 @@ def sigmav_DD_BoschHale(ion_temp_profile: float64) -> tuple[float64, float64, fl
     etaBH_1: float = cBH_1[0] / (thetaBH_1 ** (1.0 / 3.0))
     etaBH_2: float = cBH_2[0] / (thetaBH_2 ** (1.0 / 3.0))
 
-    sigmav_1: float64= cBH_1[1] * thetaBH_1 * np.sqrt(etaBH_1 / (mc2_1 * (ion_temp_profile**3.0))) * np.exp(-3.0 * etaBH_1)
-    sigmav_2: float64= cBH_2[1] * thetaBH_2 * np.sqrt(etaBH_2 / (mc2_2 * (ion_temp_profile**3.0))) * np.exp(-3.0 * etaBH_2)
-    sigmav_tot: float64= sigmav_1 + sigmav_2
+    sigmav_DDn: float64= cBH_1[1] * thetaBH_1 * np.sqrt(etaBH_1 / (mc2_1 * (ion_temp_profile**3.0))) * np.exp(-3.0 * etaBH_1)
+    sigmav_DDp: float64= cBH_2[1] * thetaBH_2 * np.sqrt(etaBH_2 / (mc2_2 * (ion_temp_profile**3.0))) * np.exp(-3.0 * etaBH_2)
+    sigmav_tot: float64= sigmav_DDn + sigmav_DDp
 
-    
-    return sigmav_tot*1e-6, sigmav_1*1e-6, sigmav_2*1e-6  # [m^3/s]
+    # (total, D(d,p)T, D(d,n)3He)
+    return sigmav_tot*1e-6, sigmav_DDn*1e-6, sigmav_DDp*1e-6  # [m^3/s]
 
 
 def sigmav_DHe3_BoschHale(ion_temp_profile: float64) -> float64:

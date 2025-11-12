@@ -234,27 +234,34 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         from ddstartup.utils.physics_cache import get_cached_reaction_rates
         sigmav_DD_p, sigmav_DD_n, sigmav_DT = get_cached_reaction_rates(T_i, include_DHe3=False)
     
-    # Calculate P_aux from power balance if not provided or NaN
-    # For T-seeded, we use equilibrium composition (n_T = n_D = n_tot/2)
-    if P_aux is None or (isinstance(P_aux, float) and np.isnan(P_aux)):
-        n_eq = n_tot / 2.0
-        P_aux = calculate_P_aux_from_power_balance(
-            n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
-        )
+    # Determine if P_aux needs to be computed (will be time-dependent vector if computed)
+    compute_P_aux = P_aux is None or (isinstance(P_aux, float) and np.isnan(P_aux))
+    compute_P_aux_DT_eq = P_aux_DT_eq is None or (isinstance(P_aux_DT_eq, float) and np.isnan(P_aux_DT_eq))
     
-    if P_aux_DT_eq is None or (isinstance(P_aux_DT_eq, float) and np.isnan(P_aux_DT_eq)):
+    # For initial ODE solving, use equilibrium values if P_aux not provided
+    if compute_P_aux:
         n_eq = n_tot / 2.0
-        P_aux_DT_eq = calculate_P_aux_from_power_balance(
+        P_aux_initial = calculate_P_aux_from_power_balance(
             n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
         )
+    else:
+        P_aux_initial = P_aux
+    
+    if compute_P_aux_DT_eq:
+        n_eq = n_tot / 2.0
+        P_aux_DT_eq_initial = calculate_P_aux_from_power_balance(
+            n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
+        )
+    else:
+        P_aux_DT_eq_initial = P_aux_DT_eq
     
     # Precompute injection_rate_max and N_st_min
     injection_rate_max = (n_tot/2/tau_p_T*V_plasma + 0.25*n_tot**2*sigmav_DT*V_plasma - 
                          0.25/2*n_tot**2*sigmav_DD_p*V_plasma)
-    N_st_min = 0.001 / 1.672621777e-27  # Minimum storage tritium (approx 0.001/tritium_mass)
+    N_st_min = 0.001 / tritium_mass  # Minimum storage tritium (0.001 kg)
     
     # Solve ODE system (pure physics solver - no power/economics parameters)
-    # Updated signature: V_plasma first, max_simulation_time moved to end with default
+    # Note: ODE solver doesn't use P_aux, so we pass initial estimates for now
     ode_results = solve_ode_system(
         V_plasma, n_tot, tau_p_T,
         TBR_DT, TBR_DDn, tau_ifc, tau_ofc,
@@ -301,6 +308,34 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
     n_D = n_tot - n_T
     t_startup = ode_results['t_startup']
     
+    # Compute time-dependent P_aux vectors if they were computed from power balance
+    if compute_P_aux:
+        # Calculate P_aux as time-dependent vector from power balance
+        P_aux_vector = np.array([
+            calculate_P_aux_from_power_balance(
+                n_T_val, n_D_val, T_i, V_plasma, 
+                sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
+            ) for n_T_val, n_D_val in zip(n_T, n_D)
+        ])
+        # For energy calculations, use time-averaged value
+        P_aux_for_energy = np.mean(P_aux_vector)
+    else:
+        # P_aux was provided as scalar input
+        P_aux_vector = P_aux  # Keep as scalar - will be saved as scalar
+        P_aux_for_energy = P_aux
+    
+    if compute_P_aux_DT_eq:
+        # Calculate P_aux_DT_eq at equilibrium (constant)
+        n_eq = n_tot / 2.0
+        P_aux_DT_eq_vector = calculate_P_aux_from_power_balance(
+            n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
+        )
+        P_aux_DT_eq_for_energy = P_aux_DT_eq_vector
+    else:
+        # P_aux_DT_eq was provided as scalar input
+        P_aux_DT_eq_vector = P_aux_DT_eq
+        P_aux_DT_eq_for_energy = P_aux_DT_eq
+    
     # Compute powers and energies
     power_results = compute_tseeded_powers_and_energies(
         t_startup, t, n_T, n_D,
@@ -308,7 +343,7 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         n_tot, V_plasma,
         sigmav_DD_p, sigmav_DD_n, sigmav_DT,
         tau_ifc,
-        P_aux, P_aux_DT_eq,
+        P_aux_for_energy, P_aux_DT_eq_for_energy,
         injection_rate_max, 0.001/tritium_mass,
         vector_length
     )
@@ -379,7 +414,10 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         'Q_DT_eq': econ_results['Q_DT_eq'],
         'E_lost': econ_results['E_lost'],
         'unrealized_profits': econ_results['unrealized_profits'],
-        'TBE': power_results['TBE']
+        'TBE': power_results['TBE'],
+        # Update P_aux and P_aux_DT_eq with computed vectors or keep as scalars
+        'P_aux': fix_vector_length(P_aux_vector, vector_length) if compute_P_aux else P_aux,
+        'P_aux_DT_eq': P_aux_DT_eq_vector if compute_P_aux_DT_eq else P_aux_DT_eq
     })
     
     return result_dict
@@ -444,14 +482,23 @@ def run_parametric_analysis(
         original_n_combinations = None
     
     # Prepare parameter arrays
+    # Replace None values with scalar NaN arrays (will be computed during analysis)
     param_names = list(input_data.keys())
-    param_shapes = [arr.shape[0] for arr in input_data.values()]
+    param_arrays_processed = []
+    for arr in input_data.values():
+        if arr is None:
+            # Create a scalar array with NaN for parameters that will be calculated
+            param_arrays_processed.append(np.array([np.nan]))
+        else:
+            param_arrays_processed.append(arr)
+    
+    param_shapes = [arr.shape[0] for arr in param_arrays_processed]
     
     # For filtered data, all arrays are already flattened to the same length
     if filter_expr:
-        n_combinations = param_shapes[0]  # All have same length after filtering
+        n_combinations = param_shapes[0] if param_shapes else 0  # All have same length after filtering
     else:
-        n_combinations = np.prod(param_shapes)
+        n_combinations = np.prod(param_shapes) if param_shapes else 0
     
     if verbose:
         print(f"\n{'='*60}")
@@ -468,8 +515,8 @@ def run_parametric_analysis(
         print(f"Batch size: {batch_size}")
         print(f"{'='*60}\n")
     
-    # Flatten arrays for easier indexing
-    input_arrays = [np.asarray(arr) for arr in input_data.values()]
+    # Use the processed arrays (None replaced with NaN scalars)
+    input_arrays = [np.asarray(arr) for arr in param_arrays_processed]
     
     if filter_expr:
         # For filtered data: arrays are already 1D with aligned indices
@@ -624,9 +671,33 @@ def run_parametric_analysis(
                     )
         
         # Save parameter grids
+        # Tests and postprocessing may expect per-combination (flattened) arrays
+        # under parameter_fields/<name>_values. When no filtering is applied we
+        # expand the parameter axes into full-length arrays (n_combinations,) so
+        # that they directly match root datasets. If filtering was applied the
+        # input arrays are already aligned (length == n_combinations) and can
+        # be written as-is.
         param_group = h5_file.create_group('parameter_fields')
-        for name, arr in zip(param_names, input_arrays):
-            param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
+        try:
+            if filter_expr:
+                # Already flattened/aligned arrays
+                for name, arr in zip(param_names, input_arrays):
+                    param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
+            else:
+                # Expand parameter axes into full grid and flatten in 'C' order
+                # Use indexing='ij' to match the ordering used by index_to_params
+                if len(input_arrays) > 0:
+                    grids = np.meshgrid(*input_arrays, indexing='ij')
+                    for name, grid in zip(param_names, grids):
+                        param_group.create_dataset(f'{name}_values', data=grid.flatten(), compression='gzip')
+                else:
+                    # No parameters: create empty datasets if needed
+                    for name, arr in zip(param_names, input_arrays):
+                        param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
+        except Exception:
+            # Fallback: write axis arrays if meshgrid expansion fails for any reason
+            for name, arr in zip(param_names, input_arrays):
+                param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
         
         # ========== REACTIVITY LOOKUP TABLE (NEW OPTIMIZATION) ==========
         # Pre-compute reactivity lookup table for all unique T_i values

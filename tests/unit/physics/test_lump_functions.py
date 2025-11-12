@@ -40,7 +40,7 @@ def default_params():
     # Get reaction rates at T_i = 14 keV
     # sigmav_DD_BoschHale returns (total, D(d,p)T, D(d,n)3He)
     sigmav_DT = sigmav_DT_BoschHale(np.array([T_i]))[0]
-    sigmav_DD_tot, sigmav_DD_p, sigmav_DD_n = sigmav_DD_BoschHale(np.array([T_i]))
+    sigmav_DD_tot, sigmav_DD_n, sigmav_DD_p = sigmav_DD_BoschHale(np.array([T_i]))
     sigmav_DD_p = sigmav_DD_p[0]
     sigmav_DD_n = sigmav_DD_n[0]
     sigmav_DHe3 = sigmav_DHe3_BoschHale(np.array([T_i]))[0]
@@ -80,7 +80,7 @@ class TestLumpSolver:
         assert result['error'] is None, "Error should be None for successful solution"
         
         # 3. EXACT SOLUTION TEST - Most important check first
-        correct_values = [2.305894507842049e+16, 2e+20, 2.5647095204978436e+16, 36016425.5998253]
+        correct_values = [2.447424457066349e+16, 2e+20, 2.4163971968373064e+16, 35240795.63907579]
         assert np.isclose(result['n_T'], correct_values[0], rtol=1e-10), \
             f"n_T should be approximately {correct_values[0]:.6e}, it is {result['n_T']}"
         assert np.isclose(result['n_D'], correct_values[1], rtol=1e-10), \

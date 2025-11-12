@@ -68,7 +68,7 @@ class ReactivityLookupTable:
         then stores in dictionaries for O(1) lookup.
         """
         # Vectorized computation (much faster than loop)
-        sigmav_DD_tot, sigmav_DD_p_arr, sigmav_DD_n_arr = sigmav_DD_BoschHale(self.temperatures)
+        sigmav_DD_tot, sigmav_DD_n_arr, sigmav_DD_p_arr = sigmav_DD_BoschHale(self.temperatures)
         sigmav_DT_arr = sigmav_DT_BoschHale(self.temperatures)
         
         if self.include_DHe3:

@@ -25,7 +25,7 @@ def profile_tseeded_single_case():
     # Get reactivities
     print("Getting reactivities...")
     t0 = time.time()
-    sigmav_DD_p, sigmav_DD_n, _ = sigmav_DD_BoschHale(T_i)
+    _, sigmav_DD_n, sigmav_DD_p = sigmav_DD_BoschHale(T_i)
     sigmav_DT = sigmav_DT_BoschHale(T_i)
     reactivity_time = time.time() - t0
     print(f"  Reactivity lookup: {reactivity_time*1000:.2f} ms")
@@ -83,7 +83,7 @@ def profile_tseeded_batch():
     for V_plasma in V_plasma_values:
         for T_i in T_i_values:
             # Get reactivities once per T_i
-            sigmav_DD_p, sigmav_DD_n, _ = sigmav_DD_BoschHale(T_i)
+            _, sigmav_DD_n, sigmav_DD_p = sigmav_DD_BoschHale(T_i)
             sigmav_DT = sigmav_DT_BoschHale(T_i)
             
             for n_tot in n_tot_values:

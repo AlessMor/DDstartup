@@ -25,7 +25,7 @@ class TestReactivities:
         """Test that DT reactivity returns positive value."""
         T_i = 1  # keV
         react_DT = sigmav_DT_BoschHale(T_i)
-        react_DD_tot, react_DD_d_p, react_DD_d_n = sigmav_DD_BoschHale(T_i)
+        react_DD_tot, react_DD_d_n, react_DD_d_p = sigmav_DD_BoschHale(T_i)
         react_DHe3 = sigmav_DHe3_BoschHale(T_i)
 
         assert react_DT > 0, "DT reactivity should be positive"
@@ -49,7 +49,7 @@ class TestReactivities:
         T_i = 14  # keV
         
         react_DT = sigmav_DT_BoschHale(T_i)
-        react_DD_tot, react_DD_d_p, react_DD_d_n = sigmav_DD_BoschHale(T_i)
+        react_DD_tot, react_DD_d_n, react_DD_d_p = sigmav_DD_BoschHale(T_i)
         react_DHe3 = sigmav_DHe3_BoschHale(T_i)
 
         assert react_DT > react_DD_tot, "DT reactivity should be higher than DD total reactivity"
@@ -78,7 +78,7 @@ class TestReactivities:
             100: 1.6e-16*1e-6
         }
         for T_i, expected_DD in DD_values.items():
-            calc_DD_tot, calc_DD_d_p, calc_DD_d_n = sigmav_DD_BoschHale(T_i)
+            calc_DD_tot, calc_DD_d_n, calc_DD_d_p = sigmav_DD_BoschHale(T_i)
             assert np.isclose(calc_DD_tot, expected_DD, rtol=0.1), f"DD reactivity at {T_i} keV deviates from expected value"
         for T_i, expected_DT in DT_values.items():
             calc_DT = sigmav_DT_BoschHale(T_i)

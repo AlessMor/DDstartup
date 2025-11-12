@@ -34,8 +34,8 @@ def test_comparison():
     from ddstartup.physics.reactivity_functions import sigmav_DD_BoschHale, sigmav_DT_BoschHale
     T_i_array = np.array([T_i])
     sigmav_DD_results = sigmav_DD_BoschHale(T_i_array)
-    sigmav_DD_p = sigmav_DD_results[1][0]
-    sigmav_DD_n = sigmav_DD_results[2][0]
+    sigmav_DD_p = sigmav_DD_results[2][0]
+    sigmav_DD_n = sigmav_DD_results[1][0]
     sigmav_DT = sigmav_DT_BoschHale(T_i_array)[0]
     
     from ddstartup.physics.lump_functions import calculate_P_aux_lump

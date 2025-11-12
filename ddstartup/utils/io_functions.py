@@ -158,14 +158,20 @@ def prepare_input_data(param_fields: Dict[str, Any], analysis_type: str) -> Dict
         quantity = values * u(unit_str)
         return quantity.to(target_unit).magnitude
     
+    def convert_optional_field(field_name: str, target_unit: str):
+        """Convert optional parameter field, return None if not present."""
+        if field_name in param_fields and param_fields[field_name] is not None:
+            return convert_to_unit(param_fields[field_name], target_unit)
+        return None
+    
     if analysis_type == 'T_seeded':
         input_data = {
             'V_plasma': convert_to_unit(param_fields['V_plasma_field'], 'm^3'),
             'T_i': convert_to_unit(param_fields['T_i_field'], 'keV'),
             'n_tot': convert_to_unit(param_fields['n_tot_field'], '1/m^3'),
             'tau_p_T': convert_to_unit(param_fields['tau_p_T_field'], 's'),
-            'P_aux': convert_to_unit(param_fields['P_aux_field'], 'W'),
-            'P_aux_DT_eq': convert_to_unit(param_fields['P_aux_DT_eq_field'], 'W'),
+            'P_aux': convert_optional_field('P_aux_field', 'W'),
+            'P_aux_DT_eq': convert_optional_field('P_aux_DT_eq_field', 'W'),
             'TBR_DT': convert_to_unit(param_fields['TBR_DT_field'], 'dimensionless'),
             'TBR_DDn': convert_to_unit(param_fields['TBR_DDn_field'], 'dimensionless'),
             'tau_ifc': convert_to_unit(param_fields['tau_ifc_field'], 's'),
@@ -181,8 +187,8 @@ def prepare_input_data(param_fields: Dict[str, Any], analysis_type: str) -> Dict
             'n_tot': convert_to_unit(param_fields['n_tot_field'], '1/m^3'),
             'tau_p_T': convert_to_unit(param_fields['tau_p_T_field'], 's'),
             'tau_p_He3': convert_to_unit(param_fields['tau_p_He3_field'], 's'),
-            'P_aux': convert_to_unit(param_fields['P_aux_field'], 'W'),
-            'P_aux_DT_eq': convert_to_unit(param_fields['P_aux_DT_eq_field'], 'W'),
+            'P_aux': convert_optional_field('P_aux_field', 'W'),
+            'P_aux_DT_eq': convert_optional_field('P_aux_DT_eq_field', 'W'),
             'TBR_DT': convert_to_unit(param_fields['TBR_DT_field'], 'dimensionless'),
             'TBR_DDn': convert_to_unit(param_fields['TBR_DDn_field'], 'dimensionless'),
             'I_target': convert_to_unit(param_fields['I_target_field'], 'kg'),
@@ -238,10 +244,14 @@ def print_configuration(
     
     print("\nInput parameter fields:")
     for name, arr in input_data.items():
-        print(f"  {name:20s}: shape={arr.shape}, range=[{arr.min():.3e}, {arr.max():.3e}]")
+        if arr is None:
+            print(f"  {name:20s}: None (will be calculated)")
+        else:
+            print(f"  {name:20s}: shape={arr.shape}, range=[{arr.min():.3e}, {arr.max():.3e}]")
     
-    param_shapes = [arr.shape[0] for arr in input_data.values()]
-    n_combinations = np.prod(param_shapes)
+    # Count only non-None parameters for combinations
+    param_shapes = [arr.shape[0] for arr in input_data.values() if arr is not None]
+    n_combinations = np.prod(param_shapes) if param_shapes else 0
     print(f"\nTotal parameter combinations: {n_combinations:,}")
     print("="*60 + "\n")
 

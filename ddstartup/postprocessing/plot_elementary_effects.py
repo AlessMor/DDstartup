@@ -263,12 +263,12 @@ def plot_box_plots(
     
     df = pd.concat(df_list, ignore_index=True)
     
-    # Sort by μ*
+    # Sort parameters by μ* (importance) - highest to lowest
     sort_values = {_get_latex_name(param): mu_star.get(param, 0) 
                    for param in param_names}
     param_order = sorted(sort_values.keys(), key=lambda p: sort_values[p], reverse=True)
     
-    # Create plot
+    # Create plot with parameters ordered by importance (highest μ* at top)
     fig, ax = plt.subplots(figsize=figsize)
     
     sns.boxplot(x='Elementary Effect', y='Parameter', data=df,
@@ -280,7 +280,24 @@ def plot_box_plots(
     ax.grid(True, linestyle='--', alpha=0.6, axis='x')
     ax.set_xlabel('Normalized Elementary Effect')
     ax.set_ylabel('')
-    ax.set_title(f'Elementary Effects Distribution - {metric_name.replace("_", " ").title()}')
+    
+    # Add μ* values as text annotations on the right side
+    for i, param_latex in enumerate(param_order):
+        # Find original parameter name
+        original_param = None
+        for p in param_names:
+            if _get_latex_name(p) == param_latex:
+                original_param = p
+                break
+        if original_param:
+            mu_star_val = mu_star.get(original_param, 0)
+            # Add annotation showing μ* value
+            ax.text(0.98, i, f'μ*={mu_star_val:.4f}', 
+                   transform=ax.get_yaxis_transform(),
+                   ha='right', va='center', fontsize=9,
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.7))
+    
+    ax.set_title(f'Elementary Effects Distribution - {metric_name.replace("_", " ").title()}\n(Sorted by μ* = importance)')
     
     plt.tight_layout()
     output_path = output_dir / f'ee_box_plot_{metric_name}.png'

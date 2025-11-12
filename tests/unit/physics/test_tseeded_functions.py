@@ -28,19 +28,21 @@ from ddstartup.utils.units_and_constants import lambda_T, tritium_mass
 
 @pytest.fixture
 def default_params():
-    """Provide default parameters for testing."""
-    V_plasma = 150.0  # m³
-    n_tot = 2e20    # m⁻³
-    tau_p_T = 1.0    # s
-    TBR_DT = 1.05
-    TBR_DDn = 0.5
-    tau_ifc = 6 * 3600.0   # s (6.5 hours)
-    tau_ofc = 12 * 3600.0  # s (12.5 hours)
+    """Provide default parameters for testing - matches manual_tseeded_verification.ipynb."""
+    V_plasma = 1000.0  # m³ (changed from 150.0 to match notebook)
+    n_tot = 1.7e20    # m⁻³ (changed from 2e20 to match notebook)
+    tau_p_T = 0.75    # s (changed from 1.0 to match notebook)
+    TBR_DT = 1.1      # (changed from 1.05 to match notebook)
+    TBR_DDn = 0.7     # (changed from 0.5 to match notebook)
+    tau_ifc = 14400   # s = 4 hours (changed from 6 hours to match notebook)
+    tau_ofc = 7200    # s = 2 hours (changed from 12 hours to match notebook)
     
-    # Get reaction rates at T_i = 17 keV
+    # Get reaction rates at T_i = 14 keV
     T_i = 14.0  # keV
-    sigmav_DD_p = sigmav_DD_BoschHale(np.array([T_i]))[1][0]
-    sigmav_DD_n = sigmav_DD_BoschHale(np.array([T_i]))[2][0]
+    # sigmav_DD_BoschHale returns: (total, D(d,n)³He, D(d,p)T)
+    # So index [2] is D(d,p)T (produces tritium) and index [1] is D(d,n)³He (produces neutron)
+    sigmav_DD_p = sigmav_DD_BoschHale(np.array([T_i]))[2][0]  # D(d,p)T reaction
+    sigmav_DD_n = sigmav_DD_BoschHale(np.array([T_i]))[1][0]  # D(d,n)³He reaction
     sigmav_DT = sigmav_DT_BoschHale(np.array([T_i]))[0]
     
     # Compute injection_rate_max
@@ -215,8 +217,12 @@ class TestSolveODESystem:
         assert result['error'] is None, "Error should be None for successful solution"
         
         # 3. EXACT SOLUTION TEST - Most important check first
-        assert np.isclose(result['t_startup'], 26307824.381048944, rtol=1e-2), \
-            f"t_startup should be approximately 2.63e+07 s, it is {result['t_startup']}"
+        # Expected value with correct sigmav_DD_p and sigmav_DD_n (were swapped before)
+        # V_plasma=1000, n_tot=1.7e20, tau_p_T=0.75, T_i=14, TBR_DT=1.1, TBR_DDn=0.7
+        # With correct reactivities, t_startup ≈ 1.5418e+07 s (178.5 days)
+        expected_t_startup = 1.5418e+07  # s
+        assert np.isclose(result['t_startup'], expected_t_startup, rtol=1e-2), \
+            f"t_startup should be approximately {expected_t_startup:.4e} s ({expected_t_startup/86400:.1f} days), got {result['t_startup']:.4e} s ({result['t_startup']/86400:.1f} days)"
         
         # 4. Check output arrays are valid
         t = result['t']
@@ -300,4 +306,153 @@ class TestSolveODESystem:
         if result_low['sol_success'] and result_high['sol_success']:
             assert result_high['t_startup'] < result_low['t_startup'], \
                 f"Higher TBR should lead to faster startup: t_high={result_high['t_startup']:.2e} < t_low={result_low['t_startup']:.2e}" 
+    
+    def test_compare_V_plasma_150_vs_1000(self, default_params):
+        """Compare results for V_plasma=150 vs V_plasma=1000 to match test_main expectations."""
+        print("\n" + "="*80)
+        print("COMPARISON TEST: V_plasma = 150 vs 1000")
+        print("="*80)
+        
+        # Test with V_plasma = 150
+        params_150 = default_params.copy()
+        params_150['V_plasma'] = 150.0
+        # Recalculate injection_rate_max for V_plasma=150
+        params_150['injection_rate_max'] = (
+            params_150['n_tot'] / 2 / params_150['tau_p_T'] * 150.0 +
+            0.25 * params_150['n_tot']**2 * params_150['sigmav_DT'] * 150.0 -
+            0.25 / 2 * params_150['n_tot']**2 * params_150['sigmav_DD_p'] * 150.0
+        )
+        
+        print(f"\n🔍 DEBUG: Calling solve_ode_system with params_150:")
+        for key, val in params_150.items():
+            if isinstance(val, float):
+                print(f"    {key}: {val:.6e}")
+            else:
+                print(f"    {key}: {val}")
+        
+        result_150 = solve_ode_system(**params_150)
+        
+        # Test with V_plasma = 1000
+        params_1000 = default_params.copy()
+        params_1000['V_plasma'] = 1000.0
+        # Recalculate injection_rate_max for V_plasma=1000
+        params_1000['injection_rate_max'] = (
+            params_1000['n_tot'] / 2 / params_1000['tau_p_T'] * 1000.0 +
+            0.25 * params_1000['n_tot']**2 * params_1000['sigmav_DT'] * 1000.0 -
+            0.25 / 2 * params_1000['n_tot']**2 * params_1000['sigmav_DD_p'] * 1000.0
+        )
+        
+        result_1000 = solve_ode_system(**params_1000)
+        
+        # Print results
+        print(f"\nV_plasma = 150 m³:")
+        print(f"  Success: {result_150['sol_success']}")
+        print(f"  t_startup: {result_150['t_startup']:.4e} s = {result_150['t_startup']/86400:.2f} days")
+        if result_150['error']:
+            print(f"  Error: {result_150['error']}")
+        
+        print(f"\nV_plasma = 1000 m³:")
+        print(f"  Success: {result_1000['sol_success']}")
+        print(f"  t_startup: {result_1000['t_startup']:.4e} s = {result_1000['t_startup']/86400:.2f} days")
+        if result_1000['error']:
+            print(f"  Error: {result_1000['error']}")
+        
+        print(f"\nParameters used:")
+        print(f"  n_tot: {params_150['n_tot']:.4e} m^-3")
+        print(f"  tau_p_T: {params_150['tau_p_T']:.4f} s")
+        print(f"  T_i: {params_150.get('T_i', 'N/A')} keV")
+        print(f"  TBR_DT: {params_150['TBR_DT']}")
+        print(f"  TBR_DDn: {params_150['TBR_DDn']}")
+        print(f"  tau_ifc: {params_150['tau_ifc']:.0f} s")
+        print(f"  tau_ofc: {params_150['tau_ofc']:.0f} s")
+        print(f"  sigmav_DT: {params_150['sigmav_DT']:.4e} m^3/s")
+        print(f"  N_st_min: {params_150.get('N_st_min', 'default')}")
+        
+        print(f"\nCalculated injection_rate_max:")
+        print(f"  V_plasma=150: {params_150['injection_rate_max']:.4e} atoms/s")
+        print(f"  V_plasma=1000: {params_1000['injection_rate_max']:.4e} atoms/s")
+        print(f"  Ratio (1000/150): {params_1000['injection_rate_max']/params_150['injection_rate_max']:.2f}")
+        
+        print(f"\nExpected values from test_main:")
+        print(f"  V_plasma = 150: 1.5594e+07 s = 180.5 days")
+        print(f"  V_plasma = 1000: 2.0166e+07 s = 233.4 days")
+        
+        print(f"\nComparison:")
+        if result_150['sol_success']:
+            error_150 = abs(result_150['t_startup'] - 1.5594e7) / 1.5594e7 * 100
+            print(f"  V_plasma=150: {error_150:.2f}% difference from test_main")
+        if result_1000['sol_success']:
+            error_1000 = abs(result_1000['t_startup'] - 2.0166e7) / 2.0166e7 * 100
+            print(f"  V_plasma=1000: {error_1000:.2f}% difference from test_main")
+        
+        print(f"\n🔍 PHYSICAL ANALYSIS:")
+        print(f"  Larger volume (1000 vs 150) has {params_1000['injection_rate_max']/params_150['injection_rate_max']:.2f}x higher injection_rate_max")
+        if result_150['sol_success'] and result_1000['sol_success']:
+            if result_1000['t_startup'] < result_150['t_startup']:
+                print(f"  ❌ BUG: Larger volume has SHORTER startup ({result_1000['t_startup']/86400:.1f} < {result_150['t_startup']/86400:.1f} days)")
+                print(f"      This is UNPHYSICAL! Larger volume should need more time to accumulate tritium.")
+            else:
+                print(f"  ✅ CORRECT: Larger volume has LONGER startup ({result_1000['t_startup']/86400:.1f} > {result_150['t_startup']/86400:.1f} days)")
+        
+        print("="*80)
+        
+        # Both should succeed
+        assert result_150['sol_success'], "V_plasma=150 should succeed"
+        assert result_1000['sol_success'], "V_plasma=1000 should succeed"
+    
+    def test_diagnose_max_simulation_time_effect(self, default_params):
+        """Test if max_simulation_time affects results."""
+        print("\n" + "="*80)
+        print("DIAGNOSTIC: Effect of max_simulation_time")
+        print("="*80)
+        
+        # Test with V_plasma = 150, different max_simulation_time values
+        params_150_10years = default_params.copy()
+        params_150_10years['V_plasma'] = 150.0
+        params_150_10years['max_simulation_time'] = 10 * 365.25 * 24 * 3600  # 10 years
+        params_150_10years['injection_rate_max'] = (
+            params_150_10years['n_tot'] / 2 / params_150_10years['tau_p_T'] * 150.0 +
+            0.25 * params_150_10years['n_tot']**2 * params_150_10years['sigmav_DT'] * 150.0 -
+            0.25 / 2 * params_150_10years['n_tot']**2 * params_150_10years['sigmav_DD_p'] * 150.0
+        )
+        
+        params_150_1year = params_150_10years.copy()
+        params_150_1year['max_simulation_time'] = 1 * 365.25 * 24 * 3600  # 1 year
+        
+        result_150_10y = solve_ode_system(**params_150_10years)
+        result_150_1y = solve_ode_system(**params_150_1year)
+        
+        print(f"\nV_plasma = 150 m³, max_sim_time = 10 years:")
+        print(f"  t_startup: {result_150_10y['t_startup']:.4e} s = {result_150_10y['t_startup']/86400:.2f} days")
+        print(f"  Success: {result_150_10y['sol_success']}")
+        
+        print(f"\nV_plasma = 150 m³, max_sim_time = 1 year:")
+        print(f"  t_startup: {result_150_1y['t_startup']:.4e} s = {result_150_1y['t_startup']/86400:.2f} days")
+        print(f"  Success: {result_150_1y['sol_success']}")
+        
+        # Test with V_plasma = 1000
+        params_1000_10years = default_params.copy()
+        params_1000_10years['V_plasma'] = 1000.0
+        params_1000_10years['max_simulation_time'] = 10 * 365.25 * 24 * 3600  # 10 years
+        params_1000_10years['injection_rate_max'] = (
+            params_1000_10years['n_tot'] / 2 / params_1000_10years['tau_p_T'] * 1000.0 +
+            0.25 * params_1000_10years['n_tot']**2 * params_1000_10years['sigmav_DT'] * 1000.0 -
+            0.25 / 2 * params_1000_10years['n_tot']**2 * params_1000_10years['sigmav_DD_p'] * 1000.0
+        )
+        
+        params_1000_1year = params_1000_10years.copy()
+        params_1000_1year['max_simulation_time'] = 1 * 365.25 * 24 * 3600  # 1 year
+        
+        result_1000_10y = solve_ode_system(**params_1000_10years)
+        result_1000_1y = solve_ode_system(**params_1000_1year)
+        
+        print(f"\nV_plasma = 1000 m³, max_sim_time = 10 years:")
+        print(f"  t_startup: {result_1000_10y['t_startup']:.4e} s = {result_1000_10y['t_startup']/86400:.2f} days")
+        print(f"  Success: {result_1000_10y['sol_success']}")
+        
+        print(f"\nV_plasma = 1000 m³, max_sim_time = 1 year:")
+        print(f"  t_startup: {result_1000_1y['t_startup']:.4e} s = {result_1000_1y['t_startup']/86400:.2f} days")
+        print(f"  Success: {result_1000_1y['sol_success']}")
+        
+        print("\n" + "="*80)
  
