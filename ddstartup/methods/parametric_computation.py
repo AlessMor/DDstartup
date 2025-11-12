@@ -151,6 +151,15 @@ def _compute_lump(linear_index, input_arrays_flat, param_shapes_array, reactivit
         eta_th, capacity_factor, price_of_electricity
     )
     
+    # Create 5-element vectors for P_aux and P_aux_DT_eq
+    # For lump model (steady-state), replicate the scalar values
+    P_aux_vec = np.full(5, P_aux, dtype=np.float64)
+    P_aux_DT_eq_vec = np.full(5, P_aux_DT_eq, dtype=np.float64)
+    
+    # Update result dict with vectors
+    result['P_aux'] = P_aux_vec
+    result['P_aux_DT_eq'] = P_aux_DT_eq_vec
+    
     # Add computed results to base result
     result.update({
         'P_DDn': power_results['P_DDn'],
@@ -313,6 +322,46 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         eta_th, capacity_factor, price_of_electricity
     )
     
+    # Create 5-element vectors for P_aux and P_aux_DT_eq
+    # Sample at 5 evenly-spaced time points during startup to show evolution
+    n_T_vec = power_results['n_T']
+    n_D_vec = power_results['n_D']
+    
+    # Sample at indices 0, 25%, 50%, 75%, 100% of the time series
+    vec_length = len(n_T_vec)
+    if vec_length >= 5:
+        indices_5 = np.linspace(0, vec_length - 1, 5, dtype=int)
+    else:
+        # If less than 5 points, pad with last value
+        indices_5 = np.arange(min(5, vec_length))
+    
+    # Compute P_aux at each sampled time point using actual compositions
+    P_aux_vec = np.full(5, P_aux, dtype=np.float64)  # Default: constant P_aux
+    P_aux_DT_eq_vec = np.full(5, P_aux_DT_eq, dtype=np.float64)  # Default: constant P_aux_DT_eq
+    
+    # If P_aux was computed from power balance, recalculate at sampled points
+    # This captures how auxiliary power requirements evolve during startup
+    if len(indices_5) >= 5:
+        for i, idx in enumerate(indices_5):
+            n_T_at_t = n_T_vec[idx]
+            n_D_at_t = n_D_vec[idx]
+            
+            # Recalculate P_aux at this time point
+            P_aux_at_t = calculate_P_aux_from_power_balance(
+                n_T_at_t, n_D_at_t, T_i, V_plasma, 
+                sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
+            )
+            P_aux_vec[i] = P_aux_at_t
+            
+            # P_aux_DT_eq remains constant (it's the equilibrium value)
+            # but we still store as vector for consistency
+            P_aux_DT_eq_vec[i] = P_aux_DT_eq
+    else:
+        # Pad with last value if we have fewer than 5 points
+        for i in range(len(indices_5), 5):
+            P_aux_vec[i] = P_aux_vec[len(indices_5) - 1] if len(indices_5) > 0 else P_aux
+            P_aux_DT_eq_vec[i] = P_aux_DT_eq
+    
     # Store results
     result_dict.update({
         'N_ofc': power_results['N_ofc'],
@@ -324,6 +373,8 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         'P_DDp': power_results['P_DDp'],
         'P_DT': power_results['P_DT'],
         'P_DT_eq': power_results['P_DT_eq'],
+        'P_aux': P_aux_vec,
+        'P_aux_DT_eq': P_aux_DT_eq_vec,
         'Q_DD': econ_results['Q_DD'],
         'Q_DT_eq': econ_results['Q_DT_eq'],
         'E_lost': econ_results['E_lost'],
@@ -492,21 +543,25 @@ def run_parametric_analysis(
         datasets = {}
         for field in data_fields:
             if field in vector_fields:
+                # Determine vector length for this field
+                # P_aux and P_aux_DT_eq use length 5, others use default vector_length
+                field_vector_length = 5 if field in ['P_aux', 'P_aux_DT_eq'] else vector_length
+                
                 # 2D array for vector fields - LZ4 or fast gzip
                 if use_lz4:
                     datasets[field] = h5_file.create_dataset(
                         field,
-                        (n_combinations, vector_length),
+                        (n_combinations, field_vector_length),
                         dtype=np.float64,
-                        chunks=(min(chunk_size, n_combinations), vector_length),
+                        chunks=(min(chunk_size, n_combinations), field_vector_length),
                         **hdf5plugin.LZ4(nbytes=0)  # Ultra-fast compression
                     )
                 else:
                     datasets[field] = h5_file.create_dataset(
                         field,
-                        (n_combinations, vector_length),
+                        (n_combinations, field_vector_length),
                         dtype=np.float64,
-                        chunks=(min(chunk_size, n_combinations), vector_length),
+                        chunks=(min(chunk_size, n_combinations), field_vector_length),
                         compression='gzip',
                         compression_opts=1  # Fastest gzip fallback
                     )
@@ -848,6 +903,10 @@ def _write_results_to_hdf5(
             # Pre-allocate array for batch of vectors
             batch_array = np.full((batch_size, vector_length), np.nan, dtype=np.float64)
             
+            # Special handling for P_aux and P_aux_DT_eq with length 5
+            is_p_aux_field = field in ['P_aux', 'P_aux_DT_eq']
+            target_length = 5 if is_p_aux_field else vector_length
+            
             for i, result in enumerate(results):
                 value = result.get(field, None)
                 arr = np.asarray(value)
@@ -855,17 +914,39 @@ def _write_results_to_hdf5(
                 if arr.ndim == 0 or arr.size == 0:
                     # Scalar or empty - fill with single value
                     scalar = float(value) if value is not None else np.nan
-                    batch_array[i, :] = scalar
-                elif arr.shape[0] == vector_length:
+                    if is_p_aux_field:
+                        # For P_aux fields with length 5, replicate scalar value
+                        batch_array[i, :5] = scalar
+                    else:
+                        batch_array[i, :] = scalar
+                elif arr.shape[0] == target_length:
                     # Correct length
-                    batch_array[i, :] = arr
+                    if is_p_aux_field:
+                        batch_array[i, :5] = arr
+                    else:
+                        batch_array[i, :] = arr
                 else:
-                    # Wrong length - pad or truncate
-                    copy_length = min(vector_length, arr.size)
-                    batch_array[i, :copy_length] = arr[:copy_length]
+                    # Wrong length - special handling for P_aux fields
+                    if is_p_aux_field:
+                        if arr.size < 5:
+                            # Shorter than 5: keep as-is and pad with last value
+                            batch_array[i, :arr.size] = arr
+                            if arr.size > 0:
+                                batch_array[i, arr.size:5] = arr[-1]
+                        else:
+                            # Longer than 5: interpolate (first, last, and 3 intermediate points)
+                            indices = np.linspace(0, arr.size - 1, 5, dtype=int)
+                            batch_array[i, :5] = arr[indices]
+                    else:
+                        # Regular vector field - pad or truncate
+                        copy_length = min(vector_length, arr.size)
+                        batch_array[i, :copy_length] = arr[:copy_length]
             
             # Single bulk write for entire batch!
-            datasets[field][indices_array, :] = batch_array
+            if is_p_aux_field:
+                datasets[field][indices_array, :5] = batch_array[:, :5]
+            else:
+                datasets[field][indices_array, :] = batch_array
             
         else:
             # Collect all scalar values

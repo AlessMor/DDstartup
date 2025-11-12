@@ -62,7 +62,9 @@ PARAMETER_SCHEMA = {
         'unit': 'W',
         'symbol': r'$P_{\mathrm{aux}}$',
         'description': 'Auxiliary heating power during DD startup phase',
-        'computed_when_null': True
+        'computed_when_null': True,
+        'vector': True,
+        'vector_length': 5
     },
     'P_aux_DT_eq': {
         'role': 'flexible',
@@ -70,7 +72,9 @@ PARAMETER_SCHEMA = {
         'unit': 'W',
         'symbol': r'$P_{\mathrm{aux,DT}}$',
         'description': 'Auxiliary heating power at DT equilibrium',
-        'computed_when_null': True
+        'computed_when_null': True,
+        'vector': True,
+        'vector_length': 5
     },
     'TBR_DT': {
         'role': 'input',
