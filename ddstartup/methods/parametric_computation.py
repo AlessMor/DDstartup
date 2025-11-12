@@ -447,6 +447,9 @@ def run_parametric_analysis(
     start_time = time.perf_counter()
     processed_count = 0
     successful_count = 0
+    negative_event_count = 0
+    tmax_reached_count = 0
+    solver_failed_count = 0
     
     # Create HDF5 file and run computation
     with h5py.File(output_file, 'w') as h5_file:
@@ -597,16 +600,15 @@ def run_parametric_analysis(
                 compute_function(0, input_arrays_flat, param_shapes_array, max_simulation_time, vector_length, reactivity_lookup)
             except Exception as e:
                 print(f"Warning during Numba priming: {e}")
+        # BATCH PIPELINE: Compute full batch, then write in parallel
+        # Vectorized writes are MUCH faster (10-100x), can use larger batches
+        # Larger batches = better compute efficiency, minimal write overhead
+        write_batch_size = 10*batch_size  # Large batches with fast vectorized writes
         
         # Print parallelization info (before progress bar)
         if verbose:
             print(f"Starting BATCH PIPELINE computation with {n_jobs} workers...")
-            print(f"Processing {n_combinations:,} combinations in batches of 5,000")
-            compression_type = "LZ4 (ultra-fast)" if use_lz4 else "gzip-1 (fast fallback)"
-            print(f"Compression: {compression_type} with VECTORIZED bulk writes")
-            print(f"Architecture: COMPUTE phase (all {n_jobs} cores) → WRITE phase (<1s)")
-            print(f"Expected: First ~{n_jobs * 2} tasks slow (Numba compilation), then fast")
-            print(f"Monitor the speed - smooth progress with minimal write overhead!")
+            print(f"Writing in batches of {write_batch_size}")
         
         # Initialize tqdm with dynamic status bar
         overall_pbar = tqdm(
@@ -619,10 +621,6 @@ def run_parametric_analysis(
             bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
         )
         
-        # BATCH PIPELINE: Compute full batch, then write in parallel
-        # Vectorized writes are MUCH faster (10-100x), can use larger batches
-        # Larger batches = better compute efficiency, minimal write overhead
-        write_batch_size = 5000  # Large batches with fast vectorized writes
         
         # Global error logging flag (across all chunks)
         first_error_logged = False
@@ -689,10 +687,20 @@ def run_parametric_analysis(
                         if results_buffer[result_idx].get('sol_success', False):
                             successful_count += 1
                         else:
+                            # Categorize failure type
+                            error_msg = results_buffer[result_idx].get('error', '')
+                            if 'Negative population' in error_msg or 'Physics failure' in error_msg:
+                                negative_event_count += 1
+                            elif 'not reached within max_simulation_time' in error_msg or 'DT equilibrium not reached' in error_msg:
+                                tmax_reached_count += 1
+                            else:
+                                # ODE solver failures, step size issues, etc.
+                                solver_failed_count += 1
+                            
                             # Log first error for debugging (only once globally)
                             if not first_error_logged and verbose:
-                                error_msg = results_buffer[result_idx].get('error', 'Unknown error')
                                 first_error_logged = True
+                                error_msg = results_buffer[result_idx].get('error', 'Unknown error')
                         
                         processed_count += 1
                         overall_pbar.update(1)
@@ -725,10 +733,18 @@ def run_parametric_analysis(
                         # Clear buffer for next batch
                         results_buffer.clear()
                         
-                        # Resume computing - show last write time and success rate
+                        # Resume computing - show last write time and success rate with failure breakdown
                         write_time = time.perf_counter() - write_start
                         success_rate = (successful_count / processed_count * 100) if processed_count > 0 else 0.0
-                        overall_pbar.set_description(f"🔄 COMPUTE (write: {write_time:.2f}s, ✓ {success_rate:.1f}%)")
+                        
+                        # Calculate failure breakdown percentages
+                        neg_pct = (negative_event_count / processed_count * 100) if processed_count > 0 else 0.0
+                        tmax_pct = (tmax_reached_count / processed_count * 100) if processed_count > 0 else 0.0
+                        solver_pct = (solver_failed_count / processed_count * 100) if processed_count > 0 else 0.0
+                        
+                        overall_pbar.set_description(
+                            f"🔄 COMPUTE (✓ {success_rate:.1f}% [❌ {neg_pct:.1f}% neg + {tmax_pct:.1f}% tmax + {solver_pct:.1f}% solver] 🕐 {write_time:.2f}s)"
+                        )
                 
                 # === FINAL WRITE: Flush any remaining results ===
                 if results_buffer:
@@ -747,7 +763,15 @@ def run_parametric_analysis(
                     h5_file.flush()
                     write_time = time.perf_counter() - write_start
                     success_rate = (successful_count / processed_count * 100) if processed_count > 0 else 0.0
-                    overall_pbar.set_description(f"✅ COMPLETE (final write: {write_time:.2f}s, ✓ {success_rate:.1f}%)")
+                    
+                    # Calculate failure breakdown percentages
+                    neg_pct = (negative_event_count / processed_count * 100) if processed_count > 0 else 0.0
+                    tmax_pct = (tmax_reached_count / processed_count * 100) if processed_count > 0 else 0.0
+                    solver_pct = (solver_failed_count / processed_count * 100) if processed_count > 0 else 0.0
+                    
+                    overall_pbar.set_description(
+                        f"✅ COMPLETE (✓ {success_rate:.1f}% [❌ {neg_pct:.1f}% neg + {tmax_pct:.1f}% tmax + {solver_pct:.1f}% solver] 🕐 {write_time:.2f}s)"
+                    )
                 # =======================================================
                     
         except Exception as e:

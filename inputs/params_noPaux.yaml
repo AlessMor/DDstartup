@@ -4,15 +4,13 @@
 parameters:
   V_plasma_field:
     type: vector
-    values: [100, 150, 500, 1000, 2000]
+    values: [100, 500, 1000, 2000]
     unit: m^3
     description: Plasma volume
   
   T_i_field:
-    type: linear
-    min: 10
-    max: 20
-    points: 3
+    type: vector
+    values: [10, 15, 20]
     unit: keV
     description: Ion temperature
   
@@ -24,7 +22,7 @@ parameters:
   
   tau_p_T_field:
     type: vector
-    values: [0.1, 0.5, 1.0, 2.5, 5.0]
+    values: [0.1, 0.5, 1.0, 5.0]
     unit: s
     description: Tritium particle confinement time
   
@@ -47,18 +45,14 @@ parameters:
     description: Auxiliary power for DT equilibrium (will be calculated from power balance)
   
   TBR_DT_field:
-    type: linear
-    min: 1.05
-    max: 1.3
-    points: 5
+    type: vector
+    values: [1.05, 1.15, 1.3]
     unit: dimensionless
     description: Tritium breeding ratio for DT reactions
   
   TBR_DDn_field:
-    type: linear
-    min: 0.5
-    max: 1
-    points: 2
+    type: vector
+    values: [0.5, 0.75, 1]
     unit: dimensionless
     description: Tritium breeding ratio for DD neutron branch
 
@@ -66,23 +60,23 @@ parameters:
     type: vector
     values: [14400, 21600, 43200] # 4h, 6h, 12h
     unit: s
-    description: In-fuel cycle time test values (1, 24, 48 hours in seconds)
+    description: Inner-fuel cycle time test values (4, 6, 12 hours in seconds)
   
   tau_ofc_field:
     type: vector
-    values: [21600, 86400] # 6h, 24h
+    values: [7200, 43200, 86400] # 2h, 12h, 24h
     unit: s
-    description: Out-of-fuel cycle time test values (1, 12, 24 hours in seconds)
+    description: Outer-of-fuel cycle time test values (2, 12, 24 hours in seconds)
   
   eta_th_field:
     type: vector
-    values: [0.3, 0.35, 0.4]
+    values: [0.3, 0.4]
     unit: dimensionless
     description: Thermal conversion efficiency (constant)
   
   capacity_factor_field:
     type: vector
-    values: [0.15, 0.35, 0.5, 0.7, 0.9]
+    values: [0.5, 0.7, 0.9]
     unit: dimensionless
     description: Plant capacity factor (constant)
   

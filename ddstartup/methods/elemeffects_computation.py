@@ -25,8 +25,8 @@ from tqdm import tqdm
 
 
 # Module-level wrapper functions for pickling
-def _evaluate_lump_point(params_dict: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
-    """Evaluate lump model at a single point."""
+def _evaluate_lump_point(params_dict: Dict[str, float], config: Dict[str, Any], reactivity_lookup: Dict = None) -> Dict[str, Any]:
+    """Evaluate lump model at a single point with optional reactivity lookup."""
     from ddstartup.methods.parametric_computation import _compute_lump
     
     # Use the exact parameter order expected by _compute_lump
@@ -35,19 +35,19 @@ def _evaluate_lump_point(params_dict: Dict[str, float], config: Dict[str, Any]) 
     
     param_vector = [params_dict[name] for name in param_names]
     temp_arrays = [np.array([val]) for val in param_vector]
-    param_shapes = tuple([1] * len(param_names))
+    param_shapes = np.array([1] * len(param_names), dtype=np.int64)
     
     result = _compute_lump(
         linear_index=0,
         input_arrays_flat=temp_arrays,
         param_shapes_array=param_shapes,
-        reactivity_lookup=None
+        reactivity_lookup=reactivity_lookup
     )
     return result
 
 
-def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any]) -> Dict[str, Any]:
-    """Evaluate T-seeded model at a single point."""
+def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any], reactivity_lookup: Dict = None) -> Dict[str, Any]:
+    """Evaluate T-seeded model at a single point with optional reactivity lookup."""
     from ddstartup.methods.parametric_computation import _compute_tseeded
     
     # Use the exact parameter order expected by _compute_tseeded
@@ -57,7 +57,7 @@ def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any
     
     param_vector = [params_dict[name] for name in param_names]
     temp_arrays = [np.array([val]) for val in param_vector]
-    param_shapes = tuple([1] * len(param_names))
+    param_shapes = np.array([1] * len(param_names), dtype=np.int64)
     
     # Get simulation parameters from config
     max_simulation_time = config.get('max_simulation_time', 315360000)  # Default: 10 years
@@ -69,7 +69,7 @@ def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any
         param_shapes_array=param_shapes,
         max_simulation_time=max_simulation_time,
         vector_length=vector_length,
-        reactivity_lookup=None
+        reactivity_lookup=reactivity_lookup
     )
     return result
 
@@ -137,7 +137,7 @@ def generate_trajectory(
 
 
 def compute_trajectory_worker(
-    args: Tuple[int, List[np.ndarray], List[str], List[str], str, Dict[str, Any], Dict[str, Tuple[float, float]]]
+    args: Tuple[int, List[np.ndarray], List[str], List[str], str, Dict[str, Any], Dict[str, Tuple[float, float]], Dict]
 ) -> Dict[str, Any]:
     """
     Worker function to compute a single trajectory.
@@ -151,11 +151,12 @@ def compute_trajectory_worker(
             - analysis_type: 'lump' or 'T_seeded'
             - config: Configuration dictionary with simulation parameters
             - param_ranges: Dictionary of parameter ranges {name: (min, max)}
+            - reactivity_lookup: Pre-computed reactivity table
             
     Returns:
         Dictionary with elementary effects for each parameter
     """
-    traj_id, points, param_order, param_names, analysis_type, config, param_ranges = args
+    traj_id, points, param_order, param_names, analysis_type, config, param_ranges, reactivity_lookup = args
     
     # Select appropriate evaluation function
     if analysis_type == 'lump':
@@ -173,7 +174,7 @@ def compute_trajectory_worker(
     # Evaluate base point
     try:
         base_params_dict = point_to_dict(points[0])
-        base_result = evaluate_func(base_params_dict, config)
+        base_result = evaluate_func(base_params_dict, config, reactivity_lookup)
         # Check if computation was successful
         if not base_result.get('sol_success', False):
             return {'success': False, 'traj_id': traj_id, 'error': 'Base point failed'}
@@ -192,7 +193,7 @@ def compute_trajectory_worker(
         
         try:
             perturbed_params_dict = point_to_dict(perturbed_point)
-            perturbed_result = evaluate_func(perturbed_params_dict, config)
+            perturbed_result = evaluate_func(perturbed_params_dict, config, reactivity_lookup)
             # Check if computation was successful
             if not perturbed_result.get('sol_success', False):
                 continue
@@ -286,27 +287,60 @@ def run_elementary_effects_analysis(
     
     start_time = time.time()
     
-    # Generate all trajectories
-    if verbose:
-        print("Generating trajectories...")
+    # ========== REACTIVITY LOOKUP TABLE OPTIMIZATION ==========
+    # Pre-compute reactivity lookup table for all unique T_i values
+    # This is ~1000x faster than computing reactivities on-demand
+    from ddstartup.utils.reactivity_lookup import ReactivityLookupTable
     
+    # Collect all T_i values from all trajectories
+    if verbose:
+        print("Building reactivity lookup table...")
+    
+    # Generate trajectories to extract T_i values
+    all_Ti_values = set()
     trajectories = []
     for traj_id in range(num_trajectories):
-        points, param_order = generate_trajectory(param_ranges, seed=traj_id)
-        trajectories.append((traj_id, points, param_order, param_names, analysis_type, config, param_ranges))
+        points, param_order = generate_trajectory(param_ranges, perturbation_perc=perturbation_perc, seed=traj_id)
+        trajectories.append((traj_id, points, param_order))
+        
+        # Extract T_i values (T_i is always index 1 in param_names)
+        T_i_idx = param_names.index('T_i')
+        for point in points:
+            all_Ti_values.add(point[T_i_idx])
     
-    # Compute trajectories in parallel
+    unique_Ti = np.array(sorted(all_Ti_values))
+    include_DHe3 = (analysis_type == 'lump')
+    reactivity_table = ReactivityLookupTable(unique_Ti, include_DHe3=include_DHe3)
+    reactivity_lookup = reactivity_table.to_dict()
+    
     if verbose:
-        print(f"Computing {num_trajectories} trajectories using {n_jobs} workers...")
+        print(f"✅ Reactivity lookup table created ({len(reactivity_table)} temperatures)")
+    # ================================================================
+    
+    # Generate all trajectories
+    if verbose:
+        print(f"Generating {num_trajectories} trajectories...")
+    
+    trajectory_args = []
+    for traj_id, points, param_order in trajectories:
+        trajectory_args.append((traj_id, points, param_order, param_names, analysis_type, config, param_ranges, reactivity_lookup))
+    
+    # Compute trajectories in parallel with dynamic work queue
+    if verbose:
+        print(f"Computing trajectories using {n_jobs} workers...")
     
     results = []
     successful_trajectories = 0
     
+    # Use dynamic work queue (like parametric analysis) for better load balancing
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    
     with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+        # Submit all trajectories
         futures = {executor.submit(compute_trajectory_worker, traj): traj[0] 
-                   for traj in trajectories}
+                   for traj in trajectory_args}
         
-        with tqdm(total=num_trajectories, desc="Trajectories", disable=not verbose) as pbar:
+        with tqdm(total=num_trajectories, desc="🔄 Trajectories", disable=not verbose) as pbar:
             for future in as_completed(futures):
                 result = future.result()
                 results.append(result)

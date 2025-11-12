@@ -169,7 +169,7 @@ def solve_ode_system(
     def negative_population_event(t: float, y: np.ndarray) -> float:
         """Trigger if any population goes negative (physics failure)"""
         # Add small offset to avoid numerical issues near zero
-        return min(y[0] + 100, y[1] + 100, y[2] + 100, y[3] + 100)
+        return min(y[0] + 100, y[1] + 100, y[2] + 100, y[3] + 1e5)
     
     # Configure event detection
     dt_reached_event.terminal = True
@@ -178,7 +178,7 @@ def solve_ode_system(
     
     # Initial conditions: Start with pure deuterium plasma
     y0 =  [100, 100, 100, 1e5] # [N_ofc, N_ifc, N_stor, n_T]
-    
+
     # Solve ODE system
     try:
         sol = solve_ivp(
@@ -188,8 +188,8 @@ def solve_ode_system(
             method='BDF',  # Adaptive method for stiff/non-stiff systems
             dense_output=False,  # Faster, we interpolate later
             events=[dt_reached_event, negative_population_event],
-            rtol=1e-4,  # Proven tolerance
-            atol=1e10   # Appropriate for large atom counts
+            rtol=1e-6,  # Proven tolerance
+            atol=1e-3   # Appropriate for large atom counts
         )
         # Check solver success
         if not sol.success:
@@ -221,8 +221,14 @@ def solve_ode_system(
             if y_fail[0] < -100: negative_pops.append("N_ofc")
             if y_fail[1] < -100: negative_pops.append("N_ifc")
             if y_fail[2] < -100: negative_pops.append("N_stor")
-            if y_fail[3] < -100: negative_pops.append("n_T")
-            
+            if y_fail[3] < -1e5: negative_pops.append("n_T")
+            # Handle edge case: event triggered but all populations still > -100
+            # This can happen due to event detection tolerances
+            if not negative_pops:
+                # Find minimum population for better error reporting
+                min_idx = np.argmin(y_fail)
+                pop_names = ["N_ofc", "N_ifc", "N_stor", "n_T"]
+                negative_pops = [f"{pop_names[min_idx]} near zero"]
             error_msg = f"Physics failure: Negative population ({', '.join(negative_pops)}) at t={t_fail:.2e}s ({t_fail/(365.25*24*3600):.3f} years)"
             error_msg += f"; State: N_ofc={y_fail[0]:.2e}, N_ifc={y_fail[1]:.2e}, N_st={y_fail[2]:.2e}, n_T={y_fail[3]:.2e}"
             

@@ -18,7 +18,7 @@
 # Note: When using "latest" or a folder, all HDF5 files in that folder are processed
 #       and outputs are saved back to the same folder automatically.
 
-files: "latest"  # Default: process files in the latest folder
+files: "20251111_220719_parametric_T_seeded"  # Default: process files in the latest folder
 
 # Alternative examples:
 # files: "20251008_081422_parametric_T_seeded"  # Specific folder
@@ -155,6 +155,7 @@ plots:
   contour: true          # 2D pairwise contour plots
   shap: true            # SHAP (SHapley Additive exPlanations) plots
   ml_pairwise: true      # ML-based pairwise partial dependence plots
+  strip: true            # Strip plots with trends (comparing multiple metrics)
   
   # Plot-specific settings
   kde_settings:
@@ -203,6 +204,42 @@ plots:
     hidden: [256, 256, 128]    # MLP hidden layer sizes
     verbose: false       # Print detailed training progress
                          # Set to true for debugging or monitoring training
+  
+  strip_settings:
+    # Strip plots compare multiple metrics with trend lines and uncertainty bands
+    # Metrics to plot on y-axes (1-3 metrics). Can use computed metrics like "P_DT_eq - P_aux"
+    y_metrics: 
+      - unrealized_profits
+      - t_startup
+      - P_DT_eq
+    
+    # Metric to sort simulations by (must be in data or in y_metrics)
+    sort_by: t_startup
+    
+    # Unit conversions for better readability
+    # Format: metric_name: {factor: conversion_factor, unit: 'unit_string'}
+    unit_conversions:
+      t_startup:
+        factor: 1.1574074074074073e-05  # Convert seconds to days (1 / (24*3600))
+        unit: 'days'
+      unrealized_profits:
+        factor: 1.0e-6  # Convert dollars to millions of dollars
+        unit: 'M$'
+      P_DT_eq:
+        factor: 1.0e-6  # Convert watts to megawatts
+        unit: 'MW'
+      P_aux:
+        factor: 1.0e-6  # Convert watts to megawatts
+        unit: 'MW'
+    
+    # Whether to mark optimal point (minimizing all metrics)
+    optimal_point: false
+    
+    # LOWESS smoothing fraction (0.05-0.25, default: 0.12)
+    frac: 0.12
+    
+    # Figure size [width, height] in inches
+    figsize: [14, 6]
 
 
 # ============================================================================
@@ -281,3 +318,32 @@ advanced:
 # plots:
 #   generate_all: false
 #   pdf: true
+
+# --- Example 4: Strip plot showing net power (P_DT_eq - P_aux) ---
+# target_variables: [unrealized_profits, t_startup, P_DT_eq, P_aux]
+# output_filters:
+#   t_startup:
+#     max: 8.64e6  # 100 days in seconds
+#   unrealized_profits:
+#     max: 2.0e6   # 2 M$ maximum
+# plots:
+#   generate_all: false
+#   strip: true
+# strip_settings:
+#   y_metrics: 
+#     - unrealized_profits
+#     - t_startup
+#     - "P_DT_eq - P_aux"  # Net power (computed on-the-fly)
+#   sort_by: t_startup
+#   unit_conversions:
+#     t_startup:
+#       factor: 1.1574074074074073e-05
+#       unit: 'days'
+#     unrealized_profits:
+#       factor: 1.0e-6
+#       unit: 'M$'
+#     "P_DT_eq - P_aux":
+#       factor: 1.0e-6
+#       unit: 'MW'
+#   optimal_point: true
+

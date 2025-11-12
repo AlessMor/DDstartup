@@ -183,6 +183,7 @@ def parse_filter_expression(filter_str):
 def clean_filters(filters_dict):
     """
     Remove entries with both min and max as None from filters dictionary.
+    Also ensures numeric values are properly converted to float.
     
     Args:
         filters_dict: Dictionary of filters from YAML
@@ -200,6 +201,22 @@ def clean_filters(filters_dict):
         if isinstance(conditions, dict):
             min_val = conditions.get('min')
             max_val = conditions.get('max')
+            
+            # Convert to float if not None
+            if min_val is not None:
+                try:
+                    min_val = float(min_val)
+                except (ValueError, TypeError):
+                    print(f"⚠️  Warning: Could not convert min value '{min_val}' to float for {var}")
+                    min_val = None
+            
+            if max_val is not None:
+                try:
+                    max_val = float(max_val)
+                except (ValueError, TypeError):
+                    print(f"⚠️  Warning: Could not convert max value '{max_val}' to float for {var}")
+                    max_val = None
+            
             if min_val is not None or max_val is not None:
                 cleaned[var] = {'min': min_val, 'max': max_val}
     

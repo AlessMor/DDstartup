@@ -72,13 +72,15 @@ from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_
 from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours, plot_interactive_pairwise_contours
 from ddstartup.postprocessing.plot_shap_functions import generate_shap_plots
 from ddstartup.postprocessing.plot_ML_pairwise_functions import generate_ml_pairwise_plots
+from ddstartup.postprocessing.plot_strips import generate_strip_plot
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 
 def generate_plots(files, targets, input_filters, output_filters, plot_types, output_dir, 
-                   shap_interpolate=False, pdf_smooth=False, ml_pairwise_settings=None):
+                   shap_interpolate=False, pdf_smooth=False, ml_pairwise_settings=None, 
+                   strip_settings=None):
     """
     Generate requested plots for the given files and targets.
     
@@ -87,11 +89,12 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
         targets: List of target variables
         input_filters: Dictionary of input filters
         output_filters: Dictionary of output filters
-        plot_types: List of plot types to generate ('kde', 'parcoords', 'pdf', 'ml_pairwise')
+        plot_types: List of plot types to generate ('kde', 'parcoords', 'pdf', 'ml_pairwise', 'strip')
         output_dir: Directory to save plots
         shap_interpolate: Whether to use interpolated (smooth) SHAP plots (default: False)
         pdf_smooth: Whether to use KDE smoothing for PDF plots (default: False)
         ml_pairwise_settings: Dictionary with ML pairwise plot settings (pairs, grid_size, etc.)
+        strip_settings: Dictionary with strip plot settings (y_metrics, sort_by, unit_conversions, etc.)
     """
     # Get parameter registry once for all plot functions
     registry = get_registry()
@@ -254,6 +257,42 @@ def generate_plots(files, targets, input_filters, output_filters, plot_types, ou
             del df_filtered
             gc.collect()
             print(f"   🧹 Memory cleaned for next target")
+    
+    # Generate strip plots (once per file, comparing multiple metrics)
+    if 'strip' in plot_types and strip_settings is not None:
+        print(f"\n  📊 Generating strip plot...")
+        try:
+            # Get strip plot configuration
+            y_metrics = strip_settings.get('y_metrics', targets[:min(3, len(targets))])
+            sort_by = strip_settings.get('sort_by', y_metrics[0] if y_metrics else targets[0])
+            unit_conversions = strip_settings.get('unit_conversions', {})
+            optimal_point = strip_settings.get('optimal_point', True)
+            frac = strip_settings.get('frac', 0.12)
+            figsize = tuple(strip_settings.get('figsize', [14, 6]))
+            
+            # Combine filters for strip plot
+            combined_filters = {}
+            combined_filters.update(input_filters)
+            combined_filters.update(output_filters)
+            
+            # Generate strip plot
+            generate_strip_plot(
+                h5_file=file_path,
+                y_metrics=y_metrics,
+                x_sort_by=sort_by,
+                filters=combined_filters,
+                output_path=None,  # Will use default naming
+                unit_conversions=unit_conversions,
+                optimal_point=optimal_point,
+                registry=registry,
+                figsize=figsize,
+                frac=frac
+            )
+            print(f"   ✅ Generated strip plot")
+        except Exception as e:
+            print(f"   ❌ Error generating strip plot: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def main():
@@ -300,7 +339,7 @@ def main():
     parser.add_argument(
         '--plots', '-p',
         nargs='+',
-        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise', 'all'],
+        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise', 'strip', 'all'],
         help='Plot types to generate (overrides config file)'
     )
     
@@ -509,7 +548,7 @@ def main():
     
     plots_config = config.get('plots', {})
     if plots_config.get('generate_all', True):
-        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise']
+        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise', 'strip']
     else:
         plot_types = []
         if plots_config.get('kde', False):
@@ -528,6 +567,8 @@ def main():
             plot_types.append('shap')
         if plots_config.get('ml_pairwise', False):
             plot_types.append('ml_pairwise')
+        if plots_config.get('strip', False):
+            plot_types.append('strip')
     
     print(f"📊 Plot types: {', '.join(plot_types)}")
     
@@ -568,6 +609,13 @@ def main():
         pairs_mode = ml_pairwise_settings.get('pairs', 'auto')
         print(f"🔷 ML pairwise mode: {pairs_mode}")
     
+    # Get strip plot settings
+    strip_settings = plots_config.get('strip_settings', {})
+    
+    if 'strip' in plot_types:
+        y_metrics = strip_settings.get('y_metrics', targets[:min(3, len(targets))])
+        print(f"🔷 Strip plot metrics: {', '.join(y_metrics)}")
+    
     # ============================================================================
     # DETERMINE OUTPUT DIRECTORY
     # ============================================================================
@@ -596,7 +644,8 @@ def main():
     # ============================================================================
     
     generate_plots(file_paths, targets, input_filters, output_filters, 
-                   plot_types, output_dir, shap_interpolate, pdf_smooth, ml_pairwise_settings)
+                   plot_types, output_dir, shap_interpolate, pdf_smooth, 
+                   ml_pairwise_settings, strip_settings)
     
     print(f"\n{'='*80}")
     print(f"✅ POSTPROCESSING COMPLETE")
