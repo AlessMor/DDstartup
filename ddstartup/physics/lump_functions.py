@@ -86,8 +86,9 @@ def lump_numba(
     # Total tritium production rate (all sources)
     Tdot_DDn = TBR_DDn * n_D_squared * half_sigmav_DD_n * V_plasma
     Tdot_DDp = n_D_squared * half_sigmav_DD_p * V_plasma
+    Tdot_burn = n_T * n_D * sigmav_DT * V_plasma   
     Tdot_DT = TBR_DT * n_D * n_T * sigmav_DT * V_plasma
-    Tdot_tot = Tdot_DDn + Tdot_DDp + Tdot_DT
+    Tdot_tot = Tdot_DDn + Tdot_DT +  max(Tdot_DDp - Tdot_burn,0)
     
     # Required tritium inventory (atoms)
     N_ST = I_target / tritium_mass
@@ -177,8 +178,9 @@ def lump_solver(
             # Production rates
             Tdot_DDn = TBR_DDn * 0.5 * n_D * n_D * sigmav_DD_n * V_plasma
             Tdot_DDp = 0.5 * n_D * n_D * sigmav_DD_p * V_plasma
+            Tdot_burn = n_T * n_D * sigmav_DT * V_plasma   
             Tdot_DT = TBR_DT * n_D * n_T * sigmav_DT * V_plasma
-            Tdot_tot = Tdot_DDn + Tdot_DDp + Tdot_DT
+            Tdot_tot = Tdot_DDn + Tdot_DT +  max(Tdot_DDp - Tdot_burn,0)
             
             # Required inventory
             N_target = I_target / tritium_mass
@@ -187,7 +189,7 @@ def lump_solver(
             decay_rate = N_target * lambda_T
             ratio = decay_rate / Tdot_tot if Tdot_tot > 0 else np.inf
             
-            error = f"Physics solver failed: Cannot reach target inventory I_target={I_target:.3e} kg"
+            error = f"Physics failure: Cannot reach target inventory I_target={I_target:.3e} kg"
             error += f"; n_T={n_T:.2e}, n_D={n_D:.2e}, n_He3={n_He3:.2e}"
             error += f"; T_production={Tdot_tot:.2e} atoms/s, Decay_rate={decay_rate:.2e} atoms/s (ratio={ratio:.3f})"
             

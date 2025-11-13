@@ -869,7 +869,7 @@ def run_parametric_analysis(
                         solver_pct = (solver_failed_count / processed_count * 100) if processed_count > 0 else 0.0
                         
                         overall_pbar.set_description(
-                            f"🔄 COMPUTE (✓ {success_rate:.1f}% [❌ {neg_pct:.1f}% neg + {tmax_pct:.1f}% tmax + {solver_pct:.1f}% solver] 🕐 {write_time:.2f}s)"
+                            f"🔄 COMPUTE [successes: ✓ {success_rate:.1f}% | failures: ❌ {neg_pct+tmax_pct:.1f}% physical events + {solver_pct:.1f}% solver errors | last writing time: 🕐 {write_time:.2f}s ]"
                         )
                 
                 # === FINAL WRITE: Flush any remaining results ===
@@ -891,9 +891,9 @@ def run_parametric_analysis(
                     success_rate = (successful_count / processed_count * 100) if processed_count > 0 else 0.0
                     
                     # Calculate failure breakdown percentages
-                    neg_pct = (negative_event_count / processed_count * 100) if processed_count > 0 else 0.0
-                    tmax_pct = (tmax_reached_count / processed_count * 100) if processed_count > 0 else 0.0
-                    solver_pct = (solver_failed_count / processed_count * 100) if processed_count > 0 else 0.0
+                    neg_pct = (negative_event_count / processed_count * 100) if processed_count > 0 else 0.0 # % due to negative events
+                    tmax_pct = (tmax_reached_count / processed_count * 100) if processed_count > 0 else 0.0 # % due to tmax reached
+                    solver_pct = (solver_failed_count / processed_count * 100) if processed_count > 0 else 0.0 # % due to solver failures
                     
                     overall_pbar.set_description(
                         f"✅ COMPLETE (✓ {success_rate:.1f}% [❌ {neg_pct:.1f}% neg + {tmax_pct:.1f}% tmax + {solver_pct:.1f}% solver] 🕐 {write_time:.2f}s)"
