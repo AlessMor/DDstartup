@@ -85,15 +85,22 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
             n_samples = cluster_mask.sum()
             
             for param in X.columns:
-                ranges_data.append({
-                    'cluster': cluster_id,
-                    'parameter': param,
-                    'min': cluster_df[param].min(),
-                    'max': cluster_df[param].max(),
-                    'mean': cluster_df[param].mean(),
-                    'std': cluster_df[param].std(),
-                    'n_samples': n_samples
-                })
+                try:
+                    # Skip non-scalar columns
+                    if cluster_df[param].dtype == 'object':
+                        continue
+                    ranges_data.append({
+                        'cluster': cluster_id,
+                        'parameter': param,
+                        'min': cluster_df[param].min(),
+                        'max': cluster_df[param].max(),
+                        'mean': cluster_df[param].mean(),
+                        'std': cluster_df[param].std(),
+                        'n_samples': n_samples
+                    })
+                except (TypeError, ValueError):
+                    # Skip parameters that cannot have statistics computed
+                    continue
         
         ranges_df = pd.DataFrame(ranges_data)
         ranges_df.to_csv(outputs_dir / (plot_name + '_cluster_ranges.csv' if plot_name else f'kmeans_ranges_{target}.csv'), index=False)

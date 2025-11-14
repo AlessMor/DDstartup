@@ -183,3 +183,11 @@ tests/htmlcov/
 .coverage.*
 coverage.xml
 *.cover
+
+# Ignore all .h5 and .html files in outputs/
+outputs/**/*.h5
+outputs/**/*.html
+
+# (Optional) Ignore all .h5 and .html files anywhere in the repo
+*.h5
+*.html

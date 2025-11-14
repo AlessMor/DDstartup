@@ -307,17 +307,104 @@ def plot_box_plots(
     print(f"Saved box plot: {output_path}")
 
 
+def save_sensitivity_data_to_csv(
+    sensitivity_data: Dict[str, Any],
+    metric_name: str,
+    output_dir: Path
+):
+    """
+    Save sensitivity analysis data to CSV for easy reproduction and combination.
+    
+    Args:
+        sensitivity_data: Dictionary with mu, mu_star, sigma, sigma_star, raw_effects
+        metric_name: Name of output metric
+        output_dir: Directory to save CSV
+    """
+    param_names = list(sensitivity_data['mu'].keys())
+    
+    # Prepare summary statistics table
+    summary_rows = []
+    for name in param_names:
+        mu = sensitivity_data['mu'].get(name, np.nan)
+        mu_star = sensitivity_data['mu_star'].get(name, np.nan)
+        sigma = sensitivity_data['sigma'].get(name, np.nan)
+        sigma_star = sensitivity_data['sigma_star'].get(name, np.nan)
+        
+        # Calculate confidence intervals
+        effects = np.array(sensitivity_data['raw_effects'].get(name, []))
+        n_samples = len(effects)
+        
+        if n_samples > 0:
+            sem = sigma / np.sqrt(n_samples) if np.isfinite(sigma) else np.nan
+            sem_star = sigma_star / np.sqrt(n_samples) if np.isfinite(sigma_star) else np.nan
+            ci95 = 1.96 * sem if np.isfinite(sem) else np.nan
+            ci95_star = 1.96 * sem_star if np.isfinite(sem_star) else np.nan
+        else:
+            sem = sem_star = ci95 = ci95_star = np.nan
+        
+        summary_rows.append({
+            'parameter': name,
+            'parameter_latex': _get_latex_name(name),
+            'mu': mu,
+            'mu_star': mu_star,
+            'sigma': sigma,
+            'sigma_star': sigma_star,
+            'n_samples': n_samples,
+            'sem': sem,
+            'sem_star': sem_star,
+            'ci95': ci95,
+            'ci95_star': ci95_star
+        })
+    
+    # Save summary statistics
+    summary_df = pd.DataFrame(summary_rows)
+    summary_df = summary_df.sort_values('mu_star', ascending=False)
+    summary_path = output_dir / f'ee_summary_{metric_name}.csv'
+    summary_df.to_csv(summary_path, index=False)
+    print(f"   Saved summary statistics: {summary_path}")
+    
+    # Save raw elementary effects (long format for easy analysis)
+    raw_rows = []
+    for name in param_names:
+        effects = np.array(sensitivity_data['raw_effects'].get(name, []))
+        for i, effect in enumerate(effects):
+            raw_rows.append({
+                'parameter': name,
+                'parameter_latex': _get_latex_name(name),
+                'trajectory': i + 1,
+                'elementary_effect': effect
+            })
+    
+    if raw_rows:
+        raw_df = pd.DataFrame(raw_rows)
+        raw_path = output_dir / f'ee_raw_effects_{metric_name}.csv'
+        raw_df.to_csv(raw_path, index=False)
+        print(f"   Saved raw effects: {raw_path}")
+    
+    # Save metadata
+    metadata = {
+        'metric': metric_name,
+        'n_parameters': len(param_names),
+        'output_range': sensitivity_data.get('output_range', np.nan),
+        'total_trajectories': n_samples if param_names else 0
+    }
+    metadata_df = pd.DataFrame([metadata])
+    metadata_path = output_dir / f'ee_metadata_{metric_name}.csv'
+    metadata_df.to_csv(metadata_path, index=False)
+    print(f"   Saved metadata: {metadata_path}")
+
+
 def create_all_plots(
     stats: Dict[str, Any],
     output_dir: Path,
     verbose: bool = True
 ):
     """
-    Create all standard Elementary Effects plots.
+    Create all standard Elementary Effects plots and save data to CSV.
     
     Args:
         stats: Statistics dictionary from elementary effects analysis
-        output_dir: Directory to save plots
+        output_dir: Directory to save plots and data
         verbose: Whether to print progress
     """
     if verbose:
@@ -334,6 +421,9 @@ def create_all_plots(
         if verbose:
             print(f"\nGenerating plots for metric: {metric}")
         
+        # Save data to CSV files
+        save_sensitivity_data_to_csv(sens_data, metric, output_dir)
+        
         # Confidence interval plot
         plot_confidence_intervals(sens_data, metric, output_dir)
         
@@ -344,5 +434,5 @@ def create_all_plots(
         plot_box_plots(sens_data, metric, output_dir)
     
     if verbose:
-        print(f"\n✅ All plots saved to: {output_dir}")
+        print(f"\n✅ All plots and data saved to: {output_dir}")
         print(f"{'='*60}\n")

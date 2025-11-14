@@ -455,9 +455,17 @@ def get_input_parameters(df, target_variable, filename=None):
     varying_params = []
     for param in input_parameters:
         if param not in REMOVE_PARAMS and param in df.columns:
-            # Check if parameter varies (std > threshold to account for floating point errors)
-            if df[param].std() > 1e-10:
-                varying_params.append(param)
+            try:
+                # Check if parameter varies (std > threshold to account for floating point errors)
+                # Skip columns that contain non-scalar values (e.g., arrays)
+                if df[param].dtype == 'object':
+                    # Column contains objects (possibly arrays), skip it
+                    continue
+                if df[param].std() > 1e-10:
+                    varying_params.append(param)
+            except (TypeError, ValueError):
+                # Skip parameters that cannot have std computed (e.g., arrays)
+                continue
     
     return varying_params
 

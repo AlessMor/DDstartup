@@ -18,7 +18,9 @@
 # Note: When using "latest" or a folder, all HDF5 files in that folder are processed
 #       and outputs are saved back to the same folder automatically.
 
-files: "20251111_220719_parametric_T_seeded"  # Default: process files in the latest folder
+files: 
+#- '20251113_002935_parametric_T_seeded'  # Folder name (relative to outputs/)
+- '20251113_120706_parametric_lump'  # Default: process files in the latest folder
 
 # Alternative examples:
 # files: "20251008_081422_parametric_T_seeded"  # Specific folder

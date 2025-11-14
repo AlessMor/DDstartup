@@ -6,7 +6,7 @@ analysis_type: 'lump'                # Lump model (faster than T_seeded)
 method: 'elementary_effects'         # Use Elementary Effects (Morris) method
 
 # Elementary Effects specific parameters
-num_trajectories: 10000                # Number of random trajectories (lump is fast, can use more)
+num_trajectories: 100000                # Number of random trajectories (lump is fast, can use more)
 p_levels: 6                          # Grid discretization levels (4 or 6 typical)
 output_metrics:                      # Output variables to analyze
   - 't_startup'

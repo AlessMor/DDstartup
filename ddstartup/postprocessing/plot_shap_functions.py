@@ -45,8 +45,19 @@ def compute_feature_importance(df, input_parameters, target):
     correlation = np.zeros(len(input_parameters))
     
     for i, param in enumerate(input_parameters):
-        # Skip parameters with zero variance (constant values)
-        if df[param].std() == 0:
+        # Skip parameters with zero variance (constant values) or non-scalar types
+        try:
+            if df[param].dtype == 'object':
+                # Column contains objects (possibly arrays), skip it
+                importance[i] = 0.0
+                correlation[i] = 0.0
+                continue
+            if df[param].std() == 0:
+                importance[i] = 0.0
+                correlation[i] = 0.0
+                continue
+        except (TypeError, ValueError):
+            # Skip parameters that cannot have std computed
             importance[i] = 0.0
             correlation[i] = 0.0
             continue
@@ -134,10 +145,17 @@ def create_shap_style_beeswarm_plot(df, input_parameters, target, target_unit,
     # Filter out constant parameters (zero variance)
     varying_params = []
     for param in input_parameters:
-        if df[param].std() > 0:
-            varying_params.append(param)
-        else:
-            print(f"   Excluding constant parameter: {param} (std=0)")
+        try:
+            if df[param].dtype == 'object':
+                print(f"   Excluding non-scalar parameter: {param} (object dtype)")
+                continue
+            if df[param].std() > 0:
+                varying_params.append(param)
+            else:
+                print(f"   Excluding constant parameter: {param} (std=0)")
+        except (TypeError, ValueError):
+            print(f"   Excluding parameter with incompatible type: {param}")
+            continue
     
     if len(varying_params) == 0:
         print(f"   No varying input parameters found. Skipping SHAP plot.")
@@ -419,7 +437,15 @@ def save_importance_to_csv(df, input_parameters, target, outputs_dir, plot_name)
         plot_name: Base name for saved file
     """
     # Filter out constant parameters
-    varying_params = [param for param in input_parameters if df[param].std() > 0]
+    varying_params = []
+    for param in input_parameters:
+        try:
+            if df[param].dtype == 'object':
+                continue
+            if df[param].std() > 0:
+                varying_params.append(param)
+        except (TypeError, ValueError):
+            continue
     
     if len(varying_params) == 0:
         print(f"   ⚠️  No varying parameters to save to CSV")

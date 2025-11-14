@@ -7,12 +7,12 @@ method: parametric       # parametric or sobol
 
 # Analysis-specific parameters
 vector_length: 100      # Maintains data quality
-total_time: 315360000  # in seconds. default is 315360000 (10 years)
+max_simulation_time: 315360000  # in seconds. default is 315360000 (10 years)
 
 # Performance settings
 n_jobs: null           # null for auto-detect, or specify number
 chunk_size: null       # null for auto-calculate, or specify
-batch_size: 100    # null for auto-calculate, or specify
+batch_size: null    # null for auto-calculate, or specify
 
 # Output settings
 output_dir: outputs   #default is 'outputs'  
