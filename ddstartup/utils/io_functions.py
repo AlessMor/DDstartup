@@ -9,6 +9,7 @@ This module contains functions for:
 - Configuration display
 - Output directory and file creation
 """
+from __future__ import annotations
 
 import os
 import yaml
@@ -17,6 +18,96 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 import time
+import re
+from pathlib import Path
+from typing import List, Tuple, Union
+import pandas as pd
+import h5py
+from tqdm import tqdm
+
+PathLike = Union[str, Path]
+
+def latest_output_folder(outputs_dir: Path) -> Tuple[Path | None, List[Path]]:
+    """Return (latest_timestamped_folder, sorted_h5_files) or (None, [])."""
+    if not outputs_dir.exists():
+        return None, []
+    dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    if not dirs:
+        return None, []
+    def _key(p: Path):
+        m = re.match(r"(\d{8})_(\d{6})", p.name)
+        if m:
+            return (1, m.group(1) + m.group(2))
+        st = p.stat()
+        return (0, getattr(st, "st_birthtime", st.st_mtime))
+    dirs.sort(key=_key, reverse=True)
+    latest = dirs[0]
+    return latest, sorted(latest.glob("*.h5"))
+
+def latest_h5(outputs_dir: Path) -> Path | None:
+    """Return most recently modified .h5 in outputs_dir, or None."""
+    h5s = sorted(outputs_dir.glob("*.h5"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return h5s[0] if h5s else None
+
+def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List[Path], Path | None]:
+    """
+    Resolve 'files' spec into a deduped, ordered list of .h5 paths.
+    Returns (files, latest_folder_if_used_else_None).
+    Accepted forms:
+      - "latest": pick newest timestamped folder; else newest .h5 in <root>/outputs
+      - path(s) to .h5 or directories (absolute, CWD-relative, <root>-relative, or <root>/outputs-relative)
+    Raises FileNotFoundError / ValueError with clear messages.
+    """
+    outputs = root / "outputs"
+
+    # "latest" mode
+    if isinstance(spec, str) and spec == "latest":
+        if not outputs.exists():
+            raise FileNotFoundError(f"Outputs folder missing: {outputs}")
+        folder, files = latest_output_folder(outputs)
+        if folder and files:
+            return files, folder
+        f = latest_h5(outputs)
+        if not f:
+            raise FileNotFoundError(f"No .h5 found in {outputs}")
+        return [f], outputs
+
+    # Listify
+    specs = [spec] if isinstance(spec, (str, Path)) else list(spec)
+    files: List[Path] = []
+    latest_folder: Path | None = None
+
+    for s in specs:
+        s = Path(s)
+        # Resolve candidates in priority order: as-is, <root>/..., <root>/outputs/...
+        if not s.exists():
+            for base in (root, outputs):
+                cand = base / s
+                if cand.exists():
+                    s = cand
+                    break
+        if not s.exists():
+            raise FileNotFoundError(f"Path not found: {s}")
+
+        if s.is_dir():
+            h5s = sorted(s.glob("*.h5"))
+            if not h5s:
+                raise FileNotFoundError(f"No .h5 in directory: {s}")
+            files.extend(h5s)
+            if latest_folder is None:
+                latest_folder = s
+        else:
+            if s.suffix.lower() != ".h5":
+                raise ValueError(f"Not an .h5 file: {s}")
+            files.append(s)
+
+    # De-dupe, keep order
+    seen, uniq = set(), []
+    for p in files:
+        if p not in seen:
+            uniq.append(p)
+            seen.add(p)
+    return uniq, latest_folder
 
 
 def resolve_file_path(filename: str, default_dir: str, extensions: Optional[List[str]] = None) -> Path:
@@ -336,3 +427,74 @@ def generate_output_path(
     output_file = output_dir / filename
     
     return output_dir, str(output_file)
+
+# ---------------------------------------------------------------------
+# Core H5 → DataFrame (vectors preserved, no filters, no computed)
+# ---------------------------------------------------------------------
+def h5_to_df_core(
+    h5_path: Path,
+    *,
+    columns: List[str] | None = None,   # which datasets to read (default: all present)
+    chunk_size: int = 500_000,
+    downcast_float32: bool = False,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Stream an HDF5 file to a DataFrame, preserving 1D vectors as per-row ndarrays.
+    No computed variables, no filters. Pure I/O.
+    """
+    def _to2d(a: np.ndarray) -> np.ndarray:
+        if a.ndim == 1: return a[:, None]
+        if a.ndim == 2: return a
+        return a.reshape(a.shape[0], int(np.prod(a.shape[1:], dtype=int)))
+
+    def _append_col(builder: dict, name: str, a2d: np.ndarray, downcast_f32: bool) -> int:
+        # scalar column -> numeric Series; vector column -> object Series of 1D arrays
+        if a2d.ndim == 2 and a2d.shape[1] == 1:
+            col = a2d[:, 0]
+            if downcast_f32 and np.issubdtype(col.dtype, np.floating):
+                col = col.astype(np.float32, copy=False)
+            builder[name] = col
+            return 1
+        # vector column
+        if downcast_f32 and np.issubdtype(a2d.dtype, np.floating):
+            a2d = a2d.astype(np.float32, copy=False)
+        builder[name] = [a2d[i].copy() for i in range(a2d.shape[0])]
+        return int(a2d.shape[1])
+
+    parts: list[pd.DataFrame] = []
+    inner_dims: dict[str, int] = {}
+
+    with h5py.File(h5_path, "r") as f:
+        # Which datasets to read
+        if columns is None:
+            read_names = [k for k in f.keys() if isinstance(f[k], h5py.Dataset) and f[k].ndim >= 1]
+        else:
+            read_names = [k for k in columns if k in f]  # intersect with actual file contents
+
+        # Determine row count
+        n = next(
+            (f[k].shape[0] for k in f.keys() if isinstance(f[k], h5py.Dataset) and f[k].ndim >= 1),
+            0
+        )
+        if verbose:
+            scal = sum(1 for k in read_names if f[k].ndim == 1)
+            vec  = sum(1 for k in read_names if f[k].ndim > 1)
+            print(f"   Loading data (core), chunk_size={chunk_size} ...")
+            print(f"   Loading chunks of {chunk_size:,} rows; will read {scal} scalar and {vec} vector datasets.")
+
+        for start in tqdm(range(0, n, chunk_size), desc="   Loading chunks", unit="chunk"):
+            end = min(start + chunk_size, n)
+            coldict: dict[str, Any] = {}
+
+            for name in read_names:
+                arr = f[name][start:end]
+                a2d = _to2d(np.asarray(arr))
+                inn = _append_col(coldict, name, a2d, downcast_float32)
+                inner_dims.setdefault(name, inn)
+
+            parts.append(pd.DataFrame(coldict))
+
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.attrs["_inner_dims"] = inner_dims
+    return df

@@ -1,656 +1,173 @@
+# ddstartup/postprocessing/cli.py
 """
 DD Startup Postprocessing Tool - Main Entry Point
 
-This script provides a command-line interface for postprocessing DD startup
-analysis results stored in HDF5 files. It can generate various plots and
-analyses with flexible filtering options.
-
 Usage:
     python -m ddstartup.postprocessing [config.yaml] [OPTIONS]
-
-Examples:
-    # Use YAML configuration file (recommended)
-    python -m ddstartup.postprocessing postprocess_config.yaml
-    
-    # Use YAML with command-line overrides
-    python -m ddstartup.postprocessing postprocess_config.yaml --plots kde
-    
-    # Process latest file with defaults (no config file)
-    python -m ddstartup.postprocessing
-    
-    # Process specific file (command-line only)
-    python -m ddstartup.postprocessing --files outputs/my_results.h5
-    
-    # Process multiple files
-    python -m ddstartup.postprocessing --files file1.h5 file2.h5
-    
-    # Specify target variables
-    python -m ddstartup.postprocessing --targets t_startup unrealized_profits
-    
-    # Apply filters (command-line)
-    python -m ddstartup.postprocessing --input-filter "V_plasma<150" --output-filter "unrealized_profits>2e6"
-    
-    # Generate specific plot types
-    python -m ddstartup.postprocessing --plots kde parcoords pdf
-
-Note:
-    Configuration file (YAML) is the recommended method for complex postprocessing.
-    Command-line arguments override settings from the YAML file.
-    See inputs/postprocess_config.yaml for a complete configuration example.
 """
 
+from __future__ import annotations
+
+from networkx import config
+DEBUG = True
+
 import argparse
-import sys
-import warnings
 from pathlib import Path
+from typing import Any, Dict, List
+from pprint import pprint
 
-# CRITICAL: Import hdf5plugin BEFORE any h5py operations
-# This enables LZ4 compression support for reading compressed HDF5 files
-try:
-    import hdf5plugin
-except ImportError:
-    warnings.warn("hdf5plugin not installed - LZ4 compressed files cannot be read")
+from ddstartup.utils.io_functions import latest_output_folder
 
-# Local imports
 from ddstartup.postprocessing.postprocess_functions import (
-    load_h5_to_dataframe,
-    get_input_parameters,
-    scale_target,
-    find_latest_output_folder,
-    find_latest_h5_file,
-    load_yaml_config,
-    parse_filter_expression,
-    clean_filters,
-    apply_filters
+    load_config_from_args,
+    apply_cli_overrides,
+    resolve_file_paths,
+    parse_filters_and_computed,
+    collect_plot_settings,
+    generate_plots_for_file,
 )
-from ddstartup.utils.parameter_registry import get_registry
-from ddstartup.postprocessing.plot_kde_functions import kde_quartile_plot
-from ddstartup.postprocessing.plot_parcoords_functions import generate_parcoords_plot
-from ddstartup.postprocessing.plot_pdf_functions import generate_pdf_plot
-from ddstartup.postprocessing.plot_importance_matrix import plot_effect_size_matrix
-from ddstartup.postprocessing.plot_kmeans_functions import cluster_and_quartile_bar
-from ddstartup.postprocessing.plot_contour_functions import plot_2d_cell_mean_heatmap, plot_pairwise_contours, plot_interactive_pairwise_contours
-from ddstartup.postprocessing.plot_shap_functions import generate_shap_plots
-from ddstartup.postprocessing.plot_ML_pairwise_functions import generate_ml_pairwise_plots
-from ddstartup.postprocessing.plot_strips import generate_strip_plot
-
-# Suppress warnings
-warnings.filterwarnings("ignore")
 
 
-def generate_plots(files, targets, input_filters, output_filters, plot_types, output_dir, 
-                   shap_interpolate=False, pdf_smooth=False, ml_pairwise_settings=None, 
-                   strip_settings=None):
-    """
-    Generate requested plots for the given files and targets.
-    
-    Args:
-        files: List of HDF5 file paths
-        targets: List of target variables
-        input_filters: Dictionary of input filters
-        output_filters: Dictionary of output filters
-        plot_types: List of plot types to generate ('kde', 'parcoords', 'pdf', 'ml_pairwise', 'strip')
-        output_dir: Directory to save plots
-        shap_interpolate: Whether to use interpolated (smooth) SHAP plots (default: False)
-        pdf_smooth: Whether to use KDE smoothing for PDF plots (default: False)
-        ml_pairwise_settings: Dictionary with ML pairwise plot settings (pairs, grid_size, etc.)
-        strip_settings: Dictionary with strip plot settings (y_metrics, sort_by, unit_conversions, etc.)
-    """
-    # Get parameter registry once for all plot functions
-    registry = get_registry()
-    
-    print(f"\n{'='*80}")
-    print(f"GENERATING PLOTS")
-    print(f"{'='*80}")
-    
-    for file_path in files:
-        print(f"\n📁 Processing: {file_path.name}")
-        
-        # Determine file type for labeling
-        if "lump" in file_path.name.lower():
-            file_type = "lump"
-        elif "t_seeded" in file_path.name.lower() or "tseeded" in file_path.name.lower():
-            file_type = "Tseeded"
-        else:
-            file_type = "unknown"
-        
-        for target in targets:
-            print(f"\n  🎯 Target: {target}")
-            
-            # Load and filter data - load only inputs and this target to manage memory
-            print(f"   Loading data (inputs + {target})...")
-            df = load_h5_to_dataframe(file_path, target_variables=[target])
-            
-            # Apply filters
-            df_filtered = apply_filters(df, input_filters, output_filters, target)
-            
-            # Delete the unfiltered dataframe immediately to free memory
-            del df
-            import gc
-            gc.collect()
-            
-            if len(df_filtered) == 0:
-                print(f"   ⚠️  No data remaining after filtering. Skipping.")
-                continue
-            
-            # Scale target variable
-            df_filtered, target_unit = scale_target(df_filtered, target)
-            
-            # Get input parameters
-            input_parameters = get_input_parameters(df_filtered, target, filename=str(file_path))
-            
-            # Generate KDE plot
-            if 'kde' in plot_types:
-                print(f"   Generating KDE plot...")
-                plot_name = f"kde_quartiles_{file_path.stem}_{target}.png"
-                try:
-                    kde_quartile_plot(df_filtered, target, input_parameters, 
-                                    target_unit, output_dir, file_type, plot_name, registry=registry)
-                    print(f"   ✅ Saved: {plot_name}")
-                except Exception as e:
-                    print(f"   ❌ Error generating KDE plot: {e}")
+# ------------------------
+# Minimal CLI only
+# ------------------------
 
-            # Generate effect-size (importance) matrix
-            if 'importance' in plot_types:
-                print(f"   Generating effect-size matrix...")
-                plot_name = f"effects_{file_path.stem}_{target}"
-                try:
-                    plot_effect_size_matrix(df_filtered, target, input_parameters, output_dir, 
-                                          plot_name=plot_name, registry=registry)
-                    print(f"   ✅ Saved: {plot_name}.png and CSV")
-                except Exception as e:
-                    print(f"   ❌ Error generating effect-size matrix: {e}")
-
-            # Generate KMeans cluster vs quartile bar
-            if 'kmeans' in plot_types:
-                print(f"   Generating KMeans cluster plot...")
-                plot_name = f"kmeans_{file_path.stem}_{target}"
-                try:
-                    cluster_and_quartile_bar(df_filtered, input_parameters, target, output_dir, 
-                                           n_clusters=5, plot_name=plot_name, registry=registry)
-                    print(f"   ✅ Saved: {plot_name}.png and cluster centers CSV")
-                except Exception as e:
-                    print(f"   ❌ Error generating KMeans plot: {e}")
-
-            # Generate interactive contour/heatmap with dropdown selection
-            if 'contour' in plot_types and len(input_parameters) >= 2:
-                print(f"   Generating interactive 2D contour/heatmap (with parameter selection)...")
-                plot_name = f"contour_interactive_{file_path.stem}_{target}"
-                try:
-                    plot_interactive_pairwise_contours(df_filtered, input_parameters, target, output_dir, 
-                                                     plot_name=plot_name, registry=registry)
-                    print(f"   ✅ Saved: {plot_name}.html (interactive)")
-                except Exception as e:
-                    print(f"   ❌ Error generating interactive contour: {e}")
-            
-            # Generate parallel coordinates plot
-            if 'parcoords' in plot_types:
-                print(f"   Generating parallel coordinates plot...")
-                plot_name = f"parcoords_{file_path.stem}_{target}.html"
-                try:
-                    generate_parcoords_plot(df_filtered, target, input_parameters, 
-                                          target_unit, file_type, output_dir / plot_name, registry=registry)
-                    print(f"   ✅ Saved: {plot_name}")
-                except Exception as e:
-                    print(f"   ❌ Error generating parallel coordinates plot: {e}")
-            
-            # Generate PDF plot
-            if 'pdf' in plot_types:
-                print(f"   Generating PDF plot...")
-                plot_name = f"pdf_{file_path.stem}_{target}.png"
-                try:
-                    generate_pdf_plot({str(file_path): {target: df_filtered[target].values}}, 
-                                    target, [f"{file_type}"], output_filters, 
-                                    output_dir / plot_name, smooth=pdf_smooth, registry=registry)
-                    print(f"   ✅ Saved: {plot_name}")
-                except Exception as e:
-                    print(f"   ❌ Error generating PDF plot: {e}")
-            
-            # Generate SHAP plots
-            if 'shap' in plot_types:
-                print(f"   Generating SHAP plots...")
-                plot_name = f"shap_{file_path.stem}_{target}"
-                try:
-                    generate_shap_plots(
-                        df_filtered, target, input_parameters, target_unit,
-                        output_dir, file_type, plot_name,
-                        max_display=20,
-                        max_samples=2000,
-                        save_csv=True,
-                        interpolate=shap_interpolate,
-                        registry=registry
-                    )
-                    print(f"   ✅ Generated SHAP plots and CSV files")
-                except Exception as e:
-                    print(f"   ❌ Error generating SHAP plots: {e}")
-            
-            # Generate ML pairwise plots
-            if 'ml_pairwise' in plot_types:
-                print(f"   Generating ML pairwise plots...")
-                plot_name = f"ml_pdp_{file_path.stem}_{target}"
-                try:
-                    # Get ML settings
-                    if ml_pairwise_settings is None:
-                        ml_pairwise_settings = {}
-                    
-                    pairs = ml_pairwise_settings.get('pairs', 'auto')
-                    grid_size = ml_pairwise_settings.get('grid_size', 60)
-                    max_train_samples = ml_pairwise_settings.get('max_train_samples', 100000)
-                    hidden = tuple(ml_pairwise_settings.get('hidden', [256, 256, 128]))
-                    verbose = ml_pairwise_settings.get('verbose', False)
-                    
-                    generate_ml_pairwise_plots(
-                        df_filtered, target, input_parameters, target_unit,
-                        output_dir, file_type, plot_name,
-                        registry=registry,
-                        pairs=pairs,
-                        grid_size=grid_size,
-                        max_train_samples=max_train_samples,
-                        hidden=hidden,
-                        verbose=verbose
-                    )
-                    print(f"   ✅ Generated ML pairwise plots")
-                except Exception as e:
-                    print(f"   ❌ Error generating ML pairwise plots: {e}")
-            
-            # Clean up memory after processing this target
-            del df_filtered
-            gc.collect()
-            print(f"   🧹 Memory cleaned for next target")
-    
-    # Generate strip plots (once per file, comparing multiple metrics)
-    if 'strip' in plot_types and strip_settings is not None:
-        print(f"\n  📊 Generating strip plot...")
-        try:
-            # Get strip plot configuration
-            y_metrics = strip_settings.get('y_metrics', targets[:min(3, len(targets))])
-            sort_by = strip_settings.get('sort_by', y_metrics[0] if y_metrics else targets[0])
-            unit_conversions = strip_settings.get('unit_conversions', {})
-            optimal_point = strip_settings.get('optimal_point', True)
-            frac = strip_settings.get('frac', 0.12)
-            figsize = tuple(strip_settings.get('figsize', [14, 6]))
-            
-            # Combine filters for strip plot
-            combined_filters = {}
-            combined_filters.update(input_filters)
-            combined_filters.update(output_filters)
-            
-            # Generate strip plot
-            generate_strip_plot(
-                h5_file=file_path,
-                y_metrics=y_metrics,
-                x_sort_by=sort_by,
-                filters=combined_filters,
-                output_path=None,  # Will use default naming
-                unit_conversions=unit_conversions,
-                optimal_point=optimal_point,
-                registry=registry,
-                figsize=figsize,
-                frac=frac
-            )
-            print(f"   ✅ Generated strip plot")
-        except Exception as e:
-            print(f"   ❌ Error generating strip plot: {e}")
-            import traceback
-            traceback.print_exc()
-
-
-def main():
-    """Main execution function."""
-    
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
         description="Postprocess DD startup analysis HDF5 results",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
-    
-    parser.add_argument(
-        'config',
-        nargs='?',
-        default=None,
-        help='YAML configuration file (e.g., postprocess_config.yaml)'
-    )
-    
-    parser.add_argument(
-        '--files', '-f',
-        nargs='+',
-        help='HDF5 file(s) to process (overrides config file)'
-    )
-    
-    parser.add_argument(
-        '--targets', '-t',
-        nargs='+',
-        help='Target variables to analyze (overrides config file)'
-    )
-    
-    parser.add_argument(
-        '--input-filter', '-if',
-        type=str,
-        help='Filter for input parameters (e.g., "V_plasma<150,n_tot>1e20")'
-    )
-    
-    parser.add_argument(
-        '--output-filter', '-of',
-        type=str,
-        help='Filter for output variables (e.g., "unrealized_profits>2e6,t_startup<1e8")'
-    )
-    
-    parser.add_argument(
-        '--plots', '-p',
-        nargs='+',
-        choices=['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise', 'strip', 'all'],
-        help='Plot types to generate (overrides config file)'
-    )
-    
-    parser.add_argument(
-        '--output-dir', '-o',
-        type=str,
-        help='Output directory for plots (overrides config file)'
-    )
-    
-    parser.add_argument(
-        '--shap-interpolate',
-        action='store_true',
-        help='Use smooth interpolated SHAP plots instead of scatter plots'
-    )
-    
-    parser.add_argument(
-        '--pdf-smooth',
-        action='store_true',
-        help='Use KDE smoothing for PDF plots instead of histogram bins'
-    )
-    
-    args = parser.parse_args()
-    
-    # ============================================================================
-    # LOAD CONFIGURATION
-    # ============================================================================
-    
-    # Get base directory (project root, not package directory)
-    # __file__ is in ddstartup/postprocessing/cli.py
-    # So parent.parent.parent gives us the project root
-    base_dir = Path(__file__).parent.parent.parent
-    
-    # Load YAML config if provided
-    if args.config:
-        config_path = Path(args.config)
-        if not config_path.is_absolute():
-            # Try relative to current directory first
-            if not config_path.exists():
-                # Try relative to inputs directory at project root
-                inputs_path = base_dir / 'inputs' / args.config
-                if inputs_path.exists():
-                    config_path = inputs_path
-                # Try with .yaml extension if not present
-                elif not args.config.endswith('.yaml') and not args.config.endswith('.yml'):
-                    yaml_path = base_dir / 'inputs' / f"{args.config}.yaml"
-                    if yaml_path.exists():
-                        config_path = yaml_path
+    p.add_argument("config", nargs="?", default=None,
+                   help="YAML configuration file (e.g., postprocess_config.yaml)")
+    p.add_argument("--files", "-f", nargs="+",
+                   help="HDF5 file(s) or folder(s) (overrides config file)")
+    p.add_argument("--targets", "-t", nargs="+",
+                   help="Target variables to analyze (overrides config file)")
+    # Eventually add more per-plot settings here if needed
+    p.add_argument("--plots", "-p", nargs="+",
+                   choices=["kde", "parcoords", "pdf", "importance", "kmeans",
+                            "contour", "shap", "ml_pairwise", "strip", "all"],
+                   help="Plot types to generate (overrides config file)")
+    p.add_argument("--output-dir", "-o", type=str,
+                   help="Output directory for plots (overrides config file)")
+    # Runtime knobs (can be auto-filled from HDF5 metadata)
+    p.add_argument("--chunk-size", type=int,
+                   help="Chunk size for streaming reads (overrides YAML/HDF5)")
+    p.add_argument("--n-jobs", type=int,
+                   help="Parallel workers for CPU-bound steps (overrides YAML/HDF5)")
+    p.add_argument("--batch-size", type=int,
+                   help="Batch size for ML/SHAP where supported (overrides YAML/HDF5)")
+    return p
+
+
+
+def main() -> None:
+    # Step 0: Set directory and parse CLI args
+    root = Path(__file__).resolve().parent.parent.parent
+    args = build_parser().parse_args()
+    if DEBUG: print('\n'.join(f"🔧 CLI arg: {arg} = {val}" for arg, val in vars(args).items() if val is not None))
+
+    # Step 1: Build the args dictionary
+    config: Dict[str, Any] = load_config_from_args(args, root)
+    apply_cli_overrides(config, args)
+    if DEBUG: print("📖 Config dictionary (after CLI arg override):"),pprint(config, sort_dicts=False, width=300, compact=True)
         
-        if not config_path.exists():
-            print(f"❌ Error: Configuration file not found: {args.config}")
-            print(f"   Searched in:")
-            print(f"   - Current directory: {Path.cwd()}")
-            print(f"   - Inputs directory: {base_dir / 'inputs'}")
-            sys.exit(1)
-        
-        print(f"📋 Loading configuration from: {config_path.name}")
-        config = load_yaml_config(config_path)
+    file_paths: List[Path] = resolve_file_paths(config, root)
+    if DEBUG: print(file_paths)
+    
+    # Step 2: Parse filters + computed
+    filters_exprs, computed_map, computed_meta = parse_filters_and_computed(config)
+    if DEBUG: print("🧾 Filters and computed variables:"), pprint({"filters_exprs": filters_exprs, "computed_map": computed_map, "computed_meta": computed_meta,})
+    
+    # Step 3: Targets settings
+    targets = list(config.get("target_variables", ["unrealized_profits", "t_startup"]))
+    if DEBUG: print(f"🎯 Target variables: {targets}")
+    
+    # Step 4: Plot types and settings
+    plots_cfg = config.get("plots", {})
+    if plots_cfg.get("generate_all", True):
+        plot_types = ["kde","parcoords","pdf","importance","kmeans","contour","shap","ml_pairwise","strip", "quartprob"]
     else:
-        # Use defaults if no config file
-        config = {
-            'files': 'latest',
-            'target_variables': ['unrealized_profits', 't_startup'],
-            'input_filters': {},
-            'output_filters': {},
-            'plots': {'generate_all': True},
-            'output': {'directory': 'default', 'verbose': True}
-        }
-        print("📋 Using default configuration (no config file specified)")
+        plot_types = [k for k in ["kde","parcoords","pdf","importance","kmeans","contour","shap","ml_pairwise","strip", "quartprob"] if plots_cfg.get(k, False)]
+    print(f"\n📊 Plot types: {', '.join(plot_types)}")
+    if DEBUG: print(f"📊 Plot types to generate: {plot_types}")
+    shap_interpolate, pdf_smooth, ml_pairwise_settings, strip_settings = collect_plot_settings(config, args, targets, plot_types)
     
-    # Command-line arguments override config file
-    if args.files:
-        config['files'] = args.files if len(args.files) > 1 else args.files[0]
-    if args.targets:
-        config['target_variables'] = args.targets
-    if args.output_dir:
-        config['output']['directory'] = args.output_dir
-    if args.plots:
-        if 'all' in args.plots:
-            config['plots']['generate_all'] = True
-        else:
-            config['plots']['generate_all'] = False
-            config['plots']['kde'] = 'kde' in args.plots
-            config['plots']['parcoords'] = 'parcoords' in args.plots
-            config['plots']['pdf'] = 'pdf' in args.plots
-    
-    # Parse command-line filter expressions (override config if provided)
-    if args.input_filter:
-        cli_input_filters = parse_filter_expression(args.input_filter)
-        if 'input_filters' not in config:
-            config['input_filters'] = {}
-        config['input_filters'].update(cli_input_filters)
-    
-    if args.output_filter:
-        cli_output_filters = parse_filter_expression(args.output_filter)
-        if 'output_filters' not in config:
-            config['output_filters'] = {}
-        config['output_filters'].update(cli_output_filters)
-    
-    # ============================================================================
-    # RESOLVE FILE PATHS
-    # ============================================================================
-    
-    files_config = config.get('files', 'latest')
-    
-    if isinstance(files_config, str) and files_config == 'latest':
-        # Find latest folder and files in outputs directory
-        outputs_dir = base_dir / 'outputs'
-        if not outputs_dir.exists():
-            print(f"❌ Error: Outputs directory not found: {outputs_dir}")
-            sys.exit(1)
-        
-        latest_folder, h5_files = find_latest_output_folder(outputs_dir)
-        
-        if latest_folder and h5_files:
-            file_paths = h5_files
-            print(f"📂 Using latest folder: {latest_folder.name}")
-            print(f"   Found {len(h5_files)} HDF5 file(s)")
-            # Store the latest folder for output directory
-            config['_latest_folder'] = latest_folder
-        else:
-            # Fallback to root outputs directory
-            latest_file = find_latest_h5_file(outputs_dir)
-            if latest_file is None:
-                print(f"❌ Error: No HDF5 files found in {outputs_dir}")
-                sys.exit(1)
-            file_paths = [latest_file]
-            print(f"📂 Using latest file: {latest_file.name} (in root outputs/)")
-            config['_latest_folder'] = outputs_dir
+    # Step 5: Output directory
+    out_spec = config.get("output", "default")
+    setting = out_spec if isinstance(out_spec, str) else (out_spec or {}).get("directory", "default")
+
+    if setting == "default":
+        # Prefer folder discovered during file resolution
+        output_dir = config.get("_latest_folder")
+        if output_dir is None:
+            outputs_root = root / "outputs"
+            latest, _ = latest_output_folder(outputs_root)
+            output_dir = latest if latest is not None else outputs_root
+        note = " (latest folder)" if output_dir != (root / "outputs") else ""
+        if DEBUG: print(f"\n💾 Output directory: {output_dir}{note}")
     else:
-        # User provided specific file(s) or folder(s) in config
-        if isinstance(files_config, str):
-            files_list = [files_config]
-        else:
-            files_list = files_config
+        output_dir = (root / setting).resolve() if not Path(setting).is_absolute() else Path(setting)
+        if DEBUG: print(f"\n💾 Output directory: {output_dir} (custom)")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    
+
+    def _as_int(x):
+        try:
+            return int(x)
+        except Exception:
+            try:
+                return int(float(x))
+            except Exception:
+                return None
+
+    def _h5_int(path: Path, key: str) -> int | None:
+        import h5py
+        try:
+            with h5py.File(path, "r") as f:
+                v = f.attrs.get(key, None)
+                if v is None and "meta" in f:
+                    v = f["meta"].attrs.get(key, None)
+                return _as_int(v)
+        except Exception:
+            return None
+    # Per-file runtime: prefer config->H5->default, no config mutation
+    rt_cfg = config.get("runtime", {}) or {}
+
+
+
+    # Step 6: Per-file plotting
+    for path in file_paths:
+        chunk_size = _as_int(rt_cfg.get("chunk_size")) or _h5_int(path, "chunk_size") or 500_000
+        n_jobs     = _as_int(rt_cfg.get("n_jobs"))     or _h5_int(path, "n_jobs")     or 1
+        batch_size = _as_int(rt_cfg.get("batch_size")) or _h5_int(path, "batch_size") or 100_000
+        downcast_float32 = bool(rt_cfg.get("downcast_float32", False))
+
+        per_file_ml = dict(ml_pairwise_settings or {})
+        per_file_ml.setdefault("n_jobs", n_jobs)
+        per_file_ml.setdefault("batch_size", batch_size)
+
         
-        file_paths = []
-        for f in files_list:
-            p = Path(f)
-            if not p.is_absolute():
-                # Try relative to current directory first
-                if not p.exists():
-                    # Try relative to base directory
-                    p_alt = base_dir / f
-                    if p_alt.exists():
-                        p = p_alt
-                    # Try relative to outputs directory
-                    elif (base_dir / 'outputs' / f).exists():
-                        p = base_dir / 'outputs' / f
-            
-            if not p.exists():
-                print(f"❌ Error: Path not found: {f}")
-                sys.exit(1)
-            
-            # If it's a directory, find HDF5 files inside
-            if p.is_dir():
-                h5_files = list(p.glob("*.h5"))
-                if not h5_files:
-                    print(f"❌ Error: No HDF5 files found in directory: {p}")
-                    sys.exit(1)
-                file_paths.extend(h5_files)
-                print(f"📁 Found {len(h5_files)} file(s) in: {p.name}")
-                # Store folder for output if not set
-                if '_latest_folder' not in config:
-                    config['_latest_folder'] = p
-            else:
-                # It's a file
-                file_paths.append(p.resolve())
-    
-    # ============================================================================
-    # PARSE FILTERS
-    # ============================================================================
-    
-    input_filters = clean_filters(config.get('input_filters', {}))
-    output_filters = clean_filters(config.get('output_filters', {}))
-    
-    if input_filters:
-        print(f"\n🔍 Input filters:")
-        for var, conds in input_filters.items():
-            if conds['min'] is not None and conds['max'] is not None:
-                print(f"   {var}: {conds['min']} ≤ {var} ≤ {conds['max']}")
-            elif conds['min'] is not None:
-                print(f"   {var}: {var} ≥ {conds['min']}")
-            elif conds['max'] is not None:
-                print(f"   {var}: {var} ≤ {conds['max']}")
-    
-    if output_filters:
-        print(f"\n🔍 Output filters:")
-        for var, conds in output_filters.items():
-            if conds['min'] is not None and conds['max'] is not None:
-                print(f"   {var}: {conds['min']} ≤ {var} ≤ {conds['max']}")
-            elif conds['min'] is not None:
-                print(f"   {var}: {var} ≥ {conds['min']}")
-            elif conds['max'] is not None:
-                print(f"   {var}: {var} ≤ {conds['max']}")
-    
-    # ============================================================================
-    # GET TARGET VARIABLES
-    # ============================================================================
-    
-    targets = config.get('target_variables', ['unrealized_profits', 't_startup'])
-    print(f"\n🎯 Target variables: {', '.join(targets)}")
-    
-    # ============================================================================
-    # Determine plot types
-    # ============================================================================
-    
-    plots_config = config.get('plots', {})
-    if plots_config.get('generate_all', True):
-        plot_types = ['kde', 'parcoords', 'pdf', 'importance', 'kmeans', 'contour', 'shap', 'ml_pairwise', 'strip']
-    else:
-        plot_types = []
-        if plots_config.get('kde', False):
-            plot_types.append('kde')
-        if plots_config.get('parcoords', False):
-            plot_types.append('parcoords')
-        if plots_config.get('pdf', False):
-            plot_types.append('pdf')
-        if plots_config.get('importance', False):
-            plot_types.append('importance')
-        if plots_config.get('kmeans', False):
-            plot_types.append('kmeans')
-        if plots_config.get('contour', False):
-            plot_types.append('contour')
-        if plots_config.get('shap', False):
-            plot_types.append('shap')
-        if plots_config.get('ml_pairwise', False):
-            plot_types.append('ml_pairwise')
-        if plots_config.get('strip', False):
-            plot_types.append('strip')
-    
-    print(f"📊 Plot types: {', '.join(plot_types)}")
-    
-    # ============================================================================
-    # GET SHAP SETTINGS
-    # ============================================================================
-    
-    # Get SHAP interpolation setting from YAML or CLI
-    shap_settings = plots_config.get('shap_settings', {})
-    shap_interpolate = shap_settings.get('interpolate', False)
-    
-    # Command-line argument overrides YAML config
-    if args.shap_interpolate:
-        shap_interpolate = True
-    
-    if shap_interpolate and 'shap' in plot_types:
-        print(f"🔷 SHAP interpolation: ENABLED (smooth density plots)")
-    elif 'shap' in plot_types:
-        print(f"🔷 SHAP interpolation: DISABLED (scatter plots)")
-    
-    # Get PDF smoothing setting from YAML or CLI
-    pdf_settings = plots_config.get('pdf_settings', {})
-    pdf_smooth = pdf_settings.get('smooth', False)
-    
-    # Command-line argument overrides YAML config
-    if args.pdf_smooth:
-        pdf_smooth = True
-    
-    if pdf_smooth and 'pdf' in plot_types:
-        print(f"🔷 PDF smoothing: ENABLED (KDE)")
-    elif 'pdf' in plot_types:
-        print(f"🔷 PDF smoothing: DISABLED (histogram bins)")
-    
-    # Get ML pairwise settings
-    ml_pairwise_settings = plots_config.get('ml_pairwise_settings', {})
-    
-    if 'ml_pairwise' in plot_types:
-        pairs_mode = ml_pairwise_settings.get('pairs', 'auto')
-        print(f"🔷 ML pairwise mode: {pairs_mode}")
-    
-    # Get strip plot settings
-    strip_settings = plots_config.get('strip_settings', {})
-    
-    if 'strip' in plot_types:
-        y_metrics = strip_settings.get('y_metrics', targets[:min(3, len(targets))])
-        print(f"🔷 Strip plot metrics: {', '.join(y_metrics)}")
-    
-    # ============================================================================
-    # DETERMINE OUTPUT DIRECTORY
-    # ============================================================================
-    
-    output_config = config.get('output', {})
-    output_dir_setting = output_config.get('directory', 'default')
-    
-    if output_dir_setting == 'default':
-        # Use the latest folder if available, otherwise postprocess subfolder
-        if '_latest_folder' in config:
-            output_dir = config['_latest_folder']
-            print(f"💾 Output directory: {output_dir} (latest folder)")
-        else:
-            output_dir = Path(__file__).parent / 'postprocess'
-            output_dir.mkdir(parents=True, exist_ok=True)
-            print(f"💾 Output directory: {output_dir}")
-    else:
-        output_dir = Path(output_dir_setting)
-        if not output_dir.is_absolute():
-            output_dir = base_dir / output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"💾 Output directory: {output_dir} (custom)")
-    
-    # ============================================================================
-    # GENERATE PLOTS
-    # ============================================================================
-    
-    generate_plots(file_paths, targets, input_filters, output_filters, 
-                   plot_types, output_dir, shap_interpolate, pdf_smooth, 
-                   ml_pairwise_settings, strip_settings)
-    
+        generate_plots_for_file(
+            path,
+            targets=targets,
+            filters_exprs=filters_exprs,
+            computed_map=computed_map,
+            computed_meta=computed_meta,
+            plot_types=plot_types,
+            output_dir=output_dir,
+            shap_interpolate=shap_interpolate,
+            pdf_smooth=pdf_smooth,
+            ml_pairwise_settings=ml_pairwise_settings,
+            strip_settings=strip_settings,
+            chunk_size=chunk_size,
+            n_jobs=n_jobs,
+            batch_size=batch_size,
+            downcast_float32=downcast_float32,
+        )
+
     print(f"\n{'='*80}")
-    print(f"✅ POSTPROCESSING COMPLETE")
+    print("✅ POSTPROCESSING COMPLETE")
     print(f"{'='*80}\n")
-
-
-if __name__ == "__main__":
-    main()

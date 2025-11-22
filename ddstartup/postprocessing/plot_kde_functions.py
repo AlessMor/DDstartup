@@ -1,180 +1,302 @@
 """
 KDE (Kernel Density Estimation) Plot Functions
 
-This module contains functions for generating KDE plots split by quartiles
-of target variables.
+Generates KDE plots split by quartiles of a scalar target variable.
+- Works with the new DF format: scalar columns are numeric; vector columns are object
+  series containing per-row 1D numpy arrays (skipped here).
+- Uses df.attrs["_inner_dims"] to detect scalar vs vector columns.
+- Backward-compatible argument names (df/df_filtered, inputs/input_parameters,
+  output_dir/outputs_dir, plot_name_prefix/plot_name).
 """
 
+from pathlib import Path
 import numpy as np
 import pandas as pd
-from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
-from ddstartup.utils.tools import PARAM_UNITS
-from ddstartup.utils.parameter_registry import get_registry
 
 
-def save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_labels, outputs_dir, plot_name):
-    """
-    Save the lowest and middle value for each quartile of the target variable to a CSV,
-    including the input parameter combination for each row.
-    
-    Args:
-        df_filtered: Filtered DataFrame with data
-        target: Target variable name
-        input_parameters: List of input parameter names
-        bin_labels: List of quartile bin labels
-        outputs_dir: Directory to save CSV file
-        plot_name: Name of the plot (used for CSV filename)
-    """
-    quartile_csv_rows = []
-    for bin_label in bin_labels:
-        bin_df = df_filtered[df_filtered[f"{target}_bin"] == bin_label]
-        if bin_df.empty:
+def _resolve_args(
+    *,
+    df=None,
+    df_filtered=None,
+    inputs=None,
+    input_parameters=None,
+    output_dir=None,
+    outputs_dir=None,
+    plot_name_prefix=None,
+    plot_name=None,
+    **_
+):
+    """Normalize old/new argument names to a single set."""
+    _df = df_filtered if df is None else df
+    _inputs = input_parameters if inputs is None else inputs
+    _outdir = outputs_dir if output_dir is None else output_dir
+
+    # Build filename stem once. Prefer explicit plot_name_prefix over legacy plot_name.
+    if plot_name_prefix:
+        stem = f"{plot_name_prefix}_kde_by_quartile"
+    elif plot_name:
+        # strip extension if a file-like name was passed
+        stem = Path(plot_name).stem
+    else:
+        stem = "kde_by_quartile"
+
+    return _df, _inputs, Path(_outdir), stem
+
+
+def _scalar_input_columns(df: pd.DataFrame, candidates: list[str]) -> list[str]:
+    """Pick scalar columns among candidates (inner_dim==1 and numeric dtype)."""
+    inner = (df.attrs or {}).get("_inner_dims", {})
+    out = []
+    for c in candidates:
+        if c not in df.columns:
             continue
-        # Find lowest and middle value of target variable in this quartile
-        sorted_bin = bin_df.sort_values(by=target)
-        lowest_row = sorted_bin.iloc[0]
-        middle_row = sorted_bin.iloc[len(sorted_bin)//2]
-        for row, which in zip([lowest_row, middle_row], ["lowest", "middle"]):
-            csv_row = {"quartile": bin_label, "which": which, target: row[target]}
-            for param in input_parameters:
-                csv_row[param] = row[param]
-            # Force t_startup column to be present for unrealized_profits
-            if "t_startup" in df_filtered.columns:
-                csv_row["t_startup"] = row.get("t_startup", np.nan)
-            quartile_csv_rows.append(csv_row)
-    
-    csv_df = pd.DataFrame(quartile_csv_rows)
-    csv_name = f"quartile_{target}_values_{Path(plot_name).stem}.csv"
-    csv_df.to_csv(outputs_dir / csv_name, index=False)
-    print(f"   Quartile values saved: {csv_name}")
+        if int(inner.get(c, 1)) != 1:
+            # vector-valued input; this plot handles only scalars
+            continue
+        # keep numeric columns only
+        if pd.api.types.is_numeric_dtype(df[c]):
+            out.append(c)
+    return out
 
 
-def kde_quartile_plot(df_filtered, target, input_parameters, target_unit, outputs_dir, file_type, plot_name, registry=None):
-    """
-    Create KDE plots for each input parameter, split by quartiles of the target variable.
-    
-    Args:
-        df_filtered: Filtered DataFrame with data
-        target: Target variable name
-        input_parameters: List of input parameter names
-        target_unit: Unit string for target variable
-        outputs_dir: Directory to save plot
-        file_type: Type of file (for plot title)
-        plot_name: Name for saved plot file
-        registry: ParameterRegistry instance (optional, will create if not provided)
-    """
-    # Get registry if not provided
-    if registry is None:
-        from ddstartup.utils.parameter_registry import get_registry
-        registry = get_registry()
-    
-    n_inputs = len(input_parameters)
-    if n_inputs == 0:
-        print(f"   No input parameters found for target '{target}'. Skipping KDE plot.")
-        return
-    
-    # Import gridspec for later use
-    from matplotlib import gridspec
-    
-    # Quartile binning
-    bin_edges = df_filtered[target].quantile([0, 0.25, 0.5, 0.75, 1.0]).values
-    bin_labels = [
-        f"Q1: {bin_edges[0]:.2e}–{bin_edges[1]:.2e}",
-        f"Q2: {bin_edges[1]:.2e}–{bin_edges[2]:.2e}",
-        f"Q3: {bin_edges[2]:.2e}–{bin_edges[3]:.2e}",
-        f"Q4: {bin_edges[3]:.2e}–{bin_edges[4]:.2e}"
+def _varying_columns(df: pd.DataFrame, cols: list[str]) -> list[str]:
+    """Remove near-constant columns to avoid degenerate KDEs."""
+    keep = []
+    for c in cols:
+        s = df[c].dropna()
+        if s.empty:
+            continue
+        # robust constant check
+        try:
+            std = float(s.std())
+            mean = abs(float(s.mean()))
+        except Exception:
+            continue
+        if std > 1e-10 and (mean == 0 or std / max(mean, 1e-30) > 1e-6):
+            keep.append(c)
+        else:
+            # silently skip constants; the caller already logs per-target summaries
+            pass
+    return keep
+
+
+def _quartile_bins(series: pd.Series) -> tuple[pd.Series, list[str]]:
+    """Return (categorical bins, ordered label list) for quartiles of a numeric series."""
+    y = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if y.empty:
+        # produce empty bins with default labels (the caller will bail out upstream)
+        labels = ["Q1", "Q2", "Q3", "Q4"]
+        return pd.Categorical([np.nan] * len(series), categories=labels), labels
+    qs = series.quantile([0, 0.25, 0.5, 0.75, 1.0])
+    labels = [
+        f"Q1: {qs.iloc[0]:.2e}–{qs.iloc[1]:.2e}",
+        f"Q2: {qs.iloc[1]:.2e}–{qs.iloc[2]:.2e}",
+        f"Q3: {qs.iloc[2]:.2e}–{qs.iloc[3]:.2e}",
+        f"Q4: {qs.iloc[3]:.2e}–{qs.iloc[4]:.2e}",
     ]
-    df_filtered[f"{target}_bin"] = pd.qcut(df_filtered[target], q=4, labels=bin_labels)
-    
-    # Save quartile extremes to CSV
-    save_quartile_extremes_to_csv(df_filtered, target, input_parameters, bin_labels, outputs_dir, plot_name)
-    
-    # Get colors for quartiles
-    colorscale = get_discrete_colorscale(4)
-    quartile_colors = [colorscale[i*2][1] for i in range(4)]
-    color_map = {label: quartile_colors[i] for i, label in enumerate(bin_labels)}
-    
-    # Filter out parameters with zero variance across the entire dataset
-    varying_input_parameters = []
-    for param in input_parameters:
-        if param in df_filtered.columns:
-            # Check if parameter has any variation (relative to mean to handle both small and large values)
-            std_val = df_filtered[param].std()
-            mean_val = abs(df_filtered[param].mean())
-            if std_val > 1e-10 and (mean_val == 0 or std_val / mean_val > 1e-6):
-                varying_input_parameters.append(param)
-            else:
-                print(f"   Skipping {param} (zero variance: all values ≈ {df_filtered[param].iloc[0]:.6g})")
-    
-    if len(varying_input_parameters) == 0:
-        print(f"   No varying parameters to plot. Skipping KDE plot.")
+    bins = pd.qcut(series, q=4, labels=labels, duplicates="drop")
+    # If duplicates collapsed (<4 bins), regenerate labels to the actual count
+    if bins.dtype == "category" and len(bins.cat.categories) != 4:
+        cats = list(bins.cat.categories)
+        return bins, cats
+    return bins, labels
+
+
+def _save_quartile_extremes_to_csv(
+    df: pd.DataFrame,
+    target: str,
+    inputs: list[str],
+    bins: pd.Series,
+    bin_labels: list[str],
+    outdir: Path,
+    stem: str,
+):
+    """Write one CSV with lowest and middle rows per quartile, keeping inputs (+ optional t_startup)."""
+    rows = []
+    # Align bins to df index
+    bcol = pd.Series(bins.values, index=df.index, name="_bin")
+    for label in bin_labels:
+        sel = df.index[bcol == label]
+        if sel.size == 0:
+            continue
+        sub = df.loc[sel].sort_values(by=target)
+        lo = sub.iloc[0]
+        mid = sub.iloc[len(sub) // 2]
+        for which, row in (("lowest", lo), ("middle", mid)):
+            rec = {"quartile": label, "which": which, target: row[target]}
+            for p in inputs:
+                rec[p] = row.get(p, np.nan)
+            if "t_startup" in df.columns:
+                rec["t_startup"] = row.get("t_startup", np.nan)
+            rows.append(rec)
+    if not rows:
         return
-    
-    # Update input_parameters to only include varying ones
-    input_parameters = varying_input_parameters
-    n_inputs = len(input_parameters)
-    
-    # Update subplot grid based on actual number of varying parameters
+    csv_df = pd.DataFrame(rows)
+    csv_path = outdir / f"{stem}__quartile_values__{target}.csv"
+    csv_df.to_csv(csv_path, index=False)
+    print(f"   Quartile values saved: {csv_path.name}")
+
+
+def kde_quartile_plot(
+    *,
+    df=None,
+    df_filtered=None,
+    target: str,
+    inputs=None,
+    input_parameters=None,
+    target_unit: str | None = None,
+    output_dir=None,
+    outputs_dir=None,
+    file_type: str = "",
+    plot_name_prefix: str | None = None,
+    plot_name: str | None = None,
+    registry=None,
+    **_,
+):
+    """
+    Create KDE plots for scalar inputs, split by quartiles of the scalar target.
+
+    Expected modern call (from orchestrator):
+        kde_quartile_plot(
+            df=..., target=..., inputs=..., target_unit=..., output_dir=...,
+            file_type=..., plot_name_prefix=..., registry=...
+        )
+
+    Legacy names (df_filtered, input_parameters, outputs_dir, plot_name) are also accepted.
+    """
+    # Registry
+    if registry is None:
+        from ddstartup.utils.parameter_registry import get_registry as _get_registry
+        registry = _get_registry()
+
+    # Normalize incoming args
+    df, inputs, outdir, stem = _resolve_args(
+        df=df,
+        df_filtered=df_filtered,
+        inputs=inputs,
+        input_parameters=input_parameters,
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+    )
+
+    if df is None or len(df) == 0:
+        print("   No data provided to KDE plot. Skipping.")
+        return
+
+    # Select scalar, numeric inputs only; drop near-constants
+    scalar_inputs = _scalar_input_columns(df, list(inputs or []))
+    if not scalar_inputs:
+        print("   No scalar numeric inputs available. Skipping KDE plot.")
+        return
+    varying_inputs = _varying_columns(df, scalar_inputs)
+    if not varying_inputs:
+        print("   No varying scalar inputs to plot. Skipping KDE plot.")
+        return
+
+    # Quartile binning (do not mutate df)
+    bins, labels = _quartile_bins(df[target])
+    if isinstance(bins, pd.Series):
+        valid_mask = bins.notna()
+    else:
+        valid_mask = pd.Series([False] * len(df))
+
+    if not valid_mask.any():
+        print(f"   Target '{target}' has no valid finite values for quartiles. Skipping KDE plot.")
+        return
+
+    # Colors per quartile
+    colorscale = get_discrete_colorscale(4 if len(labels) >= 4 else len(labels))
+    quartile_colors = [colorscale[i * 2][1] for i in range(len(labels))]
+    color_map = {labels[i]: quartile_colors[i] for i in range(len(labels))}
+
+    # Grid size
+    n_inputs = len(varying_inputs)
     ncols = min(3, n_inputs)
     nrows = int(np.ceil(n_inputs / ncols))
-    
-    # Recreate gridspec with updated dimensions
-    height_ratios = [0.07] + [1] * nrows + [0.45]
 
-    fig = plt.figure(figsize=(4*ncols, 3*nrows + 2))
-    gs = gridspec.GridSpec(nrows=nrows+2, ncols=ncols, figure=fig, 
-                          height_ratios=height_ratios,
-                          hspace=0.4, wspace=0.3)
-    
+    # Figure / gridspec
+    from matplotlib import gridspec
+    height_ratios = [0.07] + [1] * nrows + [0.45]
+    fig = plt.figure(figsize=(4 * ncols, 3 * nrows + 2))
+    gs = gridspec.GridSpec(
+        nrows=nrows + 2,
+        ncols=ncols,
+        figure=fig,
+        height_ratios=height_ratios,
+        hspace=0.4,
+        wspace=0.3,
+    )
+
     # Create axes for data plots (skip first and last rows)
     axes = []
-    for row in range(1, nrows + 1):
-        for col in range(ncols):
-            ax = fig.add_subplot(gs[row, col])
-            axes.append(ax)
-    
-    # Plot KDE for each input parameter
-    for i, param in enumerate(input_parameters):
+    for r in range(1, nrows + 1):
+        for c in range(ncols):
+            axes.append(fig.add_subplot(gs[r, c]))
+
+    # Plot KDEs per input by quartile
+    # If a bin collapses to a single value for an input, draw a dashed line at y=1 as a visual placeholder.
+    for i, param in enumerate(varying_inputs):
         ax = axes[i]
-        for bin_label in df_filtered[f"{target}_bin"].cat.categories:
-            data = df_filtered.loc[df_filtered[f"{target}_bin"] == bin_label, param].dropna()
-            if len(data) == 0:
+        for label in labels:
+            sel = (bins == label)
+            if sel.sum() == 0:
                 continue
-            color = color_map[bin_label]
+            data = pd.to_numeric(df.loc[sel, param], errors="coerce").dropna()
+            if data.empty:
+                continue
             if np.var(data) == 0:
-                ax.axhline(1, color=color, linestyle='--', label=str(bin_label))
+                ax.axhline(1.0, linestyle="--", label=str(label), color=color_map[label])
             else:
-                sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(bin_label), color=color)
-        
-        # Add unit to title with symbol
-        param_label = registry.get_param_label(param, PARAM_UNITS.get(param))
-        ax.set_title(param_label, fontsize=10)
+                sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(label), color=color_map[label])
+
+        # Titles with label + unit
+        p_label = getattr(registry, "get_param_label", lambda n, **k: n)(param)
+        p_unit = getattr(registry, "get_param_unit", lambda n, **k: None)(param)
+        ax.set_title(p_label if not p_unit else f"{p_label} [{p_unit}]", fontsize=10)
         ax.set_xlabel("")
         ax.set_ylabel("Density")
         ax.tick_params(labelsize=8)
-    
-    # Hide unused subplots in data rows
+
+    # Hide unused subplots
     for j in range(n_inputs, len(axes)):
         axes[j].set_visible(False)
-    
-    # Add title in the reserved top row space
-    target_symbol = registry.get_symbol(target)
-    fig.suptitle(f"KDE of Inputs by {target_symbol} quartile for {file_type}", fontsize=14, y=0.97)
-    
-    # Add legend in the reserved bottom row space
-    handles, labels = axes[0].get_legend_handles_labels()
-    target_label = registry.get_param_label(target, target_unit)
-    legend_title = f"{target_label} quartile"
-    fig.legend(handles, labels,
-               title=legend_title,
-               loc='lower center',
-               bbox_to_anchor=(0.5, 0.03),
-               ncol=2,
-               fontsize=12, title_fontsize=14)
-    
-    plt.savefig(outputs_dir / plot_name, dpi=150)
+
+    # Figure title
+    t_label = getattr(registry, "get_param_label", lambda n, **k: n)(target)
+    t_unit = target_unit or getattr(registry, "get_param_unit", lambda n, **k: None)(target) or ""
+    sup_title = f"KDE of Inputs by {t_label if not t_unit else f'{t_label} [{t_unit}]'} quartile"
+    if file_type:
+        sup_title += f" for {file_type}"
+    fig.suptitle(sup_title, fontsize=14, y=0.97)
+
+    # Legend (use first visible axis that has handles)
+    handles, labels_seen = None, None
+    for ax in axes:
+        h, l = ax.get_legend_handles_labels()
+        if h:
+            handles, labels_seen = h, l
+            break
+    if handles:
+        fig.legend(
+            handles,
+            labels_seen,
+            title=f"{t_label if not t_unit else f'{t_label} [{t_unit}]'} quartile",
+            loc="lower center",
+            bbox_to_anchor=(0.5, 0.03),
+            ncol=2,
+            fontsize=12,
+            title_fontsize=14,
+        )
+
+    # Save plot and CSV with extremes
+    out_png = outdir / f"{stem}_{target}.png"
+    fig.savefig(out_png, dpi=150)
     plt.close(fig)
+
+    _save_quartile_extremes_to_csv(df, target, varying_inputs, bins, list(labels), outdir, stem)

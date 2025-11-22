@@ -20,88 +20,22 @@ Quick Start
        --targets t_startup unrealized_gains \
        --plots kde parcoords pdf
 
-Overview
+Overview and code structure
 --------
 
-The module processes HDF5 files containing simulation results and generates three types of visualizations:
+The module processes HDF5 files containing simulation results and generates different types of plots.
 
-* **KDE plots**: Kernel density estimation showing parameter distributions across quartiles
-* **Parallel coordinates**: Interactive multi-dimensional parameter visualization
-* **PDF plots**: Probability density functions for comparing multiple datasets
+The :func:`main` function is the core of the postprocessing.
+1. Step 0: Set directory and parse CLI args
+   * The code finds the root directory (parent of parent, and assumes the other inputs and outputs folders are there, if not specified otherwise in the CL). [:func:`base_dir`]
+   * An "args" ArgumentParser object is created, to read and save all CL arguments (including the name/location of the postprocessing file). [:func:`build_parser`]
+2. Step 1: Build the "args" dictionary
+   * A "config" dictionary is created, by reading the info inside the postprocessing config YAML file specified in command line. [:func:`load_config_from_args`]
+   * A list of h5 file paths to analyse is saved. [:func:`resolve_file_paths`]
+   * Eventual "args" passed by CL overwrite the "config" dictionary. [:func:`apply_cli_overrides`]
+3. Step 2:  
 
-Core Functions
---------------
-
-Data Loading
-~~~~~~~~~~~~
-
-.. py:function:: load_h5_to_dataframe(h5_path)
-
-   Load HDF5 file into pandas DataFrame.
-   
-   :param h5_path: Path to HDF5 file
-   :type h5_path: Path
-   :return: DataFrame with 1D datasets as columns, 2D datasets as lists
-   :rtype: pd.DataFrame
-
-.. py:function:: find_latest_h5_file(outputs_dir)
-
-   Find most recent HDF5 file in outputs directory.
-   
-   :param outputs_dir: Path to outputs directory
-   :type outputs_dir: Path
-   :return: Path to latest HDF5 file or None
-   :rtype: Path or None
-
-Filtering
-~~~~~~~~~
-
-.. py:function:: parse_filter_expression(filter_str)
-
-   Parse filter string like "V_plasma<150,n_tot>1e14".
-   
-   :param filter_str: Comma-separated filter expressions
-   :type filter_str: str
-   :return: Dictionary with variable filters {var: {'min': val, 'max': val}}
-   :rtype: dict
-
-.. py:function:: apply_filters(df, input_filters, output_filters, target_variable)
-
-   Apply filters to DataFrame, removing non-finite target values.
-   
-   :param df: DataFrame to filter
-   :param input_filters: Input parameter filters
-   :param output_filters: Output variable filters
-   :param target_variable: Target variable name
-   :return: Filtered DataFrame
-   :rtype: pd.DataFrame
-
-Data Processing
-~~~~~~~~~~~~~~~
-
-.. py:function:: scale_target(df, target_variable)
-
-   Auto-scale target variable to appropriate units.
-   
-   * ``t_startup``: Scales to days/hours/seconds based on magnitude
-   * ``unrealized_gains``: Scales to millions of dollars (M$)
-   
-   :param df: DataFrame with target variable
-   :param target_variable: Name of target column
-   :return: (scaled_df, unit_string)
-   :rtype: tuple
-
-.. py:function:: get_input_parameters(df, target_variable, filename=None)
-
-   Extract input parameter names, excluding target variable.
-   
-   :param df: DataFrame
-   :param target_variable: Target to exclude
-   :param filename: Optional filename for context-specific filtering
-   :return: Ordered list of input parameter names
-   :rtype: list
-
-Visualization Functions
+Plotting Functions
 -----------------------
 
 KDE Plots
