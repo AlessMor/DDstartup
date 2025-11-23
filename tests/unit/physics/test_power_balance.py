@@ -307,3 +307,41 @@ class TestTseededPowersAndEnergies:
         assert result['E_fusion_DT_eq'] >= 0
         assert result['E_aux_DD'] >= 0
         assert result['E_aux_DT_eq'] >= 0
+
+    def test_tseeded_p_dt_eq_scalar_output(self):
+        """P_DT_eq should be stored as a scalar while keeping a vector profile for internal use."""
+        t_raw = np.array([0.0, 5e6, 1e7])
+        n_T_raw = np.array([1e17, 5e18, 1e19])
+        n_D_raw = np.array([1e20, 9.5e19, 9e19])
+        N_ofc_raw = np.array([1e25, 5e25, 1e26])
+        N_ifc_raw = np.array([1e24, 5e24, 1e25])
+        N_st_raw = np.array([1e23, 5e23, 1e24])
+
+        vector_length = 20
+
+        result = compute_tseeded_powers_and_energies(
+            t_startup=1e7,
+            t_raw=t_raw,
+            n_T_raw=n_T_raw,
+            n_D_raw=n_D_raw,
+            N_ofc_raw=N_ofc_raw,
+            N_ifc_raw=N_ifc_raw,
+            N_st_raw=N_st_raw,
+            n_tot=1e20,
+            V_plasma=100.0,
+            sigmav_DD_p=1e-23,
+            sigmav_DD_n=1e-23,
+            sigmav_DT=1e-21,
+            tau_ifc=3600.0,
+            P_aux=50e6,
+            P_aux_DT_eq=30e6,
+            injection_rate_max=1e20,
+            N_st_min=1e24,
+            vector_length=vector_length
+        )
+
+        # Scalar storage
+        assert np.ndim(result['P_DT_eq']) == 0
+        # Vector profile preserved for any time-series math
+        assert result['P_DT_eq_profile'].shape == result['P_DT'].shape
+        assert np.allclose(result['P_DT_eq_profile'], result['P_DT_eq'])

@@ -347,6 +347,9 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         injection_rate_max, 0.001/tritium_mass,
         vector_length
     )
+    # Keep the time-series profile for internal math but store a scalar value to HDF5
+    P_DT_eq_scalar = np.asarray(power_results.get('P_DT_eq', np.nan)).reshape(-1)[-1]
+    P_DT_eq_profile = power_results.get('P_DT_eq_profile')
     
     # Compute economics
     econ_results = compute_economics_from_energies(
@@ -407,7 +410,7 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         'P_DDn': power_results['P_DDn'],
         'P_DDp': power_results['P_DDp'],
         'P_DT': power_results['P_DT'],
-        'P_DT_eq': power_results['P_DT_eq'],
+        'P_DT_eq': P_DT_eq_scalar,
         'P_aux': P_aux_vec,
         'P_aux_DT_eq': P_aux_DT_eq_vec,
         'Q_DD': econ_results['Q_DD'],
@@ -419,6 +422,10 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         'P_aux': fix_vector_length(P_aux_vector, vector_length) if compute_P_aux else P_aux,
         'P_aux_DT_eq': P_aux_DT_eq_vector if compute_P_aux_DT_eq else P_aux_DT_eq
     })
+    
+    # Keep the profile available for any downstream time-series calculations (not written to HDF5)
+    if P_DT_eq_profile is not None:
+        result_dict['P_DT_eq_profile'] = P_DT_eq_profile
     
     return result_dict
 

@@ -233,7 +233,9 @@ def compute_tseeded_powers_and_energies(
             - t_interp: Uniform time grid (s)
             - n_T, n_D: Interpolated densities (m⁻³)
             - N_ofc, N_ifc, N_st: Interpolated inventories (atoms)
-            - P_DDn, P_DDp, P_DT, P_DT_eq: Power arrays (W)
+            - P_DDn, P_DDp, P_DT: Power arrays (W)
+            - P_DT_eq: Scalar DT-equilibrium power (W)
+            - P_DT_eq_profile: DT-equilibrium power repeated across the time grid (W)
             - TBE: Tritium breeding efficiency
             - E_fusion_DD: Total DD fusion energy (J)
             - E_fusion_DT_eq: DT equilibrium fusion energy (J)
@@ -258,8 +260,8 @@ def compute_tseeded_powers_and_energies(
         # n_He3 defaults to 0.0, sigmav_DHe3 defaults to 0.0
     )
     
-    # Broadcast P_DT_eq to array for consistency
-    P_DT_eq = np.full_like(P_DDn, P_DT_eq_scalar)
+    # Broadcast P_DT_eq for any time-series operations, but keep scalar for storage
+    P_DT_eq_profile = np.full_like(P_DDn, P_DT_eq_scalar)
     
     # Integrate powers to get energies
     E_fusion_DDn = trapz_numba(P_DDn, t_interp)
@@ -300,7 +302,8 @@ def compute_tseeded_powers_and_energies(
         'P_DDn': P_DDn,
         'P_DDp': P_DDp,
         'P_DT': P_DT,
-        'P_DT_eq': P_DT_eq,
+        'P_DT_eq': P_DT_eq_scalar,
+        'P_DT_eq_profile': P_DT_eq_profile,
         'TBE': TBE,
         'E_fusion_DD': E_fusion_DD,
         'E_fusion_DT_eq': E_fusion_DT_eq,
