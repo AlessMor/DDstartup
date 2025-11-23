@@ -449,18 +449,24 @@ def h5_to_df_core(
         return a.reshape(a.shape[0], int(np.prod(a.shape[1:], dtype=int)))
 
     def _append_col(builder: dict, name: str, a2d: np.ndarray, downcast_f32: bool) -> int:
-        # scalar column -> numeric Series; vector column -> object Series of 1D arrays
+        # If 1D vector, preserve as object column (each row is a 1D array)
+        if a2d.ndim == 1:
+            # 1D vector: store as object column
+            builder[name] = [np.array([v]) if not isinstance(v, (np.ndarray, list)) else np.array(v) for v in a2d]
+            return len(a2d[0]) if hasattr(a2d[0], '__len__') else 1
+        # If 2D and shape[1] == 1, treat as scalar
         if a2d.ndim == 2 and a2d.shape[1] == 1:
             col = a2d[:, 0]
             if downcast_f32 and np.issubdtype(col.dtype, np.floating):
                 col = col.astype(np.float32, copy=False)
             builder[name] = col
             return 1
-        # vector column
-        if downcast_f32 and np.issubdtype(a2d.dtype, np.floating):
-            a2d = a2d.astype(np.float32, copy=False)
-        builder[name] = [a2d[i].copy() for i in range(a2d.shape[0])]
-        return int(a2d.shape[1])
+        # If 2D and shape[1] > 1, treat as vector
+        if a2d.ndim == 2 and a2d.shape[1] > 1:
+            if downcast_f32 and np.issubdtype(a2d.dtype, np.floating):
+                a2d = a2d.astype(np.float32, copy=False)
+            builder[name] = [a2d[i].copy() for i in range(a2d.shape[0])]
+            return int(a2d.shape[1])
 
     parts: list[pd.DataFrame] = []
     inner_dims: dict[str, int] = {}

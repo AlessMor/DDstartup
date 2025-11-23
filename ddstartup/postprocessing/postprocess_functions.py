@@ -360,7 +360,8 @@ def load_h5_to_df(
     if need_computed:
         def _col_to_2d(s: pd.Series) -> np.ndarray:
             if s.dtype == object:
-                return np.stack(s.values) if len(s) else np.empty((0, 0))
+                    arr = np.array([v[-1] if isinstance(v, (list, np.ndarray)) and len(v) > 0 else np.nan for v in s])
+                    return arr[:, None]
             arr = pd.to_numeric(s, errors="coerce").to_numpy()
             return arr[:, None]
         def _env_from_df(df_) -> dict:

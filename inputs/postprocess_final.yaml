@@ -35,10 +35,10 @@ files:
 # Additional variables to compute from existing metrics for analysis and plotting.
 # These can be used as target variables or in plots.
 computed_variables:
-  # K:
-  #   expr: unrealized_profits / P_DT_eq
-  #   unit: "$/W"            # optional override
-  #   # symbol: r"$K$"         # optional override
+  K:
+    expr: unrealized_profits / P_DT_eq
+    unit: "$/W"            # optional override
+    # symbol: r"$K$"         # optional override
   K_el:
     expr: unrealized_profits / (capacity_factor*(eta_th*P_DT_eq - P_aux_DT_eq))
     unit: "$/W"            # optional override
@@ -60,11 +60,11 @@ computed_variables:
 #   - E_lost: Lost energy during startup
 
 target_variables:
-  # - c_T
+  #- c_T
   - K_el
-  # - K
-  # - unrealized_profits
-  # - t_startup
+  - K
+  - unrealized_profits
+  - t_startup
 
 # ============================================================================
 # FILTERS
@@ -72,8 +72,10 @@ target_variables:
 # Filter parameter combinations before analysis
 
 filters:
-#- K < 5
-#- c_T < 2e9
+- K_el < 5
+- K_el > 0
+# - c_T < 2e9
+# - c_T > 0
 
 # ============================================================================
 # PLOT CONFIGURATION
@@ -82,7 +84,7 @@ filters:
 
 plots:
   # Generate all plot types
-  generate_all: false
+  generate_all: true
   
   # Or specify individual plot types (when generate_all is false)
   importance: false       # Effect-size importance matrix (Cohen's d)
@@ -156,8 +158,8 @@ plots:
                          # - 'auto': Plots top 5 most important parameters (10-15 plots)
                          # - 'all': Plots all possible pairs (can be many plots!)
                          # - Custom list: [[0,1], [2,4]] for specific parameter index pairs
-    grid_size: 60        # Resolution of PDP grid (60x60 = 3600 points per plot)
-    max_train_samples: 100000  # Maximum samples to use for ML model training
+    grid_size: 70        # Resolution of PDP grid (70x70 = 4900 points per plot)
+    max_train_samples: 1000000  # Maximum samples to use for ML model training
     hidden: [256, 256, 128]    # MLP hidden layer sizes
     verbose: false       # Print detailed training progress
                          # Set to true for debugging or monitoring training
