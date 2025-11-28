@@ -86,54 +86,10 @@ class ReactivityLookupTable:
             if self.include_DHe3:
                 self.sigmav_DHe3_lookup[T_key] = float(sigmav_DHe3_arr[i])
     
-    def get_reactivities(self, T_i: float) -> Tuple[float, float, float, float]:
-        """
-        Get all reactivities for a given temperature.
-        
-        Args:
-            T_i: Ion temperature (eV)
-            
-        Returns:
-            Tuple of (sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3)
-            If include_DHe3=False, sigmav_DHe3 will be 0.0
-            
-        Raises:
-            KeyError: If temperature not in lookup table
-        """
-        T_key = round(T_i / 0.1) * 0.1
-        
-        sigmav_DD_p = self.sigmav_DD_p_lookup[T_key]
-        sigmav_DD_n = self.sigmav_DD_n_lookup[T_key]
-        sigmav_DT = self.sigmav_DT_lookup[T_key]
-        
-        if self.include_DHe3:
-            sigmav_DHe3 = self.sigmav_DHe3_lookup[T_key]
-        else:
-            sigmav_DHe3 = 0.0
-        
-        return sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3
-    
     def get_sigmav_DT(self, T_i: float) -> float:
         """Get D-T reactivity for given temperature."""
         T_key = round(T_i / 0.1) * 0.1
         return self.sigmav_DT_lookup[T_key]
-    
-    def get_sigmav_DD_p(self, T_i: float) -> float:
-        """Get D(d,p)T reactivity for given temperature."""
-        T_key = round(T_i / 0.1) * 0.1
-        return self.sigmav_DD_p_lookup[T_key]
-    
-    def get_sigmav_DD_n(self, T_i: float) -> float:
-        """Get D(d,n)He3 reactivity for given temperature."""
-        T_key = round(T_i / 0.1) * 0.1
-        return self.sigmav_DD_n_lookup[T_key]
-    
-    def get_sigmav_DHe3(self, T_i: float) -> float:
-        """Get D-He3 reactivity for given temperature."""
-        if not self.include_DHe3:
-            raise ValueError("DHe3 reactivities not included in this lookup table")
-        T_key = round(T_i / 0.1) * 0.1
-        return self.sigmav_DHe3_lookup[T_key]
     
     def to_dict(self) -> Dict[str, Dict[float, float]]:
         """
@@ -185,8 +141,3 @@ class ReactivityLookupTable:
     def __len__(self) -> int:
         """Return number of temperatures in lookup table."""
         return len(self.temperatures)
-    
-    def __repr__(self) -> str:
-        """String representation of lookup table."""
-        DHe3_str = "+DHe3" if self.include_DHe3 else ""
-        return f"ReactivityLookupTable({len(self)} temperatures, {DHe3_str})"

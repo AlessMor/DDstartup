@@ -16,7 +16,34 @@ from ddstartup.postprocessing.postprocess_functions import get_discrete_colorsca
 from ddstartup.utils.parameter_registry import get_registry
 
 
-def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot_name=None, save_csv=True, registry=None):
+def _select_scalar_numeric(df: pd.DataFrame, cols: list[str]) -> list[str]:
+    """Filter to scalar, numeric columns using df.attrs['_inner_dims'] when present."""
+    inner = (getattr(df, "attrs", {}) or {}).get("_inner_dims", {})
+    usable = []
+    for c in cols:
+        if c not in df.columns:
+            continue
+        if int(inner.get(c, 1)) != 1:
+            continue
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        usable.append(c)
+    return usable
+
+
+def cluster_and_quartile_bar(
+    df,
+    inputs,
+    target,
+    output_dir=None,
+    outputs_dir=None,
+    n_clusters=5,
+    plot_name=None,
+    plot_name_prefix=None,
+    save_csv=True,
+    registry=None,
+    **_,
+):
     """
     Cluster data using KMeans and visualize distribution across target quartiles.
     
@@ -30,17 +57,21 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
         save_csv: Whether to save cluster centers to CSV
         registry: ParameterRegistry instance (optional, will create if not provided)
     """
-    outputs_dir = Path(outputs_dir)
-    outputs_dir.mkdir(parents=True, exist_ok=True)
+    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
+    outdir.mkdir(parents=True, exist_ok=True)
+    stem = plot_name_prefix or plot_name or f'kmeans_{target}'
     
     # Get registry if not provided
     if registry is None:
         from ddstartup.utils.parameter_registry import get_registry
         registry = get_registry()
 
-    X = df[inputs].copy()
-    # Drop columns not present
-    X = X.loc[:, [c for c in inputs if c in X.columns]]
+    usable_inputs = _select_scalar_numeric(df, list(inputs or []))
+    if not usable_inputs:
+        print("   No scalar numeric inputs for k-means. Skipping.")
+        return None, None
+
+    X = df[usable_inputs].copy()
     if X.shape[0] == 0:
         raise ValueError('No input columns available for clustering')
 
@@ -67,7 +98,7 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
     target_symbol = registry.get_symbol(target)
     ax.set_title(f'Quartile Distribution per Cluster (k={n_clusters}) — {target_symbol}')
     plt.tight_layout()
-    png_name = outputs_dir / (plot_name + '.png' if plot_name else f'kmeans_{target}.png')
+    png_name = outdir / f'{stem}.png'
     plt.savefig(png_name, dpi=150)
     plt.close()
 
@@ -75,7 +106,7 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
         # Save cluster centers (mean values)
         centers = pd.DataFrame(scaler.inverse_transform(kmeans.cluster_centers_), columns=X.columns)
         centers['cluster'] = range(n_clusters)
-        centers.to_csv(outputs_dir / (plot_name + '_cluster_centers.csv' if plot_name else f'kmeans_centers_{target}.csv'), index=False)
+        centers.to_csv(outdir / f'{stem}_cluster_centers.csv', index=False)
         
         # Save cluster ranges (min, max, mean, std for each parameter)
         ranges_data = []
@@ -103,6 +134,6 @@ def cluster_and_quartile_bar(df, inputs, target, outputs_dir, n_clusters=5, plot
                     continue
         
         ranges_df = pd.DataFrame(ranges_data)
-        ranges_df.to_csv(outputs_dir / (plot_name + '_cluster_ranges.csv' if plot_name else f'kmeans_ranges_{target}.csv'), index=False)
+        ranges_df.to_csv(outdir / f'{stem}_cluster_ranges.csv', index=False)
 
     return kmeans, ctab

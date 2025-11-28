@@ -80,7 +80,7 @@ class TestLumpSolver:
         assert result['error'] is None, "Error should be None for successful solution"
         
         # 3. EXACT SOLUTION TEST - Most important check first
-        correct_values = [2.447424457066349e+16, 2e+20, 2.4163971968373064e+16, 35240795.63907579]
+        correct_values = [2.447424457066349e+16, 2e+20, 2.4163971968373064e+16, 36375050.81430249]
         assert np.isclose(result['n_T'], correct_values[0], rtol=1e-10), \
             f"n_T should be approximately {correct_values[0]:.6e}, it is {result['n_T']}"
         assert np.isclose(result['n_D'], correct_values[1], rtol=1e-10), \

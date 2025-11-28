@@ -12,7 +12,11 @@ import pandas as pd
 import h5py
 from tqdm import tqdm
 
-import hdf5plugin  # noqa: F401
+# Optional compression plugins (skip if missing)
+try:
+    import hdf5plugin  # noqa: F401
+except ImportError:
+    hdf5plugin = None
 
 
 # -----------------------------------------------------------------------------
@@ -307,6 +311,12 @@ def load_h5_to_df(
         name for name, meta in PARAMETER_SCHEMA.items()
         if name in file_keys and _schema_tag(meta) in ("input", "flexible")
     ]
+    input_params = [n for n in schema_inputs if _schema_tag(PARAMETER_SCHEMA.get(n, {})) == "input"]
+    flexible_params = [n for n in schema_inputs if _schema_tag(PARAMETER_SCHEMA.get(n, {})) == "flexible"]
+    output_params = [
+        name for name, meta in PARAMETER_SCHEMA.items()
+        if name in file_keys and _schema_tag(meta) == "output"
+    ]
 
     # ---- Dependencies
     def _vars_in(exprs: List[str]) -> set[str]:
@@ -316,26 +326,60 @@ def load_h5_to_df(
             class V(ast.NodeVisitor):
                 def __init__(self): self.n=set()
                 def visit_Name(self, node): self.n.add(node.id)
-            t = ast.parse(expr, mode="eval"); v = V(); v.visit(t); 
+            t = ast.parse(expr, mode="eval"); v = V(); v.visit(t);
             return {x for x in v.n if x not in {"True","False","None"} and x not in _ALLOWED_FUNCS}
         return set().union(*(_ast_vars(e) for e in exprs))
 
-    # only deps for computed targets you actually requested
-    computed_target_deps = set()
-    for t in targets:
-        if t in computed_map:
-            computed_target_deps |= _vars_in([computed_map[t]])
+    def _gather_base_deps(name: str, seen: set[str] | None = None) -> set[str]:
+        """Recursively collect non-computed dependencies for a computed variable."""
+        seen = seen or set()
+        if name in seen or name not in computed_map:
+            return set()
+        seen.add(name)
+        deps = _vars_in([computed_map[name]])
+        base: set[str] = set()
+        for d in deps:
+            if d in computed_map:
+                base |= _gather_base_deps(d, seen)
+            else:
+                base.add(d)
+        return base
+
+    def _gather_computed_chain(name: str, seen: set[str] | None = None) -> set[str]:
+        """Return all computed variables needed (recursively) for ``name`` including itself."""
+        seen = seen or set()
+        if name in seen or name not in computed_map:
+            return set()
+        seen.add(name)
+        deps = _vars_in([computed_map[name]])
+        acc = {name}
+        for d in deps:
+            if d in computed_map:
+                acc |= _gather_computed_chain(d, seen)
+        return acc
 
     filter_deps = _vars_in(filters_exprs)
+    computed_targets = {t for t in targets if t in computed_map}
+    computed_in_filters = {name for name in computed_map if name in filter_deps}
+    # we want all computed variables displayed, so collect every defined one (plus dependencies)
+    all_needed_computed: set[str] = set(computed_map.keys())
+
+    # include any chained computed dependencies
+    for name in list(all_needed_computed):
+        all_needed_computed |= _gather_computed_chain(name)
+
+    computed_base_deps = set()
+    for name in all_needed_computed:
+        computed_base_deps |= _gather_base_deps(name)
 
     # ---- Column wish-list
-    wanted = set(schema_inputs) | set(targets) | computed_target_deps | filter_deps | {"sol_success"}
+    wanted = set(schema_inputs) | set(targets) | computed_base_deps | filter_deps | {"sol_success"}
     read_cols = sorted(wanted & file_keys)
 
     if verbose:
         print(f"   Columns selected to read: {len(read_cols)} "
               f"(inputs={len(schema_inputs)}, targets={len(set(targets))}, "
-              f"deps={len((computed_target_deps|filter_deps) & file_keys)})")
+              f"deps={len((computed_base_deps|filter_deps) & file_keys)})")
 
     # ---- Core read (zero extra logic; vector columns preserved)
     df = h5_to_df_core(
@@ -351,11 +395,7 @@ def load_h5_to_df(
 
     # ---- Computed columns (evaluate only those requested OR referenced by filters)
     # If you also want computed variables not in targets but referenced by filters, keep them here.
-    need_computed = {t for t in targets if t in computed_map}
-    # add computed variables directly referenced in filters (rare, but supported)
-    for name, expr in (computed_map or {}).items():
-        if name in _vars_in(filters_exprs):
-            need_computed.add(name)
+    need_computed = all_needed_computed
 
     if need_computed:
         def _col_to_2d(s: pd.Series) -> np.ndarray:
@@ -370,18 +410,37 @@ def load_h5_to_df(
                 env[c] = _col_to_2d(df_[c])
             return env
 
+        dep_graph = {name: _vars_in([computed_map[name]]) for name in need_computed}
         env = _env_from_df(df)
         inner = (df.attrs or {}).setdefault("_inner_dims", {})
-        for cname in need_computed:
-            expr = computed_map[cname]
-            out = eval(expr, {"__builtins__": {}}, env)
-            a = np.asarray(out)
-            if a.ndim == 1 or (a.ndim == 2 and a.shape[1] == 1):
-                df[cname] = a if a.ndim == 1 else a[:, 0]
-                inner[cname] = 1
-            else:
-                df[cname] = [a[i].copy() for i in range(a.shape[0])]
-                inner[cname] = int(a.shape[1])
+
+        remaining = set(need_computed)
+        skipped: dict[str, list[str]] = {}
+        while remaining:
+            progress = False
+            for cname in list(remaining):
+                deps = dep_graph.get(cname, set())
+                if all((d in env) for d in deps):
+                    expr = computed_map[cname]
+                    out = eval(expr, {"__builtins__": {}}, env)
+                    a = np.asarray(out)
+                    if a.ndim == 1 or (a.ndim == 2 and a.shape[1] == 1):
+                        df[cname] = a if a.ndim == 1 else a[:, 0]
+                        inner[cname] = 1
+                    else:
+                        df[cname] = [a[i].copy() for i in range(a.shape[0])]
+                        inner[cname] = int(a.shape[1])
+                    env[cname] = _col_to_2d(df[cname])
+                    remaining.remove(cname)
+                    progress = True
+            if not progress:
+                for c in list(remaining):
+                    missing = sorted(dep_graph.get(c, set()) - set(env.keys()))
+                    skipped[c] = missing
+                    remaining.remove(c)
+                if skipped:
+                    print(f"   ⚠️  Skipping computed variables with missing dependencies: {skipped}")
+                break
         # recompute env only if you’ll apply filters below
         if filters_exprs:
             env = _env_from_df(df)
@@ -404,11 +463,34 @@ def load_h5_to_df(
 
     # ---- Keep only the columns you asked for (inputs + targets + deps [+ computed targets]) unless keep=="all"
     if keep == "slim":
-        keep_cols = set(schema_inputs) | set(targets) | computed_target_deps | filter_deps | {"sol_success"}
-        # also keep computed targets we just created
-        keep_cols |= (need_computed if need_computed else set())
-        keep_cols = [c for c in df.columns if c in keep_cols]
-        df = df[keep_cols].copy()
+        def _add_unique(dst: list[str], names: list[str]):
+            for n in names:
+                if n in df.columns and n not in dst:
+                    dst.append(n)
+
+        ordered_cols: list[str] = []
+        _add_unique(ordered_cols, input_params)
+        _add_unique(ordered_cols, flexible_params)
+
+        # outputs only if they participate in computed variables, filters, or targets
+        outputs_needed = [
+            n for n in output_params
+            if n in df.columns and (n in computed_base_deps or n in filter_deps or n in targets)
+        ]
+        _add_unique(ordered_cols, outputs_needed)
+
+        # ensure sol_success is kept (before computed to preserve original behavior)
+        if "sol_success" in df.columns and "sol_success" not in ordered_cols:
+            ordered_cols.append("sol_success")
+
+        computed_order = [name for name in computed_map.keys() if name in df.columns]
+        _add_unique(ordered_cols, computed_order)
+
+        # include any remaining requested/target/filter columns
+        remaining = [c for c in df.columns if c not in ordered_cols]
+        _add_unique(ordered_cols, remaining)
+
+        df = df[ordered_cols].copy()
     if success_only and "sol_success" in df.columns:
         df = df.loc[df["sol_success"].astype(bool)].reset_index(drop=True)
     if verbose:
@@ -505,225 +587,6 @@ def collect_plot_settings(config: Dict[str, Any], args, targets: List[str], plot
         print(f"🔷 Strip plot metrics: {', '.join(ys)}")
     return shap_interp, pdf_smooth, ml_pair, strip
 
-def _read_minimal_all(path: Path, cols: list[str], inner_dims: dict | None = None) -> pd.DataFrame:
-    import h5py
-    try:
-        import hdf5plugin  # if compressed; no-op if missing
-    except ImportError:
-        pass
-
-    out: dict[str, pd.Series] = {}
-    with h5py.File(path, "r") as f:
-        for c in cols:
-            if c == "sol_success":
-                continue  # handle after loop
-
-            # keep only scalar inputs
-            if inner_dims is not None and int(inner_dims.get(c, 1)) != 1:
-                continue
-            if c not in f:
-                continue
-
-            d = f[c][...]
-            # squeeze (N,1) / (1,N); skip true vectors (N,K>1)
-            if isinstance(d, np.ndarray) and d.ndim > 1:
-                if d.shape[1:] == (1,):
-                    d = d.reshape(-1)
-                elif d.shape[0] == 1:
-                    d = d.reshape(-1)
-                else:
-                    # vector-valued input -> skip
-                    continue
-
-            if np.issubdtype(np.asarray(d).dtype, np.number):
-                s = pd.Series(d, dtype="float64")
-            else:
-                s = pd.to_numeric(pd.Series(d), errors="coerce")
-            out[c] = s
-
-        # sol_success (robust)
-        if "sol_success" in f:
-            s = f["sol_success"][...]
-            if isinstance(s, np.ndarray) and s.ndim > 1:
-                if s.shape[1:] == (1,):
-                    s = s.reshape(-1)
-                elif s.shape[0] == 1:
-                    s = s.reshape(-1)
-                else:
-                    s = s.ravel()
-
-            if np.issubdtype(np.asarray(s).dtype, np.bool_) or np.issubdtype(np.asarray(s).dtype, np.integer):
-                sol = pd.Series(s).astype(bool)
-            else:
-                def _truthy(v):
-                    if pd.isna(v): return False
-                    if isinstance(v, (bool, np.bool_, int, np.integer)): return bool(v)
-                    return str(v).strip().lower() in {"1","true","t","y","yes"}
-                sol = pd.Series(list(map(_truthy, s)), dtype=bool)
-            out["sol_success"] = sol
-
-    if not out:
-        return pd.DataFrame()
-
-    # align lengths (truncate to min length to keep indices consistent)
-    nmin = min(len(s) for s in out.values())
-    for k in list(out.keys()):
-        out[k] = out[k].iloc[:nmin].reset_index(drop=True)
-
-    return pd.DataFrame(out)
-
-def compute_bin_stats_from_h5(
-    path: Path,
-    params: list[str],
-    *,
-    inner_dims: dict | None = None,
-    avg_points: int = 10,
-    registry=None,
-    chunk: int = 500_000,
-) -> dict[str, dict]:
-    """
-    Return per-parameter evenly spaced bin edges and counts over ALL runs:
-      bin_stats[p] = {"edges": np.ndarray[M+1], "total": np.ndarray[M], "failed": np.ndarray[M]}
-    Only scalar inputs (inner_dim==1) are processed. t_startup -> days, c_kWh* (or 1/J units) -> $/kWh.
-    """
-    import h5py
-    try:
-        import hdf5plugin  # if present enables compressed reads
-    except ImportError:
-        pass
-
-    # minimal unit/name-based transform (kept in sync with the plotter)
-    def _x_transform(name: str, arr: np.ndarray) -> tuple[np.ndarray, str | None]:
-        lname = name.lower()
-        unit = getattr(registry, "get_param_unit", lambda n, **k: None)(name) or ""
-        u = unit.replace(" ", "").lower()
-        if name in {"t_startup", "tStartup"} or "t_startup" in lname:
-            return arr / 86400.0, "days"
-        if ("kwh" in lname) or ("/j" in u or "1/j" in u or "j^-1" in u):
-            return arr * 3.6e6, "$/kWh"
-        return arr, None
-
-    # filter scalar params
-    scalar_params = [p for p in params if (inner_dims is None or int(inner_dims.get(p, 1)) == 1)]
-    out: dict[str, dict] = {}
-    if not scalar_params:
-        return out
-
-    with h5py.File(path, "r") as f:
-        # Determine N and ensure sol_success exists
-        if "sol_success" not in f:
-            # no failures info; we will still return totals (failed=0)
-            N = None
-            for p in scalar_params:
-                if p in f:
-                    N = f[p].shape[0]
-                    break
-            has_sol = False
-        else:
-            N = f["sol_success"].shape[0]
-            has_sol = True
-        if N is None:
-            return out
-
-        # --- PASS 1: min/max per parameter (streaming) ---
-        mins = {p: np.inf for p in scalar_params}
-        maxs = {p: -np.inf for p in scalar_params}
-
-        for start in range(0, N, chunk):
-            end = min(N, start + chunk)
-            for p in scalar_params:
-                if p not in f:
-                    continue
-                a = f[p][start:end]
-                a = np.asarray(a)
-                if a.ndim > 1:
-                    # squeeze (N,1)/(1,N); skip true vectors
-                    if a.shape[1:] == (1,):
-                        a = a.reshape(-1)
-                    elif a.shape[0] == 1:
-                        a = a.reshape(-1)
-                    else:
-                        continue
-                a = a.astype("float64", copy=False)
-                a[np.isinf(a)] = np.nan
-                a, _ = _x_transform(p, a)
-                finite = np.isfinite(a)
-                if not finite.any():
-                    continue
-                mins[p] = min(mins[p], float(np.nanmin(a[finite])))
-                maxs[p] = max(maxs[p], float(np.nanmax(a[finite])))
-
-        # prepare edges and alloc counters
-        for p in scalar_params:
-            vmin, vmax = mins[p], maxs[p]
-            if not np.isfinite(vmin) or not np.isfinite(vmax):
-                continue
-            if vmin == vmax:
-                edges = np.array([vmin, vmax], dtype="float64")
-            else:
-                edges = np.linspace(vmin, vmax, avg_points + 1, dtype="float64")
-            out[p] = {
-                "edges": edges,
-                "total": np.zeros(edges.size - 1, dtype=np.int64),
-                "failed": np.zeros(edges.size - 1, dtype=np.int64),
-            }
-
-        if not out:
-            return out
-
-        # helper: safe truth conversion
-        def _to_bool(arr) -> np.ndarray:
-            a = np.asarray(arr)
-            if a.dtype.kind in "biu":
-                return a.astype(bool, copy=False)
-            if a.dtype.kind in "f":
-                return (a != 0).astype(bool)
-            # string-like
-            v = np.vectorize(lambda x: str(x).strip().lower() in {"1", "true", "t", "y", "yes"})
-            return v(a)
-
-        # --- PASS 2: accumulate totals/failed per bin ---
-        for start in range(0, N, chunk):
-            end = min(N, start + chunk)
-            if has_sol:
-                sol = _to_bool(f["sol_success"][start:end])
-            else:
-                sol = np.ones(end - start, dtype=bool)  # no info => assume all success (failed stays 0)
-
-            for p, stats in out.items():
-                if p not in f:
-                    continue
-                a = f[p][start:end]
-                a = np.asarray(a)
-                if a.ndim > 1:
-                    if a.shape[1:] == (1,):
-                        a = a.reshape(-1)
-                    elif a.shape[0] == 1:
-                        a = a.reshape(-1)
-                    else:
-                        continue
-                a = a.astype("float64", copy=False)
-                a[np.isinf(a)] = np.nan
-                a, _ = _x_transform(p, a)
-                finite = np.isfinite(a)
-                if not finite.any():
-                    continue
-
-                # digitize to even-width bins (right-closed like pd.cut default)
-                edges = stats["edges"]
-                idx = np.digitize(a[finite], edges, right=True) - 1
-                # clamp to [0, nbins-1]
-                idx[idx < 0] = 0
-                nb = edges.size - 1
-                idx[idx >= nb] = nb - 1
-
-                # update totals/failed for rows with finite a
-                np.add.at(stats["total"], idx, 1)
-                if has_sol:
-                    np.add.at(stats["failed"], idx, (~sol[finite]).astype(np.int64))
-
-    return out
-
 def generate_plots_for_file(
     path: Path,
     *,
@@ -808,7 +671,7 @@ def generate_plots_for_file(
         ("pdf",         "ddstartup.postprocessing.plot_pdf_functions",                 "generate_pdf_plot"),
         ("shap",        "ddstartup.postprocessing.plot_shap_functions",                "generate_shap_plots"),
         ("ml_pairwise", "ddstartup.postprocessing.plot_ML_pairwise_functions",         "generate_ml_pairwise_plots"),
-        ("strip",       "ddstartup.postprocessing.plot_strip_functions",               "generate_strip_plot"),
+        ("strip",       "ddstartup.postprocessing.plot_strips",                        "generate_strip_plot"),
         ("quartprob",   "ddstartup.postprocessing.plot_quartile_probability_functions","quartile_probability_plot"),
     ]
 

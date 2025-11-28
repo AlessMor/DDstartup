@@ -11,21 +11,383 @@ This module contains functions for:
 """
 from __future__ import annotations
 
-import os
-import yaml
-import importlib
-import numpy as np
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
-import time
+import argparse
 import re
+import time
 from pathlib import Path
-from typing import List, Tuple, Union
-import pandas as pd
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import h5py
+import numpy as np
+import pandas as pd
+import yaml
+from scipy.stats import norm
 from tqdm import tqdm
 
+from .system_profiler import apply_parallelization_defaults
+from .parameter_registry import PARAMETER_SCHEMA, get_registry
+from .units_and_constants import u  # Pint UnitRegistry
+
+
 PathLike = Union[str, Path]
+
+def parse_arguments():
+    """Parse command-line arguments"""
+    parser = argparse.ArgumentParser(
+        description='DD Startup Analysis Tool',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument(
+        'params',
+        type=str,
+        help='YAML parameter file name (e.g., "my_parameters") or path to file (e.g., "inputs/my_parameters.yaml")'
+    )
+    
+    parser.add_argument(
+        'config',
+        type=str,
+        help='YAML configuration file name (e.g., "parametric_tseeded") or path to file (e.g., "run_configs/parametric.yaml")'
+    )
+    
+    parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Enable verbose output'
+    )
+    
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Print configuration without running analysis'
+    )
+    
+    return parser.parse_args()
+
+def resolve_file_path(filename: str, default_dir: str, extension: Optional[str] = None, extensions: Optional[Union[List[str], Tuple[str, ...]]] = None,) -> Path:
+    """
+    Resolve file path - check if it's a direct path or needs default directory.
+
+    Args:
+        filename: File name or path
+        default_dir: Default directory to search in (e.g., 'inputs')
+        extension: Optional single file extension to try (e.g., '.yaml' or 'yaml')
+        extensions: Optional list/tuple of extensions to try (ignored if extension is provided)
+
+    Returns:
+        Path object to the file
+
+    Raises:
+        FileNotFoundError: If file cannot be found in any of the expected locations
+    """
+    # 1) As given
+    p = Path(filename)
+    if p.exists():
+        return p.resolve()
+
+    stem = p.stem
+    candidates = []
+    ext_list: List[str] = []
+    if extension:
+        ext_list = [extension]
+    elif extensions:
+        ext_list = list(extensions)
+    # 2) With optional extension(s) in default_dir and ../default_dir
+    for ext in ext_list:
+        ext = ext if ext.startswith('.') else f'.{ext}'
+        candidates.extend([
+            Path(default_dir) / f"{stem}{ext}",
+            Path('..') / default_dir / f"{stem}{ext}",
+        ])
+    # 3) Raw filename inside default_dir and ../default_dir
+    candidates.extend([
+        Path(default_dir) / filename,
+        Path('..') / default_dir / filename,
+    ])
+    tried = []
+    for c in candidates:
+        tried.append(str(c))
+        if c.exists():
+            return c.resolve()
+    raise FileNotFoundError(f"File not found: {filename}\nSearched paths:\n - " + "\n - ".join(tried))
+
+
+def load_config(yaml_path: Path) -> Dict[str, Any]:
+    """
+    Load and validate YAML configuration.
+    
+    Args:
+        yaml_path: Path to YAML configuration file
+        
+    Returns:
+        Dictionary containing configuration with defaults applied
+        
+    Raises:
+        ValueError: If required fields are missing
+        yaml.YAMLError: If YAML file is malformed
+    """
+    with open(yaml_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    if not isinstance(config, dict):
+        raise ValueError(f"Config must be a mapping, got {type(config)!r}")
+
+    # Required fields
+    for field in ("analysis_type", "method"):
+        if field not in config:
+            raise ValueError(f"Missing required field in config: {field}")
+
+    # Static defaults (non-performance)
+    static_defaults = {
+        "vector_length": 100,
+        "max_simulation_time": 10 * 365 * 24 * 3600,
+        "verbose": False,
+        "output_dir": "outputs",
+        "filter": None,  # parameter filter expression
+    }
+    for key, default in static_defaults.items():
+        config.setdefault(key, default)
+
+    # Parallelization-related keys: None means "auto"
+    for key in ("n_jobs", "chunk_size", "batch_size", "N_SAMPLES", "order"):
+        config.setdefault(key, None)
+
+    # Fill in parallelization defaults based on system profiling
+    config = apply_parallelization_defaults(config, verbose=config["verbose"])
+
+    return config
+
+
+def load_params(yaml_path: Path, analysis_type: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Load parameters from YAML, convert to canonical units from PARAMETER_SCHEMA,
+    and validate that required inputs for the requested analysis type exist.
+
+    Returns:
+        dict[base_param_name] = (values_in_default_unit, unit_str, metadata_dict)
+    """
+
+    def _parse_numeric(value: Any) -> float:
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            v = value.lower()
+            if v in {"nan", ".nan", "null", "none"}:
+                return float("nan")
+            try:
+                return float(value)
+            except ValueError:
+                raise ValueError(f"Cannot parse numeric value: {value!r}")
+        raise ValueError(f"Cannot parse numeric value of type {type(value)}: {value!r}")
+
+    registry = get_registry()
+
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"Parameter file not found: {yaml_path}")
+    if yaml_path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ValueError(f"Parameter file must be YAML (.yaml/.yml), got: {yaml_path.suffix}")
+
+    with open(yaml_path, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    if "parameters" not in cfg or not isinstance(cfg["parameters"], dict):
+        raise ValueError("YAML file must contain top-level 'parameters' mapping")
+
+    params_cfg = cfg["parameters"]
+    result: Dict[str, Any] = {}
+
+    def _values_from_definition(field: str, kind: str, pts: int, definition: Dict[str, Any]) -> np.ndarray:
+        if kind == "scalar":
+            if "value" not in definition:
+                raise ValueError(f"Scalar parameter '{field}' must have 'value'")
+            return np.full(pts, _parse_numeric(definition["value"]), dtype=float)
+        if kind == "linear":
+            if "min" not in definition or "max" not in definition:
+                raise ValueError(f"Linear parameter '{field}' must have 'min' and 'max'")
+            vmin = _parse_numeric(definition["min"])
+            vmax = _parse_numeric(definition["max"])
+            return np.array([(vmin + vmax) / 2.0], dtype=float) if pts == 1 else np.linspace(vmin, vmax, pts, dtype=float)
+        if kind == "normal":
+            if "mean" not in definition:
+                raise ValueError(f"Normal parameter '{field}' must have 'mean'")
+            mean = _parse_numeric(definition["mean"])
+            std = _parse_numeric(definition.get("std", 1.0))
+            if pts == 1:
+                return np.array([mean], dtype=float)
+            percentiles = np.linspace(0.0, 1.0, pts + 2)[1:-1]
+            return mean + std * norm.ppf(percentiles)
+        if kind == "vector":
+            raw_vals = definition.get("values")
+            if not isinstance(raw_vals, list):
+                raise ValueError(f"Vector parameter '{field}' values must be a list")
+            return np.array([_parse_numeric(v) for v in raw_vals], dtype=float)
+        raise ValueError(f"Unknown parameter type '{kind}' for '{field}'")
+
+    for field_name, definition in params_cfg.items():
+        if not isinstance(definition, dict):
+            raise ValueError(f"Parameter '{field_name}' must be a mapping")
+
+        param_type = definition.get("type", "scalar")
+        points = int(definition.get("points", 1))
+        if points < 1:
+            raise ValueError(f"'points' must be >= 1 for '{field_name}'")
+
+        # Derive canonical parameter name from field name and aliases
+        base_guess = field_name[:-6] if field_name.endswith("_field") else field_name
+        base_name = registry.resolve_alias(base_guess)
+        schema = PARAMETER_SCHEMA.get(base_name, {})
+
+        allowed_extra = {"max_simulation_time"}
+        if not schema and base_name not in allowed_extra:
+            raise ValueError(f"Unknown parameter '{base_guess}' in YAML")
+
+        yaml_unit = definition.get("unit")
+        source_unit = yaml_unit or schema.get("unit") or "dimensionless"
+
+        values = _values_from_definition(field_name, param_type, points, definition)
+
+        if schema:
+            try:
+                values_default, final_unit = registry.convert_to_default_unit(base_name, values, source_unit)
+            except Exception as e:
+                raise ValueError(
+                    f"Unit conversion failed for '{field_name}': {source_unit!r} -> {schema.get('unit', source_unit)!r}: {e}"
+                )
+        else:
+            # Extra field (e.g., max_simulation_time) - keep as provided
+            values_default, final_unit = np.asarray(values, dtype=float), source_unit
+
+        metadata = {
+            "name": base_name,
+            "field": field_name,
+            "type": param_type,
+            "description": definition.get("description") or schema.get("description", ""),
+            "symbol": definition.get("symbol") or schema.get("symbol"),
+            "role": schema.get("role"),
+            "analysis_types": schema.get("analysis_types"),
+        }
+
+        result[base_name] = (values_default, final_unit, metadata)
+
+    if analysis_type:
+        provided_schema_names = [k for k in result.keys() if k in PARAMETER_SCHEMA]
+        missing = registry.missing_required(provided_schema_names, analysis_type)
+        if missing:
+            raise ValueError(
+                f"Missing required parameters for {analysis_type} analysis: {', '.join(missing)}"
+            )
+        # Fill computed-when-null entries if not provided
+        for name in registry.get_input_names(analysis_type):
+            if name in result or not registry.is_computed_when_null(name):
+                continue
+            schema = PARAMETER_SCHEMA.get(name, {})
+            default_unit = schema.get("unit", "dimensionless")
+            result[name] = (
+                np.array([np.nan], dtype=float),
+                default_unit,
+                {
+                    "name": name,
+                    "field": f"{name}_field",
+                    "type": "computed",
+                    "description": schema.get("description", ""),
+                    "symbol": schema.get("symbol"),
+                    "role": schema.get("role"),
+                    "analysis_types": schema.get("analysis_types"),
+                },
+            )
+
+    return result
+
+def prepare_input_data(param_fields: Dict[str, Any], analysis_type: str) -> Dict[str, np.ndarray]:
+    """Build ordered input arrays for the requested analysis type."""
+    registry = get_registry()
+    if analysis_type not in {"lump", "T_seeded"}:
+        raise ValueError(f"Unknown analysis type: {analysis_type}")
+
+    input_names = registry.get_input_names(analysis_type)
+    input_data: Dict[str, Optional[np.ndarray]] = {}
+
+    for name in input_names:
+        data = param_fields.get(name)
+        if data is None:
+            if registry.is_computed_when_null(name):
+                input_data[name] = None
+                continue
+            raise ValueError(f"Missing parameter '{name}' for {analysis_type}")
+
+        values = np.asarray(data[0], dtype=float)
+        if values.ndim == 0:
+            values = values.reshape(1)
+
+        if registry.is_computed_when_null(name) and np.all(np.isnan(values)):
+            input_data[name] = None
+        else:
+            input_data[name] = values
+
+    return input_data
+
+
+def print_configuration(
+    config: Dict[str, Any],
+    param_fields: Dict[str, Any],
+    input_data: Dict[str, np.ndarray],
+    param_file: Path,
+    config_file: Path,
+) -> None:
+    """Compact console overview for dry runs."""
+    registry = get_registry()
+    years = config['max_simulation_time'] / 365 / 24 / 3600
+
+    print("\n" + "=" * 60)
+    print("DD STARTUP ANALYSIS CONFIGURATION")
+    print("=" * 60)
+    print(f"Parameter file: {param_file}")
+    print(f"Config file:    {config_file}")
+    print(f"Analysis type:  {config['analysis_type']}")
+    print(f"Method:         {config['method']}")
+    print(f"Vector length:  {config['vector_length']}")
+    print(f"Max sim time:   {years:.2f} years")
+    print(f"n_jobs:         {config['n_jobs'] or 'auto'}")
+    print(f"chunk_size:     {config['chunk_size'] or 'auto'}")
+    print(f"batch_size:     {config['batch_size']}")
+    if config.get("filter"):
+        print(f"Filter:         {config['filter']}")
+
+    param_shapes = [arr.shape[0] for arr in input_data.values() if arr is not None]
+    n_combinations = int(np.prod(param_shapes)) if param_shapes else 0
+
+    print("\nInput parameters:")
+    for name in registry.get_input_names(config['analysis_type']):
+        arr = input_data.get(name)
+        label = registry.get_param_label(name, use_symbol=False)
+        if arr is None:
+            status = "computed during run"
+        else:
+            status = f"{arr.shape[0]} values, min={np.nanmin(arr):.3g}, max={np.nanmax(arr):.3g}"
+        print(f"  {label:20s}: {status}")
+
+    print(f"\nTotal parameter combinations: {n_combinations:,}")
+    print("=" * 60 + "\n")
+
+
+def generate_output_path(
+    base_dir: str = "outputs",
+    analysis_method: str = "parametric",
+    analysis_type: str = "T_seeded",
+    timestamp: Optional[str] = None,
+    dry_run: bool = False,
+) -> Tuple[Path, str]:
+    """Create output folder and filename."""
+    if timestamp is None:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+    output_dir = Path(base_dir) / f"{timestamp}_{analysis_method}_{analysis_type}"
+    if not dry_run:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"ddstartup_{timestamp}_{analysis_method}_{analysis_type}.h5"
+    return output_dir, str(output_dir / filename)
+
 
 def latest_output_folder(outputs_dir: Path) -> Tuple[Path | None, List[Path]]:
     """Return (latest_timestamped_folder, sorted_h5_files) or (None, [])."""
@@ -34,20 +396,24 @@ def latest_output_folder(outputs_dir: Path) -> Tuple[Path | None, List[Path]]:
     dirs = [d for d in outputs_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
     if not dirs:
         return None, []
+
     def _key(p: Path):
         m = re.match(r"(\d{8})_(\d{6})", p.name)
         if m:
             return (1, m.group(1) + m.group(2))
         st = p.stat()
         return (0, getattr(st, "st_birthtime", st.st_mtime))
+
     dirs.sort(key=_key, reverse=True)
     latest = dirs[0]
     return latest, sorted(latest.glob("*.h5"))
+
 
 def latest_h5(outputs_dir: Path) -> Path | None:
     """Return most recently modified .h5 in outputs_dir, or None."""
     h5s = sorted(outputs_dir.glob("*.h5"), key=lambda p: p.stat().st_mtime, reverse=True)
     return h5s[0] if h5s else None
+
 
 def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List[Path], Path | None]:
     """
@@ -60,7 +426,6 @@ def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List
     """
     outputs = root / "outputs"
 
-    # "latest" mode
     if isinstance(spec, str) and spec == "latest":
         if not outputs.exists():
             raise FileNotFoundError(f"Outputs folder missing: {outputs}")
@@ -72,14 +437,12 @@ def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List
             raise FileNotFoundError(f"No .h5 found in {outputs}")
         return [f], outputs
 
-    # Listify
     specs = [spec] if isinstance(spec, (str, Path)) else list(spec)
     files: List[Path] = []
     latest_folder: Path | None = None
 
     for s in specs:
         s = Path(s)
-        # Resolve candidates in priority order: as-is, <root>/..., <root>/outputs/...
         if not s.exists():
             for base in (root, outputs):
                 cand = base / s
@@ -101,7 +464,6 @@ def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List
                 raise ValueError(f"Not an .h5 file: {s}")
             files.append(s)
 
-    # De-dupe, keep order
     seen, uniq = set(), []
     for p in files:
         if p not in seen:
@@ -110,327 +472,6 @@ def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List
     return uniq, latest_folder
 
 
-def resolve_file_path(filename: str, default_dir: str, extensions: Optional[List[str]] = None) -> Path:
-    """
-    Resolve file path - check if it's a direct path or needs default directory.
-    
-    Args:
-        filename: File name or path
-        default_dir: Default directory to search in (e.g., 'inputs')
-        extensions: List of extensions to try (e.g., ['.yaml', '.yml'])
-    
-    Returns:
-        Path object to the file
-        
-    Raises:
-        FileNotFoundError: If file cannot be found in any of the expected locations
-    """
-    if extensions is None:
-        extensions = ['']
-    
-    # Check if filename is already a valid path
-    file_path = Path(filename)
-    if file_path.exists():
-        return file_path
-    
-    # Remove extension from filename if present
-    name_without_ext = filename.replace('.py', '').replace('.yaml', '').replace('.yml', '')
-    
-    # Try with default directory in multiple locations
-    search_paths = []
-    for ext in extensions:
-        # Try in current working directory's default_dir
-        test_path = Path(default_dir) / f"{name_without_ext}{ext}"
-        search_paths.append(str(test_path))
-        if test_path.exists():
-            return test_path
-        
-        # Try in parent directory's default_dir (for when running from ddstartup/)
-        parent_test_path = Path('..') / default_dir / f"{name_without_ext}{ext}"
-        search_paths.append(str(parent_test_path))
-        if parent_test_path.exists():
-            return parent_test_path.resolve()
-    
-    # If not found, raise error with helpful message
-    raise FileNotFoundError(
-        f"File not found: {filename}\n"
-        f"Searched in: {filename}, {', '.join(search_paths)}"
-    )
-
-
-def load_config(yaml_path: Path) -> Dict[str, Any]:
-    """
-    Load and validate YAML configuration.
-    
-    Args:
-        yaml_path: Path to YAML configuration file
-        
-    Returns:
-        Dictionary containing configuration with defaults applied
-        
-    Raises:
-        ValueError: If required fields are missing
-        yaml.YAMLError: If YAML file is malformed
-    """
-    with open(yaml_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    # Validate required fields
-    required_fields = ['analysis_type', 'method']
-    for field in required_fields:
-        if field not in config:
-            raise ValueError(f"Missing required field in config: {field}")
-    
-    # Set defaults for optional fields
-    config.setdefault('vector_length', 100)
-    config.setdefault('max_simulation_time', 10 * 365 * 24 * 3600)
-    config.setdefault('verbose', False)
-    config.setdefault('output_dir', 'outputs')
-    config.setdefault('n_jobs', None)
-    config.setdefault('chunk_size', None)
-    config.setdefault('batch_size', 500)
-    config.setdefault('N_SAMPLES', 100000)
-    config.setdefault('order', 3)
-    config.setdefault('filter', None)  # Parameter filter expression
-    
-    return config
-
-
-def load_parameter_fields(param_module_path: Path) -> Dict[str, Any]:
-    """
-    Load parameter fields from YAML configuration file.
-    
-    Args:
-        param_module_path: Path to YAML parameter configuration file
-        
-    Returns:
-        Dictionary mapping field names to tuples of (values_array, unit_string, metadata)
-        or scalar values for simple parameters
-        
-    Raises:
-        FileNotFoundError: If YAML file doesn't exist
-        ValueError: If file format is unsupported or YAML structure is invalid
-    """
-    param_path = Path(param_module_path)
-    
-    # Only YAML files are supported
-    if param_path.suffix not in ['.yaml', '.yml']:
-        raise ValueError(
-            f"Only YAML parameter files are supported (.yaml or .yml), got: {param_path.suffix}\n"
-            f"Legacy Python parameter files (.py) are no longer supported.\n"
-            f"Please convert to YAML format. See inputs/README_YAML.md for migration guide."
-        )
-    
-    from .parameter_loader import ParameterLoader
-    return ParameterLoader.load_from_yaml(param_path)
-
-
-def prepare_input_data(param_fields: Dict[str, Any], analysis_type: str) -> Dict[str, np.ndarray]:
-    """
-    Prepare input data dictionary based on analysis type.
-    
-    Converts parameter field tuples (values, unit, metadata) to numpy arrays with proper units.
-    
-    Args:
-        param_fields: Dictionary of parameter field tuples from YAML loader
-        analysis_type: Type of analysis ('T_seeded' or 'lump')
-        
-    Returns:
-        Dictionary mapping parameter names to numpy arrays in correct units
-        
-    Raises:
-        ValueError: If analysis_type is not recognized
-    """
-    from .units_and_constants import u
-    
-    def convert_to_unit(field_data: tuple, target_unit: str) -> np.ndarray:
-        """Convert parameter field data to target unit."""
-        values, unit_str, metadata = field_data
-        quantity = values * u(unit_str)
-        return quantity.to(target_unit).magnitude
-    
-    def convert_optional_field(field_name: str, target_unit: str):
-        """Convert optional parameter field, return None if not present."""
-        if field_name in param_fields and param_fields[field_name] is not None:
-            return convert_to_unit(param_fields[field_name], target_unit)
-        return None
-    
-    if analysis_type == 'T_seeded':
-        input_data = {
-            'V_plasma': convert_to_unit(param_fields['V_plasma_field'], 'm^3'),
-            'T_i': convert_to_unit(param_fields['T_i_field'], 'keV'),
-            'n_tot': convert_to_unit(param_fields['n_tot_field'], '1/m^3'),
-            'tau_p_T': convert_to_unit(param_fields['tau_p_T_field'], 's'),
-            'P_aux': convert_optional_field('P_aux_field', 'W'),
-            'P_aux_DT_eq': convert_optional_field('P_aux_DT_eq_field', 'W'),
-            'TBR_DT': convert_to_unit(param_fields['TBR_DT_field'], 'dimensionless'),
-            'TBR_DDn': convert_to_unit(param_fields['TBR_DDn_field'], 'dimensionless'),
-            'tau_ifc': convert_to_unit(param_fields['tau_ifc_field'], 's'),
-            'tau_ofc': convert_to_unit(param_fields['tau_ofc_field'], 's'),
-            'eta_th': convert_to_unit(param_fields['eta_th_field'], 'dimensionless'),
-            'capacity_factor': convert_to_unit(param_fields['capacity_factor_field'], 'dimensionless'),
-            'price_of_electricity': convert_to_unit(param_fields['price_of_electricity_field'], '1/J')
-        }
-    elif analysis_type == 'lump':
-        input_data = {
-            'V_plasma': convert_to_unit(param_fields['V_plasma_field'], 'm^3'),
-            'T_i': convert_to_unit(param_fields['T_i_field'], 'keV'),
-            'n_tot': convert_to_unit(param_fields['n_tot_field'], '1/m^3'),
-            'tau_p_T': convert_to_unit(param_fields['tau_p_T_field'], 's'),
-            'tau_p_He3': convert_to_unit(param_fields['tau_p_He3_field'], 's'),
-            'P_aux': convert_optional_field('P_aux_field', 'W'),
-            'P_aux_DT_eq': convert_optional_field('P_aux_DT_eq_field', 'W'),
-            'TBR_DT': convert_to_unit(param_fields['TBR_DT_field'], 'dimensionless'),
-            'TBR_DDn': convert_to_unit(param_fields['TBR_DDn_field'], 'dimensionless'),
-            'I_target': convert_to_unit(param_fields['I_target_field'], 'kg'),
-            'eta_th': convert_to_unit(param_fields['eta_th_field'], 'dimensionless'),
-            'capacity_factor': convert_to_unit(param_fields['capacity_factor_field'], 'dimensionless'),
-            'price_of_electricity': convert_to_unit(param_fields['price_of_electricity_field'], '1/J')
-        }
-    else:
-        raise ValueError(f"Unknown analysis type: {analysis_type}")
-    
-    return input_data
-
-
-def print_configuration(
-    config: Dict[str, Any],
-    param_fields: Dict[str, Any],
-    input_data: Dict[str, np.ndarray],
-    param_file: Path,
-    config_file: Path
-) -> None:
-    """
-    Print configuration summary.
-    
-    Args:
-        config: Configuration dictionary
-        param_fields: Parameter fields dictionary
-        input_data: Prepared input data dictionary
-        param_file: Path to parameter config file
-        config_file: Path to YAML config file
-    """
-    print("\n" + "="*60)
-    print("DD STARTUP ANALYSIS CONFIGURATION")
-    print("="*60)
-    print(f"Parameter file: {param_file}")
-    print(f"Config file: {config_file}")
-    print(f"Analysis type: {config['analysis_type']}")
-    print(f"Method: {config['method']}")
-    print(f"Max simulation time: {config['max_simulation_time']/365/24/3600:.2f} years")
-    
-    if config.get('filter'):
-        print(f"Filter: {config['filter']}")
-    
-    if config['method'] == 'sobol':
-        print(f"N_SAMPLES: {config['N_SAMPLES']}")
-        print(f"Order: {config['order']}")
-    else:
-        print(f"Vector length: {config['vector_length']}")
-    
-    print(f"n_jobs: {config['n_jobs'] or 'auto'}")
-    print(f"chunk_size: {config['chunk_size'] or 'auto'}")
-    print(f"batch_size: {config['batch_size']}")
-    print(f"Output directory: {config['output_dir']}")
-    
-    print("\nInput parameter fields:")
-    for name, arr in input_data.items():
-        if arr is None:
-            print(f"  {name:20s}: None (will be calculated)")
-        else:
-            print(f"  {name:20s}: shape={arr.shape}, range=[{arr.min():.3e}, {arr.max():.3e}]")
-    
-    # Count only non-None parameters for combinations
-    param_shapes = [arr.shape[0] for arr in input_data.values() if arr is not None]
-    n_combinations = np.prod(param_shapes) if param_shapes else 0
-    print(f"\nTotal parameter combinations: {n_combinations:,}")
-    print("="*60 + "\n")
-
-
-def create_output_directory(base_dir: str, timestamp: str, analysis_method: str, analysis_type: str) -> Path:
-    """
-    Create output directory with timestamp and analysis info.
-    
-    Creates a directory structure: base_dir/timestamp_method_type/
-    
-    Args:
-        base_dir: Base output directory (e.g., 'outputs')
-        timestamp: Timestamp string (e.g., '20251006_123045')
-        analysis_method: Analysis method ('parametric', 'sobol', 'lhs')
-        analysis_type: Analysis type ('T_seeded', 'lump')
-        
-    Returns:
-        Path object to the created directory
-        
-    Raises:
-        OSError: If directory cannot be created
-        
-    Example:
-        >>> output_dir = create_output_directory('outputs', '20251006_123045', 'parametric', 'T_seeded')
-        >>> print(output_dir)
-        outputs/20251006_123045_parametric_T_seeded
-    """
-    # If base_dir is 'outputs' (relative), make it relative to parent directory
-    # This ensures outputs go to dd_startup/outputs instead of dd_startup/ddstartup/outputs
-    if base_dir == 'outputs':
-        # Get the parent directory of the current script location
-        script_dir = Path(__file__).resolve().parent.parent  # Go up from utils/ to ddstartup/
-        base_dir = script_dir.parent / 'outputs'  # Go up from ddstartup/ to dd_startup/ and add outputs/
-    
-    # Create directory name with timestamp and analysis info
-    dir_name = f"{timestamp}_{analysis_method}_{analysis_type}"
-    output_path = Path(base_dir) / dir_name
-    
-    # Create directory (including parent directories if needed)
-    output_path.mkdir(parents=True, exist_ok=True)
-    
-    return output_path
-
-
-def generate_output_path(
-    base_dir: str = 'outputs',
-    analysis_method: str = 'parametric',
-    analysis_type: str = 'T_seeded',
-    timestamp: Optional[str] = None
-) -> Tuple[Path, str]:
-    """
-    Generate output directory and file path for HDF5 results.
-    
-    Creates directory structure and generates full path to output file:
-    base_dir/timestamp_method_type/ddstartup_timestamp_method_type.h5
-    
-    Args:
-        base_dir: Base output directory (default: 'outputs')
-        analysis_method: Analysis method ('parametric', 'sobol', 'lhs')
-        analysis_type: Analysis type ('T_seeded', 'lump')
-        timestamp: Optional timestamp string. If None, generates current timestamp
-        
-    Returns:
-        Tuple of (output_directory_path, full_output_file_path)
-        
-    Example:
-        >>> output_dir, output_file = generate_output_path('outputs', 'parametric', 'T_seeded')
-        >>> print(output_dir)
-        outputs/20251006_123045_parametric_T_seeded
-        >>> print(output_file)
-        outputs/20251006_123045_parametric_T_seeded/ddstartup_20251006_123045_parametric_T_seeded.h5
-    """
-    # Generate timestamp if not provided
-    if timestamp is None:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-    
-    # Create output directory
-    output_dir = create_output_directory(base_dir, timestamp, analysis_method, analysis_type)
-    
-    # Generate output filename
-    filename = f"ddstartup_{timestamp}_{analysis_method}_{analysis_type}.h5"
-    output_file = output_dir / filename
-    
-    return output_dir, str(output_file)
-
-# ---------------------------------------------------------------------
-# Core H5 → DataFrame (vectors preserved, no filters, no computed)
-# ---------------------------------------------------------------------
 def h5_to_df_core(
     h5_path: Path,
     *,
@@ -451,7 +492,6 @@ def h5_to_df_core(
     def _append_col(builder: dict, name: str, a2d: np.ndarray, downcast_f32: bool) -> int:
         # If 1D vector, preserve as object column (each row is a 1D array)
         if a2d.ndim == 1:
-            # 1D vector: store as object column
             builder[name] = [np.array([v]) if not isinstance(v, (np.ndarray, list)) else np.array(v) for v in a2d]
             return len(a2d[0]) if hasattr(a2d[0], '__len__') else 1
         # If 2D and shape[1] == 1, treat as scalar

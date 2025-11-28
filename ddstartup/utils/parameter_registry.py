@@ -12,7 +12,9 @@ for separate YAML files and reducing redundancy.
 """
 
 import numpy as np
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Iterable, Tuple
+
+from .units_and_constants import u
 
 
 # ============================================================================
@@ -128,7 +130,7 @@ PARAMETER_SCHEMA = {
     'price_of_electricity': {
         'role': 'input',
         'analysis_types': ['lump', 'T_seeded'],
-        'unit': '1/J',
+        'unit': '$/J',
         'symbol': r'$C_{\mathrm{kWh}}$',
         'description': 'Price of electricity',
         'aliases': ['price_of_electricity']
@@ -295,6 +297,11 @@ class ParameterRegistry:
     def __init__(self):
         """Initialize with PARAMETER_SCHEMA."""
         self.parameters = PARAMETER_SCHEMA
+        # Build alias map for quick resolution
+        self._alias_to_name = {}
+        for name, props in self.parameters.items():
+            for alias in props.get('aliases', []) or []:
+                self._alias_to_name[alias] = name
     
     def get_parameter_names(self, role: Optional[str] = None, 
                           analysis_type: Optional[str] = None,
@@ -361,6 +368,10 @@ class ParameterRegistry:
         """Get unit for a parameter."""
         return self.parameters.get(param_name, {}).get('unit', '')
     
+    def get_param_unit(self, param_name: str) -> str:
+        """Alias for get_unit for external callers."""
+        return self.get_unit(param_name)
+    
     def get_symbol(self, param_name: str) -> str:
         """Get LaTeX symbol for a parameter."""
         return self.parameters.get(param_name, {}).get('symbol', param_name)
@@ -370,23 +381,47 @@ class ParameterRegistry:
         params = self.get_all_field_names(analysis_type)
         return {name: self.get_unit(name) for name in params}
     
-    def get_symbols_dict(self, analysis_type: Optional[str] = None) -> Dict[str, str]:
-        """Get dictionary mapping parameter names to LaTeX symbols."""
-        params = self.get_all_field_names(analysis_type)
-        return {name: self.get_symbol(name) for name in params}
-    
-    def is_flexible_parameter(self, param_name: str) -> bool:
-        """Check if a parameter can be either input or computed (like P_aux)."""
-        return self.parameters.get(param_name, {}).get('role') == 'flexible'
-    
     def is_computed_when_null(self, param_name: str) -> bool:
         """Check if a flexible parameter is computed when null/NaN."""
         param = self.parameters.get(param_name, {})
         return param.get('computed_when_null', False)
     
-    def get_description(self, param_name: str) -> str:
-        """Get description for a parameter."""
-        return self.parameters.get(param_name, {}).get('description', '')
+    def get_vector_length(self, param_name: str, default: int) -> int:
+        """Return preferred vector length for a parameter."""
+        return int(self.parameters.get(param_name, {}).get('vector_length', default))
+    
+    def resolve_alias(self, name: str) -> str:
+        """Return canonical parameter name for an alias or the name itself."""
+        return self._alias_to_name.get(name, name)
+    
+    def missing_required(self, provided_names: Iterable[str], analysis_type: str) -> List[str]:
+        """List required inputs absent from provided_names (flexible allowed to be null)."""
+        provided = {self.resolve_alias(n) for n in provided_names}
+        missing = []
+        for name in self.get_input_names(analysis_type):
+            if name in provided:
+                continue
+            if self.is_computed_when_null(name):
+                continue
+            missing.append(name)
+        return missing
+    
+    def convert_to_default_unit(self, param_name: str, values: np.ndarray, source_unit: str) -> Tuple[np.ndarray, str]:
+        """
+        Convert values to the canonical unit defined in the schema.
+        Returns (values_converted, unit_used). Falls back to source_unit if conversion fails.
+        """
+        target_unit = self.get_unit(param_name) or source_unit or 'dimensionless'
+        source_unit = source_unit or target_unit
+        
+        try:
+            q = (values * u(source_unit)).to(target_unit)
+            return q.magnitude, target_unit
+        except Exception:
+            if target_unit != source_unit:
+                # Keep original unit if canonical one is not parseable
+                return np.asarray(values, dtype=float), source_unit
+            raise
     
     def make_result_dict(self, values: Dict[str, Any], 
                         analysis_type: Optional[str] = None,

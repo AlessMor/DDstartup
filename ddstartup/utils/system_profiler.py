@@ -8,94 +8,103 @@ optimal parameters for parallel computation based on available resources.
 import multiprocessing
 import psutil
 from typing import Dict, Tuple, Optional
+from typing import Dict, Any
+import sys
 
 
-def get_system_info() -> Dict[str, any]:
+def apply_parallelization_defaults(config: Dict[str, Any], verbose: bool = False) -> Dict[str, Any]:
     """
-    Get comprehensive system information.
-    
-    Returns:
-        Dictionary containing:
-        - n_cores: Number of CPU cores
-        - total_ram_gb: Total RAM in GB
-        - available_ram_gb: Available RAM in GB
-        - cpu_freq_mhz: CPU frequency in MHz (if available)
-        - ram_percent_used: Percentage of RAM currently in use
+    Fill parallelization-related fields in config using system profiling
+    when they are missing or explicitly set to null/None.
+
+    Fields handled:
+      - n_jobs
+      - chunk_size
+      - batch_size
+      - (Sobol only) N_SAMPLES, order
     """
-    n_cores = multiprocessing.cpu_count()
+    method = config.get("method", "parametric")
+
+    # Do we actually need profiling?
+    needs_profiling = (
+        config.get("n_jobs") is None
+        or config.get("chunk_size") is None
+        or config.get("batch_size") is None
+        or (method == "sobol" and config.get("N_SAMPLES") is None)
+    )
+
+    if not needs_profiling:
+        return config
+
+    try:
+        params = get_optimal_parameters(analysis_method=method, verbose=verbose)
+
+        # Fill only missing/None fields; ignore system_info
+        for key, value in params.items():
+            if key == "system_info":
+                continue
+            if config.get(key) is None:
+                config[key] = value
+
+    except Exception as e:
+        print(f"Error during system profiling: {e}", file=sys.stderr)
+
+    return config
+
+
+def get_system_info() -> Dict[str, Any]:
+    """Get basic system information (cores, RAM, CPU freq)."""
     mem = psutil.virtual_memory()
-    
-    system_info = {
-        'n_cores': n_cores,
-        'total_ram_gb': mem.total / 1e9,
-        'available_ram_gb': mem.available / 1e9,
-        'ram_percent_used': mem.percent,
+    info: Dict[str, Any] = {
+        "n_cores": multiprocessing.cpu_count(),
+        "total_ram_gb": mem.total / 1e9,
+        "available_ram_gb": mem.available / 1e9,
+        "ram_percent_used": mem.percent,
+        "cpu_freq_mhz": None,
     }
-    
-    # CPU frequency (may not be available on all systems)
+
     try:
         cpu_freq = psutil.cpu_freq()
-        if cpu_freq and hasattr(cpu_freq, 'max'):
-            system_info['cpu_freq_mhz'] = cpu_freq.max
-        elif cpu_freq and hasattr(cpu_freq, 'current'):
-            system_info['cpu_freq_mhz'] = cpu_freq.current
-        else:
-            system_info['cpu_freq_mhz'] = None
     except (AttributeError, RuntimeError):
-        system_info['cpu_freq_mhz'] = None
-    
-    return system_info
+        cpu_freq = None
+
+    if cpu_freq:
+        info["cpu_freq_mhz"] = getattr(cpu_freq, "max", None) or getattr(cpu_freq, "current", None)
+
+    return info
 
 
-def calculate_optimal_n_jobs(system_info: Optional[Dict] = None) -> int:
+def get_optimal_parameters(
+    analysis_method: str = "parametric",
+    verbose: bool = False,
+) -> Dict[str, Any]:
     """
-    Calculate optimal number of parallel jobs based on CPU cores.
-    
-    Args:
-        system_info: System information dictionary (if None, will be fetched)
-        
+    Compute optimal parameters for parallel computation.
+
     Returns:
-        Optimal number of parallel jobs
+        {
+            'system_info': ...,
+            'n_jobs': ...,
+            'chunk_size': ...,
+            'batch_size': ...,
+            # if analysis_method == 'sobol':
+            'N_SAMPLES': ...,
+            'order': ...,
+        }
     """
-    if system_info is None:
-        system_info = get_system_info()
-    
-    n_cores = system_info['n_cores']
-    
-    # Strategy: Use all cores for large systems, scale down for smaller ones
+    system_info = get_system_info()
+    n_cores = system_info["n_cores"]
+    available_ram_gb = system_info["available_ram_gb"]
+
+    # n_jobs
     if n_cores >= 16:
-        return n_cores  # Use all cores for large systems
-    elif n_cores >= 8:
-        return n_cores - 1  # Leave one core free
+        n_jobs = n_cores
     elif n_cores >= 4:
-        return n_cores - 1
+        n_jobs = n_cores - 1
     else:
-        return max(1, n_cores - 1)  # Always at least 1
+        n_jobs = max(1, n_cores - 1)
 
-
-def calculate_optimal_chunk_size(
-    system_info: Optional[Dict] = None,
-    n_jobs: Optional[int] = None
-) -> int:
-    """
-    Calculate optimal chunk size for parallel processing.
-    
-    Args:
-        system_info: System information dictionary
-        n_jobs: Number of parallel jobs (if None, will be calculated)
-        
-    Returns:
-        Optimal chunk size for batching computations
-    """
-    if system_info is None:
-        system_info = get_system_info()
-    
-    if n_jobs is None:
-        n_jobs = calculate_optimal_n_jobs(system_info)
-    
-    n_cores = system_info['n_cores']
-    
-    # Larger chunks for more cores to reduce overhead
+    # chunk_size
     if n_cores >= 16:
         base_chunk = 5000
     elif n_cores >= 8:
@@ -104,222 +113,85 @@ def calculate_optimal_chunk_size(
         base_chunk = 1000
     else:
         base_chunk = 500
-    
-    # Scale by n_jobs
     chunk_size = max(base_chunk, n_jobs * 500)
-    
-    return chunk_size
 
-
-def calculate_optimal_batch_size(system_info: Optional[Dict] = None) -> int:
-    """
-    Calculate optimal batch size for buffered operations.
-    
-    Increased batch sizes reduce lock contention by collecting more results
-    before synchronization, improving parallelization efficiency.
-    
-    Args:
-        system_info: System information dictionary
-        
-    Returns:
-        Optimal batch size for buffering results
-    """
-    if system_info is None:
-        system_info = get_system_info()
-    
-    n_cores = system_info['n_cores']
-    available_ram_gb = system_info['available_ram_gb']
-    
-    # Base batch size on cores (increased 2x to reduce lock contention)
+    # batch_size
     if n_cores >= 16:
-        batch_size = 2000  # was 1000
+        batch_size = 2000
     elif n_cores >= 8:
-        batch_size = 1000  # was 500
+        batch_size = 1000
     elif n_cores >= 4:
-        batch_size = 500   # was 250
+        batch_size = 500
     else:
-        batch_size = 200   # was 100
-    
-    # Reduce if low memory
+        batch_size = 200
+
     if available_ram_gb < 4:
-        batch_size = min(batch_size, 200)   # was 100
+        batch_size = min(batch_size, 200)
     elif available_ram_gb < 8:
-        batch_size = min(batch_size, 500)   # was 250
-    
-    return batch_size
+        batch_size = min(batch_size, 500)
 
-
-def calculate_optimal_sobol_samples(system_info: Optional[Dict] = None) -> int:
-    """
-    Calculate optimal number of samples for Sobol analysis.
-    
-    Args:
-        system_info: System information dictionary
-        
-    Returns:
-        Recommended number of Sobol samples
-    """
-    if system_info is None:
-        system_info = get_system_info()
-    
-    n_cores = system_info['n_cores']
-    available_ram_gb = system_info['available_ram_gb']
-    
-    # Base on cores and memory
-    if n_cores >= 16 and available_ram_gb >= 16:
-        n_samples = 100000
-    elif n_cores >= 8 and available_ram_gb >= 8:
-        n_samples = 50000
-    elif n_cores >= 4:
-        n_samples = 10000
-    else:
-        n_samples = 5000
-    
-    # Adjust for memory constraints
-    if available_ram_gb < 4:
-        n_samples = min(n_samples, 5000)
-    elif available_ram_gb < 8:
-        n_samples = min(n_samples, 20000)
-    
-    return n_samples
-
-
-def calculate_optimal_sobol_order(system_info: Optional[Dict] = None) -> int:
-    """
-    Calculate optimal order for Sobol sensitivity analysis.
-    
-    Args:
-        system_info: System information dictionary
-        
-    Returns:
-        Recommended Sobol analysis order (2 or 3)
-    """
-    if system_info is None:
-        system_info = get_system_info()
-    
-    n_cores = system_info['n_cores']
-    available_ram_gb = system_info['available_ram_gb']
-    
-    # Higher order analysis requires more computational resources
-    if n_cores >= 8 and available_ram_gb >= 8:
-        return 3
-    else:
-        return 2
-
-
-def get_optimal_parameters(
-    analysis_method: str = 'parametric',
-    verbose: bool = False
-) -> Dict[str, any]:
-    """
-    Get all optimal parameters for parallel computation.
-    
-    Args:
-        analysis_method: Type of analysis ('parametric' or 'sobol')
-        verbose: If True, print system information
-        
-    Returns:
-        Dictionary containing:
-        - system_info: System information
-        - n_jobs: Optimal number of parallel jobs
-        - chunk_size: Optimal chunk size
-        - batch_size: Optimal batch size
-        - N_SAMPLES: Optimal number of Sobol samples (if sobol method)
-        - order: Optimal Sobol order (if sobol method)
-    """
-    # Get system information
-    system_info = get_system_info()
-    
-    # Calculate optimal parameters
-    n_jobs = calculate_optimal_n_jobs(system_info)
-    chunk_size = calculate_optimal_chunk_size(system_info, n_jobs)
-    batch_size = calculate_optimal_batch_size(system_info)
-    
-    params = {
-        'system_info': system_info,
-        'n_jobs': n_jobs,
-        'chunk_size': chunk_size,
-        'batch_size': batch_size,
+    params: Dict[str, Any] = {
+        "system_info": system_info,
+        "n_jobs": n_jobs,
+        "chunk_size": chunk_size,
+        "batch_size": batch_size,
     }
-    
-    # Add Sobol-specific parameters
-    if analysis_method == 'sobol':
-        params['N_SAMPLES'] = calculate_optimal_sobol_samples(system_info)
-        params['order'] = calculate_optimal_sobol_order(system_info)
-    
+
+    # Sobol-specific parameters
+    if analysis_method == "sobol":
+        # N_SAMPLES
+        if n_cores >= 16 and available_ram_gb >= 16:
+            n_samples = 100000
+        elif n_cores >= 8 and available_ram_gb >= 8:
+            n_samples = 50000
+        elif n_cores >= 4:
+            n_samples = 10000
+        else:
+            n_samples = 5000
+
+        if available_ram_gb < 4:
+            n_samples = min(n_samples, 5000)
+        elif available_ram_gb < 8:
+            n_samples = min(n_samples, 20000)
+
+        # order
+        order = 3 if (n_cores >= 8 and available_ram_gb >= 8) else 2
+
+        params["N_SAMPLES"] = n_samples
+        params["order"] = order
+
     if verbose:
         print_system_profile(params, analysis_method)
-    
+
     return params
 
 
-def print_system_profile(params: Dict[str, any], analysis_method: str = 'parametric') -> None:
-    """
-    Print formatted system profile information.
-    
-    Args:
-        params: Dictionary containing system info and optimal parameters
-        analysis_method: Type of analysis being performed
-    """
-    system_info = params['system_info']
-    
-    print("\n" + "="*60)
+def print_system_profile(params: Dict[str, Any], analysis_method: str = "parametric") -> None:
+    """Pretty-print system profile and recommended parameters."""
+    system_info = params["system_info"]
+
+    print("\n" + "=" * 60)
     print("SYSTEM PROFILE")
-    print("="*60)
-    
-    # Hardware information
+    print("=" * 60)
+
     print("Hardware:")
     print(f"  CPU Cores: {system_info['n_cores']}")
-    if system_info['cpu_freq_mhz']:
+    if system_info["cpu_freq_mhz"]:
         print(f"  CPU Frequency: {system_info['cpu_freq_mhz']:.0f} MHz")
     print(f"  Total RAM: {system_info['total_ram_gb']:.1f} GB")
-    print(f"  Available RAM: {system_info['available_ram_gb']:.1f} GB ({100 - system_info['ram_percent_used']:.1f}% free)")
-    
-    # Recommended parameters
+    print(
+        f"  Available RAM: {system_info['available_ram_gb']:.1f} GB "
+        f"({100 - system_info['ram_percent_used']:.1f}% free)"
+    )
+
     print("\nRecommended Parallel Processing Parameters:")
     print(f"  n_jobs: {params['n_jobs']} (parallel workers)")
     print(f"  chunk_size: {params['chunk_size']} (computations per chunk)")
     print(f"  batch_size: {params['batch_size']} (results buffer size)")
-    
-    # Sobol-specific parameters
-    if analysis_method == 'sobol':
-        print(f"\nSobol Analysis Parameters:")
+
+    if analysis_method == "sobol":
+        print("\nSobol Analysis Parameters:")
         print(f"  N_SAMPLES: {params['N_SAMPLES']:,} (number of samples)")
         print(f"  order: {params['order']} (sensitivity order)")
-    
-    print("="*60 + "\n")
 
-
-def override_with_config(
-    optimal_params: Dict[str, any],
-    config: Dict[str, any]
-) -> Dict[str, any]:
-    """
-    Override optimal parameters with user-specified config values.
-    
-    Args:
-        optimal_params: Dictionary of optimal parameters
-        config: User configuration dictionary
-        
-    Returns:
-        Updated parameters dictionary
-    """
-    updated_params = optimal_params.copy()
-    
-    # Override if specified in config (and not None)
-    if config.get('n_jobs') is not None:
-        updated_params['n_jobs'] = config['n_jobs']
-    
-    if config.get('chunk_size') is not None:
-        updated_params['chunk_size'] = config['chunk_size']
-    
-    if config.get('batch_size') is not None:
-        updated_params['batch_size'] = config['batch_size']
-    
-    if config.get('N_SAMPLES') is not None:
-        updated_params['N_SAMPLES'] = config['N_SAMPLES']
-    
-    if config.get('order') is not None:
-        updated_params['order'] = config['order']
-    
-    return updated_params
+    print("=" * 60 + "\n")

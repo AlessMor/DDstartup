@@ -7,21 +7,21 @@ with various parameter configurations and methods.
 
 import sys
 import warnings
-from pathlib import Path
+import numpy as np
 
 # Local imports
 from ddstartup.utils.io_functions import (
+    parse_arguments,
     resolve_file_path,
     load_config,
-    load_parameter_fields,
+    load_params,
     prepare_input_data,
     print_configuration,
     generate_output_path
 )
-from ddstartup.utils.system_profiler import get_optimal_parameters, override_with_config
 from ddstartup.methods.parametric_computation import run_parametric_analysis, print_parametric_summary
 from ddstartup.methods.sobol_computation import run_sobol_analysis, print_sobol_summary
-from ddstartup.utils.tools import parse_arguments
+
 
 # Suppress warnings
 warnings.filterwarnings("ignore", module="scipy.integrate")
@@ -44,12 +44,12 @@ def main():
     # FILE PATH RESOLUTION
     # ============================================================================
     # Resolve parameter and configuration file paths
-    # - Parameter file: contains physics parameters (e.g., V_plasma, T_i, n_tot)
-    #   Supports both Python (.py) and YAML (.yaml, .yml) formats
+    # - Parameter file: contains physics parameters (e.g., V_plasma, T_i, n_tot) - in YAML format
     # - Config file: contains analysis settings (e.g., method, n_jobs, verbose)
     try:
-        param_file = resolve_file_path(args.params, 'inputs', ['.yaml', '.yml', '.py'])
-        config_file = resolve_file_path(args.config, 'inputs', ['.yaml', '.yml'])
+        # TODO: the 'inputs' folder is hardcoded! The user may want to change the structure of the default input dir
+        param_file_path = resolve_file_path(args.params, 'inputs', 'yaml') # expects a yaml file                                                                                                
+        config_file_path = resolve_file_path(args.config, 'inputs', 'yaml') # expects a yaml file
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -59,44 +59,26 @@ def main():
     # ============================================================================
     # Load YAML configuration file containing analysis settings
     try:
-        config = load_config(config_file)
+        config = load_config(config_file_path)
     except (ValueError, FileNotFoundError) as e:
         print(f"Error loading configuration: {e}", file=sys.stderr)
         return 1
-    
     # Override verbose setting if specified on command line
     if args.verbose:
         config['verbose'] = True
-    
     verbose = config['verbose']
-    
-    # ============================================================================
-    # DRY RUN CHECK (EARLY EXIT)
-    # ============================================================================
-    # If dry-run flag is set, exit here after validating configuration files
-    # No need to prepare input data or profile system for dry-run
-    if args.dry_run:
-        print("\n✅ Dry run completed. Configuration files validated successfully.")
-        print(f"✅ Parameter file: {param_file}")
-        print(f"✅ Config file: {config_file}")
-        print(f"✅ Analysis type: {config['analysis_type']}")
-        print(f"✅ Method: {config['method']}")
-        return 0
     
     # ============================================================================
     # PARAMETER LOADING AND INPUT DATA PREPARATION
     # ============================================================================
-    # Load parameter fields from Python parameter file
     try:
-        param_fields = load_parameter_fields(param_file)
-    except ImportError as e:
+        param_fields = load_params(param_file_path, analysis_type=config['analysis_type'])
+    except (ValueError, FileNotFoundError) as e:
         print(f"Error loading parameter fields: {e}", file=sys.stderr)
         return 1
-    
     # Override max_simulation_time from parameter config if it exists
     if 'max_simulation_time' in param_fields and param_fields['max_simulation_time'] is not None:
-        config['max_simulation_time'] = param_fields['max_simulation_time']
-    
+        config['max_simulation_time'] = float(np.asarray(param_fields['max_simulation_time'][0]).squeeze())
     # Prepare input data arrays for analysis
     # This converts parameter fields into proper format for computation
     try:
@@ -104,50 +86,6 @@ def main():
     except (ValueError, AttributeError) as e:
         print(f"Error preparing input data: {e}", file=sys.stderr)
         return 1
-    
-    # ============================================================================
-    # SYSTEM PROFILING AND OPTIMIZATION
-    # ============================================================================
-    # Only profile system if performance parameters are not specified in config
-    # This avoids unnecessary overhead when user provides explicit values
-    try:
-        needs_profiling = (
-            config.get('n_jobs') is None or 
-            config.get('chunk_size') is None or 
-            config.get('batch_size') is None or
-            (config['method'] == 'sobol' and config.get('N_SAMPLES') is None)
-        )
-        
-        if needs_profiling:
-            # Profile system hardware and determine optimal parameters
-            optimal_params = get_optimal_parameters(
-                analysis_method=config['method'],
-                verbose=verbose
-            )
-            # Use config values if provided, otherwise use profiled optimal values
-            optimal_params = override_with_config(optimal_params, config)
-        else:
-            # Use user-provided values directly (no profiling needed)
-            optimal_params = {
-                'n_jobs': config['n_jobs'],
-                'chunk_size': config['chunk_size'],
-                'batch_size': config['batch_size'],
-            }
-            if config['method'] == 'sobol':
-                optimal_params['N_SAMPLES'] = config.get('N_SAMPLES')
-                optimal_params['order'] = config.get('order')
-        
-        # Update config with final parallelization parameters
-        config.update({
-            'n_jobs': optimal_params['n_jobs'],
-            'chunk_size': optimal_params['chunk_size'],
-            'batch_size': optimal_params['batch_size'],
-        })
-        # Add Sobol-specific parameters if using Sobol analysis
-        if config['method'] == 'sobol':
-            config['N_SAMPLES'] = optimal_params['N_SAMPLES']
-            config['order'] = optimal_params['order']
-            
     except Exception as e:
         print(f"Error during system profiling: {e}", file=sys.stderr)
         return 1
@@ -157,8 +95,21 @@ def main():
     # ============================================================================
     # Print complete configuration for user review
     if verbose:
-        print_configuration(config, param_fields, input_data, param_file, config_file)
+        print_configuration(config, param_fields, input_data, param_file_path, config_file_path)
     
+    # ============================================================================
+    # DRY RUN CHECK (EARLY EXIT)
+    # ============================================================================
+    # If dry-run flag is set, exit here after validating configuration files
+    # No need to prepare input data or profile system for dry-run
+    if args.dry_run:
+        print("\n✅ Dry run completed. Configuration files validated successfully.")
+        print(f"✅ Parameter file: {param_file_path}")
+        print(f"✅ Config file: {config_file_path}")
+        print(f"✅ Analysis type: {config['analysis_type']}")
+        print(f"✅ Method: {config['method']}")
+        return 0
+
     # ============================================================================
     # OUTPUT DIRECTORY AND FILE SETUP
     # ============================================================================
@@ -167,10 +118,11 @@ def main():
         output_dir, output_file = generate_output_path(
             base_dir=config.get('output_dir', 'outputs'),
             analysis_method=config['method'],
-            analysis_type=config['analysis_type']
+            analysis_type=config['analysis_type'],
+            dry_run=args.dry_run
         )
         
-        if verbose:
+        if verbose and not args.dry_run:
             print(f"Output directory: {output_dir}")
             print(f"Output file: {output_file}")
             

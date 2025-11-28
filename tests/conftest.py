@@ -5,12 +5,19 @@ This file is automatically discovered by pytest and provides fixtures
 that can be used across all test files.
 """
 
+import os
 import sys
 from pathlib import Path
 import pytest
 import numpy as np
 import tempfile
 import shutil
+
+# Ensure Numba caching does not require repository write access during tests
+os.environ.setdefault("NUMBA_DISABLE_CACHING", "1")
+os.environ.setdefault("NUMBA_CACHE_DIR", tempfile.gettempdir())
+# Prefer pure-Python execution in tests to avoid cache locator issues
+os.environ.setdefault("NUMBA_DISABLE_JIT", "1")
 
 # Add parent directory to path for imports
 dd_startup_root = Path(__file__).parent.parent

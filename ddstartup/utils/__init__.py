@@ -18,12 +18,12 @@ from .units_and_constants import *
 
 # Import and re-export I/O functions
 from .io_functions import (
+    parse_arguments,
     resolve_file_path,
     load_config,
-    load_parameter_fields,
+    load_params,
     prepare_input_data,
     print_configuration,
-    create_output_directory,
     generate_output_path,
 )
 
@@ -35,11 +35,11 @@ __all__ = [
     # Add other constants/units you want to export
     
     # From io_functions
+    'parse_arguments',
     'resolve_file_path',
     'load_config',
-    'load_parameter_fields',
+    'load_params',
     'prepare_input_data',
     'print_configuration',
-    'create_output_directory',
     'generate_output_path',
 ]

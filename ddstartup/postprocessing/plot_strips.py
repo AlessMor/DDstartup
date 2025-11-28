@@ -296,9 +296,25 @@ def add_trend_and_band(ax, x, y, color, label, frac=0.12, window_size=None, alph
     return line_raw, line_trend
 
 
-def generate_strip_plot(h5_file, y_metrics, x_sort_by=None, filters=None, output_path=None,
-                       unit_conversions=None, optimal_point=True, registry=None,
-                       figsize=(14, 6), frac=0.12):
+def generate_strip_plot(
+    h5_file=None,
+    y_metrics=None,
+    x_sort_by=None,
+    filters=None,
+    output_path=None,
+    output_dir=None,
+    outputs_dir=None,
+    plot_name_prefix=None,
+    plot_name=None,
+    unit_conversions=None,
+    optimal_point=True,
+    registry=None,
+    figsize=(14, 6),
+    frac=0.12,
+    df=None,
+    strip_settings=None,
+    **_,
+):
     """
     Generate a strip plot comparing multiple metrics with trend lines and uncertainty bands.
     
@@ -339,6 +355,21 @@ def generate_strip_plot(h5_file, y_metrics, x_sort_by=None, filters=None, output
         from ddstartup.utils.parameter_registry import get_registry
         registry = get_registry()
     
+    # Allow settings dict from dispatcher/config
+    strip_settings = strip_settings or {}
+    if y_metrics is None:
+        y_metrics = strip_settings.get("y_metrics")
+    if x_sort_by is None:
+        x_sort_by = strip_settings.get("sort_by")
+    if filters is None:
+        filters = strip_settings.get("filters")
+    if unit_conversions is None:
+        unit_conversions = strip_settings.get("unit_conversions")
+    if optimal_point is None:
+        optimal_point = strip_settings.get("optimal_point", True)
+    if frac is None:
+        frac = strip_settings.get("frac", 0.12)
+
     # Validate inputs
     if not y_metrics or len(y_metrics) == 0:
         raise ValueError("At least one y-metric must be specified")
@@ -361,12 +392,41 @@ def generate_strip_plot(h5_file, y_metrics, x_sort_by=None, filters=None, output
     all_metrics = list(set(y_metrics + [x_sort_by]))
     
     print(f"\n📊 Generating strip plot...")
-    print(f"   File: {Path(h5_file).name}")
+    if h5_file is not None:
+        print(f"   File: {Path(h5_file).name}")
     print(f"   Y-metrics: {y_metrics}")
     print(f"   Sort by: {x_sort_by}")
     
-    # Load and prepare data
-    df = load_and_prepare_data(h5_file, all_metrics, filters, x_sort_by, registry)
+    # Load and prepare data (prefer provided DataFrame from dispatcher)
+    if df is not None:
+        df_source = df.copy()
+        # take scalars from vector/object columns (last element)
+        inner = (getattr(df_source, "attrs", {}) or {}).get("_inner_dims", {})
+        for col in list(df_source.columns):
+            if int(inner.get(col, 1)) != 1 and col in all_metrics:
+                df_source[col] = extract_scalar_from_vector(df_source[col].values)
+        df = df_source
+        # Apply filters
+        mask = np.ones(len(df), dtype=bool)
+        for metric, bounds in filters.items():
+            if metric not in df.columns:
+                continue
+            if 'min' in bounds:
+                mask &= df[metric] >= bounds['min']
+            if 'max' in bounds:
+                mask &= df[metric] <= bounds['max']
+        df = df.loc[mask].reset_index(drop=True)
+        # Keep only needed metrics
+        missing = [m for m in all_metrics if m not in df.columns]
+        if missing:
+            print(f"   ⚠️  Missing metrics in DataFrame for strip plot: {missing}. Skipping.")
+            return None
+        df = df[all_metrics].copy()
+    else:
+        if h5_file is None:
+            print("   ⚠️  No data source provided for strip plot. Skipping.")
+            return None
+        df = load_and_prepare_data(h5_file, all_metrics, filters, x_sort_by, registry)
     
     if len(df) == 0:
         print("   ❌ No data remaining after filtering!")
@@ -436,7 +496,7 @@ def generate_strip_plot(h5_file, y_metrics, x_sort_by=None, filters=None, output
     ax1.set_xlabel(xlabel, fontsize=12)
     
     # Add title
-    file_name = Path(h5_file).stem
+    file_name = Path(h5_file).stem if h5_file is not None else "dataframe"
     title = f'Strip Plot: {", ".join([get_label(m, unit_conversions, registry) for m in y_metrics])}\n{file_name}'
     ax1.set_title(title, fontsize=14, fontweight='bold')
     
@@ -495,9 +555,13 @@ def generate_strip_plot(h5_file, y_metrics, x_sort_by=None, filters=None, output
     
     # Save plot
     if output_path is None:
-        output_dir = Path(h5_file).parent
-        plot_name = f"strip_{'_'.join(y_metrics[:3])}_{file_name}.png"
-        output_path = output_dir / plot_name
+        outdir = output_dir if output_dir is not None else outputs_dir
+        if outdir is None:
+            outdir = Path(h5_file).parent if h5_file is not None else Path(".")
+        else:
+            outdir = Path(outdir)
+        stem = plot_name_prefix or plot_name or f"strip_{'_'.join(y_metrics[:3])}_{file_name}"
+        output_path = outdir / (stem if stem.lower().endswith(".png") else f"{stem}.png")
     else:
         output_path = Path(output_path)
     

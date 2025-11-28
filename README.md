@@ -222,7 +222,6 @@ dd_startup/
 │   │   └── cli.py                      # Postprocessing CLI
 │   └── utils/                   # Utilities
 │       ├── io_functions.py             # File I/O and config loading
-│       ├── parameter_loader.py         # YAML parameter parsing
 │       ├── parameter_registry.py       # Parameter validation
 │       ├── reactivity_lookup.py        # Reactivity caching
 │       ├── physics_cache.py            # Physics result caching
@@ -275,4 +274,3 @@ See `docs/` for detailed documentation on:
 - Postprocessing (POSTPROCESSING_DOCS_UPDATE.md)
 
 ---
-

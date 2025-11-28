@@ -35,10 +35,10 @@ files:
 # Additional variables to compute from existing metrics for analysis and plotting.
 # These can be used as target variables or in plots.
 computed_variables:
-  K:
-    expr: unrealized_profits / P_DT_eq
-    unit: "$/W"            # optional override
-    # symbol: r"$K$"         # optional override
+  # K:
+  #   expr: unrealized_profits / P_DT_eq
+  #   unit: "$/W"            # optional override
+  #   # symbol: r"$K$"         # optional override
   K_el:
     expr: unrealized_profits / (capacity_factor*(eta_th*P_DT_eq - P_aux_DT_eq))
     unit: "$/W"            # optional override
@@ -47,6 +47,10 @@ computed_variables:
   #   expr: unrealized_profits / I_target
   #   unit: "$/kg"
   #   symbol: r"$c_T$"
+  Tdot_tot:
+    expr: TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE  - 1) * P_DT/2.8198E-12
+    unit: "1/s"
+    symbol: r"$\dot{T}_{tot}$"
 
 # ============================================================================
 # TARGET VARIABLES
@@ -84,7 +88,7 @@ filters:
 
 plots:
   # Generate all plot types
-  generate_all: true
+  generate_all: false
   
   # Or specify individual plot types (when generate_all is false)
   importance: false       # Effect-size importance matrix (Cohen's d)

@@ -78,6 +78,10 @@ def _compute_lump(linear_index, input_arrays_flat, param_shapes_array, reactivit
     t_startup = physics_result['t_startup']
     sol_success = physics_result['sol_success']
     
+    ###################################################
+    #                 AUXILIARY POWER
+    ###################################################
+    
     # Calculate P_aux from power balance if not provided (None or NaN)
     if P_aux is None or (isinstance(P_aux, float) and np.isnan(P_aux)):
         P_aux = calculate_P_aux_from_power_balance(
@@ -135,12 +139,20 @@ def _compute_lump(linear_index, input_arrays_flat, param_shapes_array, reactivit
         })
         return result
     
+    #########################################################
+    #              POWER CALCULATION
+    #########################################################    
+    
     # Compute powers and energies for successful cases
     power_results = compute_lump_powers_and_energies(
         n_T, n_D, n_He3, t_startup,
         V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3,
         P_aux, P_aux_DT_eq
     )
+    
+    #########################################################
+    #              ECONOMICS CALCULATION
+    #########################################################
     
     # Compute economics
     econ_results = compute_economics_from_energies(
@@ -150,15 +162,6 @@ def _compute_lump(linear_index, input_arrays_flat, param_shapes_array, reactivit
         power_results['E_aux_DT_eq'],
         eta_th, capacity_factor, price_of_electricity
     )
-    
-    # Create 5-element vectors for P_aux and P_aux_DT_eq
-    # For lump model (steady-state), replicate the scalar values
-    P_aux_vec = np.full(5, P_aux, dtype=np.float64)
-    P_aux_DT_eq_vec = np.full(5, P_aux_DT_eq, dtype=np.float64)
-    
-    # Update result dict with vectors
-    result['P_aux'] = P_aux_vec
-    result['P_aux_DT_eq'] = P_aux_DT_eq_vec
     
     # Add computed results to base result
     result.update({
@@ -238,23 +241,6 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
     compute_P_aux = P_aux is None or (isinstance(P_aux, float) and np.isnan(P_aux))
     compute_P_aux_DT_eq = P_aux_DT_eq is None or (isinstance(P_aux_DT_eq, float) and np.isnan(P_aux_DT_eq))
     
-    # For initial ODE solving, use equilibrium values if P_aux not provided
-    if compute_P_aux:
-        n_eq = n_tot / 2.0
-        P_aux_initial = calculate_P_aux_from_power_balance(
-            n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
-        )
-    else:
-        P_aux_initial = P_aux
-    
-    if compute_P_aux_DT_eq:
-        n_eq = n_tot / 2.0
-        P_aux_DT_eq_initial = calculate_P_aux_from_power_balance(
-            n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
-        )
-    else:
-        P_aux_DT_eq_initial = P_aux_DT_eq
-    
     # Precompute injection_rate_max and N_st_min
     injection_rate_max = (n_tot/2/tau_p_T*V_plasma + 0.25*n_tot**2*sigmav_DT*V_plasma - 
                          0.25/2*n_tot**2*sigmav_DD_p*V_plasma)
@@ -276,10 +262,12 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
     }
     result_dict.update(result)
     
+    aux_len = registry.get_vector_length('P_aux', 5)
+
     # Guard clause: Return early if computation failed
     if not (ode_results.get('sol_success', False) and np.isfinite(ode_results.get('t_startup', np.inf))):
-        from ddstartup.utils.tools import fix_vector_length
         nan_array = np.full(vector_length, np.nan)
+        nan_aux = np.full(aux_len, np.nan)
         result_dict.update({
             'N_ofc': fix_vector_length(result_dict.get('N_ofc', nan_array), vector_length),
             'N_ifc': fix_vector_length(result_dict.get('N_ifc', nan_array), vector_length),
@@ -290,6 +278,8 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
             'P_DDp': fix_vector_length(result_dict.get('P_DDp', nan_array), vector_length),
             'P_DT': fix_vector_length(result_dict.get('P_DT', nan_array), vector_length),
             'TBE': fix_vector_length(result_dict.get('TBE', nan_array), vector_length),
+            'P_aux': fix_vector_length(result_dict.get('P_aux', nan_aux), aux_len),
+            'P_aux_DT_eq': fix_vector_length(result_dict.get('P_aux_DT_eq', nan_aux), aux_len),
             'P_DT_eq': np.nan,
             'Q_DD': np.nan,
             'Q_DT_eq': np.nan,
@@ -308,32 +298,27 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
     n_D = n_tot - n_T
     t_startup = ode_results['t_startup']
     
-    # Compute time-dependent P_aux vectors if they were computed from power balance
+    # Compute time-dependent P_aux vector if it was inferred from power balance
     if compute_P_aux:
-        # Calculate P_aux as time-dependent vector from power balance
         P_aux_vector = np.array([
             calculate_P_aux_from_power_balance(
                 n_T_val, n_D_val, T_i, V_plasma, 
                 sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
             ) for n_T_val, n_D_val in zip(n_T, n_D)
         ])
-        # For energy calculations, use time-averaged value
         P_aux_for_energy = np.mean(P_aux_vector)
     else:
-        # P_aux was provided as scalar input
-        P_aux_vector = P_aux  # Keep as scalar - will be saved as scalar
+        P_aux_vector = np.array([P_aux])
         P_aux_for_energy = P_aux
     
     if compute_P_aux_DT_eq:
-        # Calculate P_aux_DT_eq at equilibrium (constant)
         n_eq = n_tot / 2.0
         P_aux_DT_eq_vector = calculate_P_aux_from_power_balance(
             n_eq, n_eq, T_i, V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
         )
         P_aux_DT_eq_for_energy = P_aux_DT_eq_vector
     else:
-        # P_aux_DT_eq was provided as scalar input
-        P_aux_DT_eq_vector = P_aux_DT_eq
+        P_aux_DT_eq_vector = np.array([P_aux_DT_eq])
         P_aux_DT_eq_for_energy = P_aux_DT_eq
     
     # Compute powers and energies
@@ -360,48 +345,7 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         eta_th, capacity_factor, price_of_electricity
     )
     
-    # Create 5-element vectors for P_aux and P_aux_DT_eq
-    # Sample at 5 evenly-spaced time points during startup to show evolution
-    n_T_vec = power_results['n_T']
-    n_D_vec = power_results['n_D']
-    
-    # Sample at indices 0, 25%, 50%, 75%, 100% of the time series
-    vec_length = len(n_T_vec)
-    if vec_length >= 5:
-        indices_5 = np.linspace(0, vec_length - 1, 5, dtype=int)
-    else:
-        # If less than 5 points, pad with last value
-        indices_5 = np.arange(min(5, vec_length))
-    
-    # Compute P_aux at each sampled time point using actual compositions
-    P_aux_vec = np.full(5, P_aux, dtype=np.float64)  # Default: constant P_aux
-    P_aux_DT_eq_vec = np.full(5, P_aux_DT_eq, dtype=np.float64)  # Default: constant P_aux_DT_eq
-    
-    # If P_aux was computed from power balance, recalculate at sampled points
-    # This captures how auxiliary power requirements evolve during startup
-    if len(indices_5) >= 5:
-        for i, idx in enumerate(indices_5):
-            n_T_at_t = n_T_vec[idx]
-            n_D_at_t = n_D_vec[idx]
-            
-            # Recalculate P_aux at this time point
-            P_aux_at_t = calculate_P_aux_from_power_balance(
-                n_T_at_t, n_D_at_t, T_i, V_plasma, 
-                sigmav_DD_p, sigmav_DD_n, sigmav_DT, tau_p_T
-            )
-            P_aux_vec[i] = P_aux_at_t
-            
-            # P_aux_DT_eq remains constant (it's the equilibrium value)
-            # but we still store as vector for consistency
-            P_aux_DT_eq_vec[i] = P_aux_DT_eq
-    else:
-        # Pad with last value if we have fewer than 5 points
-        for i in range(len(indices_5), 5):
-            P_aux_vec[i] = P_aux_vec[len(indices_5) - 1] if len(indices_5) > 0 else P_aux
-            P_aux_DT_eq_vec[i] = P_aux_DT_eq
-    
-    # Store results
-    result_dict.update({
+    vectors = {
         'N_ofc': power_results['N_ofc'],
         'N_ifc': power_results['N_ifc'],
         'N_stor': power_results['N_st'],
@@ -410,17 +354,22 @@ def _compute_tseeded(linear_index, input_arrays_flat, param_shapes_array, max_si
         'P_DDn': power_results['P_DDn'],
         'P_DDp': power_results['P_DDp'],
         'P_DT': power_results['P_DT'],
+        'TBE': power_results['TBE'],
+        'P_aux': np.asarray(P_aux_vector, dtype=float),
+        'P_aux_DT_eq': np.asarray(P_aux_DT_eq_vector, dtype=float),
+    }
+
+    # Store results with vectors padded/clipped to expected lengths
+    for name, val in vectors.items():
+        target_len = aux_len if name in ('P_aux', 'P_aux_DT_eq') else vector_length
+        result_dict[name] = fix_vector_length(val, target_len)
+
+    result_dict.update({
         'P_DT_eq': P_DT_eq_scalar,
-        'P_aux': P_aux_vec,
-        'P_aux_DT_eq': P_aux_DT_eq_vec,
         'Q_DD': econ_results['Q_DD'],
         'Q_DT_eq': econ_results['Q_DT_eq'],
         'E_lost': econ_results['E_lost'],
         'unrealized_profits': econ_results['unrealized_profits'],
-        'TBE': power_results['TBE'],
-        # Update P_aux and P_aux_DT_eq with computed vectors or keep as scalars
-        'P_aux': fix_vector_length(P_aux_vector, vector_length) if compute_P_aux else P_aux,
-        'P_aux_DT_eq': P_aux_DT_eq_vector if compute_P_aux_DT_eq else P_aux_DT_eq
     })
     
     # Keep the profile available for any downstream time-series calculations (not written to HDF5)
@@ -597,9 +546,8 @@ def run_parametric_analysis(
         datasets = {}
         for field in data_fields:
             if field in vector_fields:
-                # Determine vector length for this field
-                # P_aux and P_aux_DT_eq use length 5, others use default vector_length
-                field_vector_length = 5 if field in ['P_aux', 'P_aux_DT_eq'] else vector_length
+                # Determine vector length for this field from registry metadata
+                field_vector_length = registry.get_vector_length(field, vector_length)
                 
                 # 2D array for vector fields - LZ4 or fast gzip
                 if use_lz4:
@@ -676,35 +624,6 @@ def run_parametric_analysis(
                         compression='gzip',
                         compression_opts=1
                     )
-        
-        # Save parameter grids
-        # Tests and postprocessing may expect per-combination (flattened) arrays
-        # under parameter_fields/<name>_values. When no filtering is applied we
-        # expand the parameter axes into full-length arrays (n_combinations,) so
-        # that they directly match root datasets. If filtering was applied the
-        # input arrays are already aligned (length == n_combinations) and can
-        # be written as-is.
-        param_group = h5_file.create_group('parameter_fields')
-        try:
-            if filter_expr:
-                # Already flattened/aligned arrays
-                for name, arr in zip(param_names, input_arrays):
-                    param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
-            else:
-                # Expand parameter axes into full grid and flatten in 'C' order
-                # Use indexing='ij' to match the ordering used by index_to_params
-                if len(input_arrays) > 0:
-                    grids = np.meshgrid(*input_arrays, indexing='ij')
-                    for name, grid in zip(param_names, grids):
-                        param_group.create_dataset(f'{name}_values', data=grid.flatten(), compression='gzip')
-                else:
-                    # No parameters: create empty datasets if needed
-                    for name, arr in zip(param_names, input_arrays):
-                        param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
-        except Exception:
-            # Fallback: write axis arrays if meshgrid expansion fails for any reason
-            for name, arr in zip(param_names, input_arrays):
-                param_group.create_dataset(f'{name}_values', data=arr, compression='gzip')
         
         # ========== REACTIVITY LOOKUP TABLE (NEW OPTIMIZATION) ==========
         # Pre-compute reactivity lookup table for all unique T_i values

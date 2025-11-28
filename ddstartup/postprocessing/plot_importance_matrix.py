@@ -47,7 +47,19 @@ def compute_effect_size_matrix(df, target, inputs, quartiles=4):
     return effects
 
 
-def plot_effect_size_matrix(df, target, inputs, outputs_dir, plot_name=None, save_csv=True, registry=None):
+def plot_effect_size_matrix(
+    *,
+    df,
+    target,
+    inputs,
+    output_dir=None,
+    outputs_dir=None,
+    plot_name=None,
+    plot_name_prefix=None,
+    save_csv=True,
+    registry=None,
+    **_,
+):
     """Compute effect-size matrix and plot heatmap. Saves CSV and PNG to outputs_dir.
 
     Args:
@@ -67,12 +79,27 @@ def plot_effect_size_matrix(df, target, inputs, outputs_dir, plot_name=None, sav
         from ddstartup.utils.parameter_registry import get_registry
         registry = get_registry()
     
-    outputs_dir = Path(outputs_dir)
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-    effects = compute_effect_size_matrix(df, target, inputs)
+    # Normalize args and output path
+    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
+    outdir.mkdir(parents=True, exist_ok=True)
+    stem = plot_name_prefix or plot_name or target
+
+    # Restrict to scalar numeric inputs only (skip vectors/objects)
+    inner = (getattr(df, "attrs", {}) or {}).get("_inner_dims", {})
+    usable_inputs = [
+        c for c in inputs
+        if c in df.columns
+        and int(inner.get(c, 1)) == 1
+        and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    if not usable_inputs:
+        print("   No scalar numeric inputs available for effect-size matrix. Skipping.")
+        return None
+
+    effects = compute_effect_size_matrix(df, target, usable_inputs)
 
     if save_csv:
-        csv_name = outputs_dir / (plot_name + '_effects.csv' if plot_name else f'{target}_effects.csv')
+        csv_name = outdir / f'{stem}_effects.csv'
         effects.to_csv(csv_name)
 
     # Replace input parameter names with symbols for heatmap y-axis
@@ -84,7 +111,7 @@ def plot_effect_size_matrix(df, target, inputs, outputs_dir, plot_name=None, sav
     target_symbol = registry.get_symbol(target)
     plt.title(f"Effect Size (Cohen's d) per Quartile — {target_symbol}")
     plt.tight_layout()
-    png_name = outputs_dir / (plot_name + '.png' if plot_name else f'{target}_effects.png')
+    png_name = outdir / f'{stem}.png'
     plt.savefig(png_name, dpi=150)
     plt.close()
     return effects

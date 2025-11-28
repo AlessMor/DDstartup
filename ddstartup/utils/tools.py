@@ -1,7 +1,5 @@
 import numpy as np
-import argparse
 from numba import njit
-
 
 @njit(cache=True, fastmath=True)
 def trapz_numba(y, x):
@@ -51,38 +49,7 @@ def trapz_numba(y, x):
         return s
 
 
-def parse_arguments():
-    """Parse command-line arguments"""
-    parser = argparse.ArgumentParser(
-        description='DD Startup Analysis Tool',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    
-    parser.add_argument(
-        'params',
-        type=str,
-        help='Parameter config file name (e.g., "config") or path to file (e.g., "inputs/config.py")'
-    )
-    
-    parser.add_argument(
-        'config',
-        type=str,
-        help='YAML configuration file name (e.g., "parametric_tseeded") or path to file (e.g., "run_configs/parametric.yaml")'
-    )
-    
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose output'
-    )
-    
-    parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Print configuration without running analysis'
-    )
-    
-    return parser.parse_args()
+
 
 
 def index_to_params(linear_index, param_shapes):

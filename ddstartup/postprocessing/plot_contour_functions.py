@@ -19,6 +19,21 @@ from ddstartup.utils.parameter_registry import get_registry
 from ddstartup.utils.tools import PARAM_UNITS
 
 
+def _scalar_numeric_inputs(df: pd.DataFrame, cols: list[str]) -> list[str]:
+    """Keep scalar numeric columns only (uses df.attrs['_inner_dims'] if present)."""
+    inner = (getattr(df, "attrs", {}) or {}).get("_inner_dims", {})
+    usable = []
+    for c in cols:
+        if c not in df.columns:
+            continue
+        if int(inner.get(c, 1)) != 1:
+            continue
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        usable.append(c)
+    return usable
+
+
 def _format_scientific(x, pos=None):
     """Format numbers with 2 significant figures in clean scientific notation."""
     # Handle string input (from heatmap labels)
@@ -155,17 +170,30 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
     return None
 
 
-def plot_pairwise_contours(df, inputs, target, outputs_dir, max_pairs=None, interpolate=True, plot_name=None):
+def plot_pairwise_contours(
+    df,
+    inputs,
+    target,
+    output_dir=None,
+    outputs_dir=None,
+    max_pairs=None,
+    interpolate=True,
+    plot_name=None,
+    plot_name_prefix=None,
+    **_,
+):
     """Plot pairwise contour/heatmap subplots for combinations of input parameters.
 
     - inputs: list of input parameter names
     - max_pairs: maximum number of pairs to plot (None = all combinations)
     """
-    outputs_dir = Path(outputs_dir)
-    outputs_dir.mkdir(parents=True, exist_ok=True)
+    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
+    outdir.mkdir(parents=True, exist_ok=True)
+    stem = plot_name_prefix or plot_name or f'contour_pairwise_{target}'
     
     registry = get_registry()
 
+    inputs = _scalar_numeric_inputs(df, list(inputs or []))
     # Filter inputs to those present in df
     inputs_present = [p for p in inputs if p in df.columns]
     pairs = list(itertools.combinations(inputs_present, 2))
@@ -204,14 +232,24 @@ def plot_pairwise_contours(df, inputs, target, outputs_dir, max_pairs=None, inte
     for ax in axes[n_pairs:]:
         ax.set_visible(False)
 
-    png_name = outputs_dir / (plot_name + '.png' if plot_name else f'contour_pairwise_{target}.png')
+    png_name = outdir / f'{stem}.png'
     # constrained_layout=True handles spacing automatically, no need for tight_layout
     plt.savefig(png_name, dpi=150, bbox_inches='tight')
     plt.close()
     return png_name
 
 
-def plot_interactive_pairwise_contours(df, inputs, target, outputs_dir, plot_name=None, registry=None):
+def plot_interactive_pairwise_contours(
+    df,
+    inputs,
+    target,
+    output_dir=None,
+    outputs_dir=None,
+    plot_name=None,
+    plot_name_prefix=None,
+    registry=None,
+    **_,
+):
     """Create an interactive HTML plot with dropdown menus to select parameter pairs.
     
     Args:
@@ -233,11 +271,11 @@ def plot_interactive_pairwise_contours(df, inputs, target, outputs_dir, plot_nam
         from ddstartup.utils.parameter_registry import get_registry
         registry = get_registry()
     
-    outputs_dir = Path(outputs_dir)
-    outputs_dir.mkdir(parents=True, exist_ok=True)
+    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
+    outdir.mkdir(parents=True, exist_ok=True)
     
     # Filter inputs to those present in df
-    inputs_present = [p for p in inputs if p in df.columns]
+    inputs_present = _scalar_numeric_inputs(df, list(inputs or []))
     if len(inputs_present) < 2:
         raise ValueError('Need at least two input parameters')
     
@@ -350,7 +388,8 @@ def plot_interactive_pairwise_contours(df, inputs, target, outputs_dir, plot_nam
     )
     
     # Save HTML
-    html_name = outputs_dir / (plot_name + '.html' if plot_name else f'contour_interactive_{target}.html')
+    stem = plot_name_prefix or plot_name or f'contour_interactive_{target}'
+    html_name = outdir / f'{stem}.html'
     fig.write_html(html_name)
     
     return html_name

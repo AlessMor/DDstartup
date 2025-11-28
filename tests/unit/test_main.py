@@ -93,16 +93,9 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 			assert 'analysis_type' in f.attrs
 			assert f.attrs['analysis_type'] == expected_analysis_type
 
-			# Parameter fields group should exist and contain at least one _values dataset
-			assert 'parameter_fields' in f
-			param_group = f['parameter_fields']
-			assert any(name.endswith('_values') for name in param_group.keys()), "No parameter_values datasets found"
-
 			# At least one numeric output dataset should be present and contain finite values
 			numeric_found = False
 			for key in f.keys():
-				if key == 'parameter_fields':
-					continue
 				# Skip attributes group-like fields
 				ds = f[key]
 				if isinstance(ds, h5py.Dataset) and ds.dtype.kind in ('f', 'i'):
@@ -113,7 +106,6 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 			assert numeric_found, "No numeric dataset with finite values found in HDF5 file"
 
 			# --- Additional check: verify per-combination consistency ---
-			#  - Inputs at root should match parameter_fields/<name>_values
 			#  - Outputs must exist at root and contain finite numeric values
 			#  - If a field has aliases, ensure alias datasets (if present) match canonical
 			from ddstartup.utils.parameter_registry import get_registry
@@ -140,14 +132,7 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 
 			tol = 1e-9
 
-			# 1) Inputs: root dataset must match parameter_fields/<name>_values
 			for name in input_names:
-				param_ds_name = f"{name}_values"
-				assert 'parameter_fields' in f and param_ds_name in f['parameter_fields'], (
-					f"Parameter values for '{name}' not found under parameter_fields/{param_ds_name}"
-				)
-				pv = f['parameter_fields'][param_ds_name][:]
-
 				assert name in f, f"Input field '{name}' missing at HDF5 root"
 				ds = f[name][:]
 
@@ -155,19 +140,6 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 				assert ds.shape[0] == n_combinations, (
 					f"Input dataset '{name}' length {ds.shape[0]} != expected {n_combinations}"
 				)
-				assert pv.shape[0] == n_combinations, (
-					f"Parameter values for '{name}' length {pv.shape[0]} != expected {n_combinations}"
-				)
-
-				for idx in range(n_combinations):
-					a = float(ds[idx])
-					b = float(pv[idx])
-					assert np.isfinite(a) and np.isfinite(b), (
-						f"Non-finite value for input '{name}' at index {idx}: root={a}, param={b}"
-					)
-					assert abs(a - b) <= tol, (
-						f"Mismatch for input '{name}' at index {idx}: root={a} != param_values={b}"
-					)
 
 			# 2) Outputs: exist at root and are numeric/finite per combination
 			# Note: Some combinations may fail (edge-case parameters), so we allow NaN values.
@@ -249,9 +221,8 @@ def test_tseeded_main_test_params(monkeypatch):
 	repo_root = _find_repo_root()
 	sys.path.insert(0, str(repo_root))
 	
-	# Import main module and postprocessing functions
+	# Import main module
 	import ddstartup.main as mainmod
-	from ddstartup.postprocessing.postprocess_functions import find_latest_h5_file
 	
 	# Ensure reload to pick up any local edits
 	importlib.reload(mainmod)
@@ -286,8 +257,8 @@ def test_tseeded_main_test_params(monkeypatch):
 	# Allow filesystem timestamp resolution
 	time.sleep(0.5)
 	
-	# Find the newly created h5 file using postprocessing function
-	h5_file = find_latest_h5_file(outputs_dir)
+	# Find the newly created h5 file (search recursively in outputs/)
+	h5_file = _latest_h5_in_outputs(repo_root, before_set=before)
 	assert h5_file is not None, "No HDF5 output file found"
 	
 	# Verify this is a new file

@@ -5,14 +5,32 @@ This module contains functions for generating PDF plots comparing distributions
 across different datasets.
 """
 
+from pathlib import Path
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, NullFormatter
 from scipy.stats import gaussian_kde
 
 
-def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path, 
-                     smooth=False, kde_bandwidth='scott', registry=None):
+def generate_pdf_plot(
+    dataframes_dict=None,
+    var=None,
+    label_list=None,
+    filters=None,
+    output_path=None,
+    *,
+    df=None,
+    target=None,
+    output_dir=None,
+    outputs_dir=None,
+    plot_name_prefix=None,
+    plot_name=None,
+    pdf_smooth=False,
+    kde_bandwidth='scott',
+    registry=None,
+    **_,
+):
     """
     Generate a probability density function plot.
     
@@ -26,6 +44,19 @@ def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path,
         kde_bandwidth: Bandwidth method for KDE ('scott', 'silverman', or float) (default: 'scott')
         registry: ParameterRegistry instance (optional, will create if not provided)
     """
+    # Normalize arguments
+    filters = filters or {}
+    if var is None:
+        var = target
+    if output_path is None:
+        outdir = output_dir if output_dir is not None else outputs_dir
+        if outdir is None:
+            outdir = "."
+        outdir = Path(outdir)
+        outdir.mkdir(parents=True, exist_ok=True)
+        stem = plot_name_prefix or plot_name or f"pdf_{var}"
+        output_path = outdir / f"{stem}.png"
+
     # Get registry if not provided
     if registry is None:
         from ddstartup.utils.parameter_registry import get_registry
@@ -37,13 +68,32 @@ def generate_pdf_plot(dataframes_dict, var, label_list, filters, output_path,
     plt.figure(figsize=(7, 5))
     has_data = False
     
-    for filename, label in zip(dataframes_dict.keys(), label_list):
-        df_data = dataframes_dict[filename]
-        arr = df_data.get(var)
+    # Support legacy dict-of-arrays or new single-DataFrame call
+    if dataframes_dict is None and df is not None:
+        dataframes_dict = {plot_name_prefix or "data": df}
+        label_list = [plot_name_prefix or "data"]
+    if label_list is None:
+        label_list = list(dataframes_dict.keys())
+
+    for key, label in zip(dataframes_dict.keys(), label_list):
+        df_data = dataframes_dict[key]
+        # accept pre-serialized arrays or DataFrames/Series
+        if hasattr(df_data, "get"):
+            arr = df_data.get(var)
+            if isinstance(df_data, (pd.DataFrame, pd.Series)) and arr is None and var in df_data:
+                arr = df_data[var]
+            if isinstance(arr, pd.Series):
+                arr = arr.to_numpy()
+        else:
+            arr = None
         if arr is not None:
+            arr = np.asarray(arr)
+            # skip vector-valued data
+            if arr.dtype == object and len(arr) and hasattr(arr[0], "__len__") and not isinstance(arr[0], str):
+                continue
             arr = arr[np.isfinite(arr)]
             if len(arr) > 0:
-                if smooth:
+                if pdf_smooth or smooth:
                     # Use Kernel Density Estimation for smooth curves
                     # Filter data first if limits are specified
                     arr_filtered = arr.copy()

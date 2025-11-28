@@ -8,7 +8,6 @@ Usage:
 
 from __future__ import annotations
 
-from networkx import config
 DEBUG = True
 
 import argparse
