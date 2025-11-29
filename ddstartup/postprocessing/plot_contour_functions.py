@@ -15,23 +15,14 @@ from matplotlib.ticker import FuncFormatter
 from scipy.interpolate import griddata
 import itertools, math
 
+from ddstartup.postprocessing.plot_utils_functions import resolve_outdir_and_stem, select_scalar_numeric
 from ddstartup.utils.parameter_registry import get_registry
 from ddstartup.utils.tools import PARAM_UNITS
 
 
 def _scalar_numeric_inputs(df: pd.DataFrame, cols: list[str]) -> list[str]:
-    """Keep scalar numeric columns only (uses df.attrs['_inner_dims'] if present)."""
-    inner = (getattr(df, "attrs", {}) or {}).get("_inner_dims", {})
-    usable = []
-    for c in cols:
-        if c not in df.columns:
-            continue
-        if int(inner.get(c, 1)) != 1:
-            continue
-        if not pd.api.types.is_numeric_dtype(df[c]):
-            continue
-        usable.append(c)
-    return usable
+    """Keep scalar numeric columns only (uses shared helper)."""
+    return select_scalar_numeric(df, cols)
 
 
 def _format_scientific(x, pos=None):
@@ -77,7 +68,7 @@ def _format_title(text, max_length=40):
     return text
 
 
-def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, interpolate=True, ax=None):
+def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, interpolate=True, ax=None, show_titles=True):
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)
     
@@ -114,8 +105,9 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         # Split long title into two lines with symbols
         x_symbol = registry.get_symbol(x)
         y_symbol = registry.get_symbol(y)
-        title = _format_title(f'{target_symbol} over {x_symbol} vs {y_symbol}')
-        ax.set_title(title, fontsize=12)
+        if show_titles:
+            title = _format_title(f'{target_symbol} over {x_symbol} vs {y_symbol}')
+            ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
         x_label = registry.get_param_label(x, PARAM_UNITS.get(x))
@@ -144,8 +136,9 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         # Split long title into two lines with symbols
         x_symbol = registry.get_symbol(x)
         y_symbol = registry.get_symbol(y)
-        title = _format_title(f'{target_symbol} over {x_symbol} vs {y_symbol} (cell means)')
-        ax.set_title(title, fontsize=12)
+        if show_titles:
+            title = _format_title(f'{target_symbol} over {x_symbol} vs {y_symbol} (cell means)')
+            ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
         x_label = registry.get_param_label(x, PARAM_UNITS.get(x))
@@ -180,6 +173,7 @@ def plot_pairwise_contours(
     interpolate=True,
     plot_name=None,
     plot_name_prefix=None,
+    show_titles=True,
     **_,
 ):
     """Plot pairwise contour/heatmap subplots for combinations of input parameters.
@@ -187,9 +181,13 @@ def plot_pairwise_contours(
     - inputs: list of input parameter names
     - max_pairs: maximum number of pairs to plot (None = all combinations)
     """
-    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
-    outdir.mkdir(parents=True, exist_ok=True)
-    stem = plot_name_prefix or plot_name or f'contour_pairwise_{target}'
+    outdir, stem = resolve_outdir_and_stem(
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+        default_stem=f'contour_pairwise_{target}',
+    )
     
     registry = get_registry()
 
@@ -221,12 +219,13 @@ def plot_pairwise_contours(
 
     for ax, (x, y) in zip(axes, pairs):
         try:
-            plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, interpolate=interpolate, ax=ax)
+            plot_2d_cell_mean_heatmap(df, x, y, target, outdir, interpolate=interpolate, ax=ax, show_titles=show_titles)
         except Exception as e:
             ax.text(0.5, 0.5, f'Error: {e}', ha='center')
-            x_symbol = registry.get_symbol(x)
-            y_symbol = registry.get_symbol(y)
-            ax.set_title(f'{x_symbol} vs {y_symbol}')
+            if show_titles:
+                x_symbol = registry.get_symbol(x)
+                y_symbol = registry.get_symbol(y)
+                ax.set_title(f'{x_symbol} vs {y_symbol}')
 
     # Hide unused axes
     for ax in axes[n_pairs:]:
@@ -248,6 +247,7 @@ def plot_interactive_pairwise_contours(
     plot_name=None,
     plot_name_prefix=None,
     registry=None,
+    show_titles=True,
     **_,
 ):
     """Create an interactive HTML plot with dropdown menus to select parameter pairs.
@@ -271,8 +271,13 @@ def plot_interactive_pairwise_contours(
         from ddstartup.utils.parameter_registry import get_registry
         registry = get_registry()
     
-    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdir, stem = resolve_outdir_and_stem(
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+        default_stem=f'contour_interactive_{target}',
+    )
     
     # Filter inputs to those present in df
     inputs_present = _scalar_numeric_inputs(df, list(inputs or []))
@@ -359,7 +364,7 @@ def plot_interactive_pairwise_contours(
     
     # Update layout with single dropdown menu for parameter combinations
     fig.update_layout(
-        title=f'{target} vs {x_param} and {y_param}<br><sub>Select parameter pair from dropdown</sub>',
+    title=f'{target} vs {x_param} and {y_param}<br><sub>Select parameter pair from dropdown</sub>' if show_titles else None,
         xaxis_title=x_param,
         yaxis_title=y_param,
         width=900,
@@ -388,7 +393,6 @@ def plot_interactive_pairwise_contours(
     )
     
     # Save HTML
-    stem = plot_name_prefix or plot_name or f'contour_interactive_{target}'
     html_name = outdir / f'{stem}.html'
     fig.write_html(html_name)
     

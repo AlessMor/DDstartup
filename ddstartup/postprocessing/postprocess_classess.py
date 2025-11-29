@@ -26,7 +26,7 @@ class PlotOrchestrator:
     Keeps CLI thin and testable.
     """
     DEFAULT_PLOTS = ["kde","parcoords","pdf","importance","kmeans",
-                     "contour","shap","ml_pairwise","strip","quartprob"]
+                     "contour","shap","ml_pairwise","strip","quartprob","surface3d"]
 
     def __init__(self, config: Dict[str, Any], root: Path, debug: bool = False):
         self.config = config
@@ -65,6 +65,7 @@ class PlotOrchestrator:
         pdf_smooth: bool = False,
         ml_pairwise_settings: Dict[str, Any] | None = None,
         strip_settings: Dict[str, Any] | None = None,
+        surface3d_settings: Dict[str, Any] | None = None,
         show_titles: bool = True,
         font_scale: float | None = None,
     ) -> None:
@@ -106,6 +107,7 @@ class PlotOrchestrator:
                 pdf_smooth=pdf_smooth,
                 ml_pairwise_settings=ml_pairwise_settings,
                 strip_settings=strip_settings or {},
+                surface3d_settings=surface3d_settings or {},
                 chunk_size=chunk_def,
                 n_jobs=n_jobs_def,
                 batch_size=batch_def,

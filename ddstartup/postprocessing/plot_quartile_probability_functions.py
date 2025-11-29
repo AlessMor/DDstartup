@@ -1,4 +1,3 @@
-from pathlib import Path
 import numpy as np
 import pandas as pd
 import os, re
@@ -11,6 +10,14 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
+from ddstartup.postprocessing.plot_utils_functions import (
+    drop_near_constant,
+    ensure_registry,
+    quartile_bins,
+    quartile_colors,
+    resolve_outdir_and_stem,
+    select_scalar_numeric,
+)
 
 # ---- MathText: always render $...$ instead of showing literally ----
 try:
@@ -71,6 +78,7 @@ def quartile_probability_plot(
     min_per_bin: int = 1,
     MAX_POINTS: int = 12,                  # target number of x points to display
     RESCALE: bool = True,                  # auto-rescale y-axis per subplot based on data spread
+    show_titles: bool = True,
     **_,
 ):
     if df is None or len(df) == 0:
@@ -78,21 +86,20 @@ def quartile_probability_plot(
         return
 
     _inputs = input_parameters if inputs is None else inputs
-    outdir = Path(outputs_dir if output_dir is None else output_dir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    stem = (
-        f"{plot_name_prefix}__quartile_probs"
-        if plot_name_prefix
-        else (Path(plot_name).stem if plot_name else "quartile_probs")
+    outdir, stem = resolve_outdir_and_stem(
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+        default_stem="quartile_probs",
+        suffix="__quartile_probs" if plot_name_prefix else None,
     )
 
     PLOT_STYLE = (PLOT_STYLE or "line").lower()
     if PLOT_STYLE not in {"line", "bar"}:
         PLOT_STYLE = "line"
 
-    if registry is None:
-        from ddstartup.utils.parameter_registry import get_registry as _get_registry
-        registry = _get_registry()
+    registry = ensure_registry(registry)
 
     # ---------- target quartiles on successes ----------
     t = pd.to_numeric(df[target], errors="coerce").replace([np.inf, -np.inf], np.nan)
@@ -102,34 +109,20 @@ def quartile_probability_plot(
         print(f"   No successful finite '{target}'. Skipping.")
         return
 
-    qbins = pd.qcut(t[succ], q=4, duplicates="drop")
+    qbins, qlabels = quartile_bins(t[succ])
     qcodes = qbins.cat.codes.to_numpy()
-    qcats = list(qbins.cat.categories)  # IntervalIndex
-    kq = len(qcats)
-    qlabels = [f"Q{i+1}: {iv.left:.2e}–{iv.right:.2e}" for i, iv in enumerate(qcats)]
+    kq = len(qlabels)
 
     # ---------- select scalar, varying inputs ----------
-    inner = (df.attrs or {}).get("_inner_dims", {})
-    cand = [
-        c for c in list(_inputs or [])
-        if c != "sol_success" and c in df.columns
-        and int(inner.get(c, 1)) == 1
-        and pd.api.types.is_numeric_dtype(df[c])
-    ]
-    varying = []
-    for c in cand:
-        s = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        if s.dropna().empty:
-            continue
-        std = float(s.std()); mean = abs(float(s.mean()))
-        if std > 1e-10 and (mean == 0 or std / max(mean, 1e-30) > 1e-6):
-            varying.append(c)
+    cand = [c for c in list(_inputs or []) if c != "sol_success"]
+    scalar_inputs = select_scalar_numeric(df, cand)
+    varying = drop_near_constant(df, scalar_inputs)
     if not varying:
         print("   No varying scalar inputs to plot. Skipping.")
         return
 
     # ---------- colors & legend order ----------
-    quart_colors = ["#2563EB", "#059669", "#D97706", "#DC2626"][:kq]  # Q1..Q4
+    quart_colors = quartile_colors(kq)  # Q1..Q4
     FAILED_COLOR, FAILED_ALPHA = "#808080", 0.3
 
     if PLOT_STYLE == "bar":
@@ -478,7 +471,7 @@ def quartile_probability_plot(
     title = f"P(quartile | parameter value) wrt {t_label if not t_unit else f'{t_label} [{t_unit}]'}"
     if file_type:
         title += f" • {file_type}"
-    has_title = bool(title.strip())
+    has_title = show_titles and bool(title.strip())
     if has_title:
         fig.suptitle(title, fontsize=14)
 

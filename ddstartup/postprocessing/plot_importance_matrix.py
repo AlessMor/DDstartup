@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
 
+from ddstartup.postprocessing.plot_utils_functions import ensure_registry, resolve_outdir_and_stem, select_scalar_numeric
 
 def cohen_d(a, b):
     """Compute Cohen's d between two samples."""
@@ -58,6 +59,7 @@ def plot_effect_size_matrix(
     plot_name_prefix=None,
     save_csv=True,
     registry=None,
+    show_titles=True,
     **_,
 ):
     """Compute effect-size matrix and plot heatmap. Saves CSV and PNG to outputs_dir.
@@ -70,28 +72,24 @@ def plot_effect_size_matrix(
         plot_name: Optional plot name prefix
         save_csv: Whether to save CSV file
         registry: ParameterRegistry instance (optional, will create if not provided)
+        show_titles: If False, omit the heatmap title
         
     Returns:
         The effects DataFrame.
     """
-    # Get registry if not provided
-    if registry is None:
-        from ddstartup.utils.parameter_registry import get_registry
-        registry = get_registry()
+    registry = ensure_registry(registry)
     
     # Normalize args and output path
-    outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
-    outdir.mkdir(parents=True, exist_ok=True)
-    stem = plot_name_prefix or plot_name or target
+    outdir, stem = resolve_outdir_and_stem(
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+        default_stem=target,
+    )
 
     # Restrict to scalar numeric inputs only (skip vectors/objects)
-    inner = (getattr(df, "attrs", {}) or {}).get("_inner_dims", {})
-    usable_inputs = [
-        c for c in inputs
-        if c in df.columns
-        and int(inner.get(c, 1)) == 1
-        and pd.api.types.is_numeric_dtype(df[c])
-    ]
+    usable_inputs = select_scalar_numeric(df, inputs)
     if not usable_inputs:
         print("   No scalar numeric inputs available for effect-size matrix. Skipping.")
         return None
@@ -109,7 +107,8 @@ def plot_effect_size_matrix(
     plt.figure(figsize=(max(6, len(inputs)*0.4), 6))
     sns.heatmap(effects_display.astype(float), cmap='vlag', center=0, annot=True, fmt='.2f')
     target_symbol = registry.get_symbol(target)
-    plt.title(f"Effect Size (Cohen's d) per Quartile — {target_symbol}")
+    if show_titles:
+        plt.title(f"Effect Size (Cohen's d) per Quartile — {target_symbol}")
     plt.tight_layout()
     png_name = outdir / f'{stem}.png'
     plt.savefig(png_name, dpi=150)

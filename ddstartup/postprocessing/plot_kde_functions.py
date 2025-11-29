@@ -15,7 +15,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
+from ddstartup.postprocessing.plot_utils_functions import (
+    drop_near_constant,
+    ensure_registry,
+    quartile_bins,
+    quartile_colors,
+    resolve_outdir_and_stem,
+    select_scalar_numeric,
+)
 
 
 def _resolve_args(
@@ -33,77 +40,15 @@ def _resolve_args(
     """Normalize old/new argument names to a single set."""
     _df = df_filtered if df is None else df
     _inputs = input_parameters if inputs is None else inputs
-    _outdir = outputs_dir if output_dir is None else output_dir
-
-    # Build filename stem once. Prefer explicit plot_name_prefix over legacy plot_name.
-    if plot_name_prefix:
-        stem = f"{plot_name_prefix}_kde_by_quartile"
-    elif plot_name:
-        # strip extension if a file-like name was passed
-        stem = Path(plot_name).stem
-    else:
-        stem = "kde_by_quartile"
-
-    return _df, _inputs, Path(_outdir), stem
-
-
-def _scalar_input_columns(df: pd.DataFrame, candidates: list[str]) -> list[str]:
-    """Pick scalar columns among candidates (inner_dim==1 and numeric dtype)."""
-    inner = (df.attrs or {}).get("_inner_dims", {})
-    out = []
-    for c in candidates:
-        if c not in df.columns:
-            continue
-        if int(inner.get(c, 1)) != 1:
-            # vector-valued input; this plot handles only scalars
-            continue
-        # keep numeric columns only
-        if pd.api.types.is_numeric_dtype(df[c]):
-            out.append(c)
-    return out
-
-
-def _varying_columns(df: pd.DataFrame, cols: list[str]) -> list[str]:
-    """Remove near-constant columns to avoid degenerate KDEs."""
-    keep = []
-    for c in cols:
-        s = df[c].dropna()
-        if s.empty:
-            continue
-        # robust constant check
-        try:
-            std = float(s.std())
-            mean = abs(float(s.mean()))
-        except Exception:
-            continue
-        if std > 1e-10 and (mean == 0 or std / max(mean, 1e-30) > 1e-6):
-            keep.append(c)
-        else:
-            # silently skip constants; the caller already logs per-target summaries
-            pass
-    return keep
-
-
-def _quartile_bins(series: pd.Series) -> tuple[pd.Series, list[str]]:
-    """Return (categorical bins, ordered label list) for quartiles of a numeric series."""
-    y = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-    if y.empty:
-        # produce empty bins with default labels (the caller will bail out upstream)
-        labels = ["Q1", "Q2", "Q3", "Q4"]
-        return pd.Categorical([np.nan] * len(series), categories=labels), labels
-    qs = series.quantile([0, 0.25, 0.5, 0.75, 1.0])
-    labels = [
-        f"Q1: {qs.iloc[0]:.2e}–{qs.iloc[1]:.2e}",
-        f"Q2: {qs.iloc[1]:.2e}–{qs.iloc[2]:.2e}",
-        f"Q3: {qs.iloc[2]:.2e}–{qs.iloc[3]:.2e}",
-        f"Q4: {qs.iloc[3]:.2e}–{qs.iloc[4]:.2e}",
-    ]
-    bins = pd.qcut(series, q=4, labels=labels, duplicates="drop")
-    # If duplicates collapsed (<4 bins), regenerate labels to the actual count
-    if bins.dtype == "category" and len(bins.cat.categories) != 4:
-        cats = list(bins.cat.categories)
-        return bins, cats
-    return bins, labels
+    outdir, stem = resolve_outdir_and_stem(
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+        default_stem="kde_by_quartile",
+        suffix="_kde_by_quartile" if plot_name_prefix else None,
+    )
+    return _df, _inputs, outdir, stem
 
 
 def _save_quartile_extremes_to_csv(
@@ -155,6 +100,7 @@ def kde_quartile_plot(
     plot_name_prefix: str | None = None,
     plot_name: str | None = None,
     registry=None,
+    show_titles: bool = True,
     **_,
 ):
     """
@@ -168,10 +114,7 @@ def kde_quartile_plot(
 
     Legacy names (df_filtered, input_parameters, outputs_dir, plot_name) are also accepted.
     """
-    # Registry
-    if registry is None:
-        from ddstartup.utils.parameter_registry import get_registry as _get_registry
-        registry = _get_registry()
+    registry = ensure_registry(registry)
 
     # Normalize incoming args
     df, inputs, outdir, stem = _resolve_args(
@@ -190,17 +133,17 @@ def kde_quartile_plot(
         return
 
     # Select scalar, numeric inputs only; drop near-constants
-    scalar_inputs = _scalar_input_columns(df, list(inputs or []))
+    scalar_inputs = select_scalar_numeric(df, list(inputs or []))
     if not scalar_inputs:
         print("   No scalar numeric inputs available. Skipping KDE plot.")
         return
-    varying_inputs = _varying_columns(df, scalar_inputs)
+    varying_inputs = drop_near_constant(df, scalar_inputs)
     if not varying_inputs:
         print("   No varying scalar inputs to plot. Skipping KDE plot.")
         return
 
     # Quartile binning (do not mutate df)
-    bins, labels = _quartile_bins(df[target])
+    bins, labels = quartile_bins(df[target])
     if isinstance(bins, pd.Series):
         valid_mask = bins.notna()
     else:
@@ -211,9 +154,8 @@ def kde_quartile_plot(
         return
 
     # Colors per quartile
-    colorscale = get_discrete_colorscale(4 if len(labels) >= 4 else len(labels))
-    quartile_colors = [colorscale[i * 2][1] for i in range(len(labels))]
-    color_map = {labels[i]: quartile_colors[i] for i in range(len(labels))}
+    q_colors = quartile_colors(len(labels))
+    color_map = {labels[i]: q_colors[i] for i in range(len(labels))}
 
     # Grid size
     n_inputs = len(varying_inputs)
@@ -273,7 +215,8 @@ def kde_quartile_plot(
     sup_title = f"KDE of Inputs by {t_label if not t_unit else f'{t_label} [{t_unit}]'} quartile"
     if file_type:
         sup_title += f" for {file_type}"
-    fig.suptitle(sup_title, fontsize=14, y=0.97)
+    if show_titles:
+        fig.suptitle(sup_title, fontsize=14, y=0.97)
 
     # Legend (use first visible axis that has handles)
     handles, labels_seen = None, None

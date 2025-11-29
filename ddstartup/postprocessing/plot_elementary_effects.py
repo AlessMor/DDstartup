@@ -33,7 +33,8 @@ def plot_confidence_intervals(
     sensitivity_data: Dict[str, Any],
     metric_name: str,
     output_dir: Path,
-    figsize: Tuple[int, int] = (12, 8)
+    figsize: Tuple[int, int] = (12, 8),
+    show_titles: bool = True,
 ):
     """
     Create error bar plot with 95% confidence intervals.
@@ -124,7 +125,8 @@ def plot_confidence_intervals(
     ax.set_yticklabels(sorted_latex_names)
     ax.grid(True, linestyle='--', alpha=0.7, axis='x')
     ax.set_xlabel('Effect Magnitude (Normalized Elementary Effects)')
-    ax.set_title(f'Parameter Sensitivity - {metric_name.replace("_", " ").title()}')
+    if show_titles:
+        ax.set_title(f'Parameter Sensitivity - {metric_name.replace("_", " ").title()}')
     ax.legend(loc='best')
     
     plt.tight_layout()
@@ -139,7 +141,8 @@ def plot_morris_scatter(
     sensitivity_data: Dict[str, Any],
     metric_name: str,
     output_dir: Path,
-    figsize: Tuple[int, int] = (8, 8)
+    figsize: Tuple[int, int] = (8, 8),
+    show_titles: bool = True,
 ):
     """
     Create Morris method scatter plot (μ* vs σ).
@@ -192,7 +195,8 @@ def plot_morris_scatter(
     
     ax.set_xlabel(r'$\mu^*$ / $\mu$ (Mean Effect)')
     ax.set_ylabel(r'$\sigma^*$ / $\sigma$ (Standard Deviation)')
-    ax.set_title(f'Morris Method Plot - {metric_name.replace("_", " ").title()}')
+    if show_titles:
+        ax.set_title(f'Morris Method Plot - {metric_name.replace("_", " ").title()}')
     ax.grid(True, linestyle='--', alpha=0.7)
     ax.legend(loc='best')
     
@@ -210,7 +214,8 @@ def plot_box_plots(
     output_dir: Path,
     remove_outliers: bool = True,
     min_effect_threshold: float = 1e-6,
-    figsize: Tuple[int, int] = (12, 8)
+    figsize: Tuple[int, int] = (12, 8),
+    show_titles: bool = True,
 ):
     """
     Create box plots of elementary effects distributions.
@@ -297,7 +302,8 @@ def plot_box_plots(
                    ha='right', va='center', fontsize=9,
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='wheat', alpha=0.7))
     
-    ax.set_title(f'Elementary Effects Distribution - {metric_name.replace("_", " ").title()}\n(Sorted by μ* = importance)')
+    if show_titles:
+        ax.set_title(f'Elementary Effects Distribution - {metric_name.replace("_", " ").title()}\n(Sorted by μ* = importance)')
     
     plt.tight_layout()
     output_path = output_dir / f'ee_box_plot_{metric_name}.png'

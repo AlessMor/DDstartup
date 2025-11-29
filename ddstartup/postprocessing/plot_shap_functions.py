@@ -31,6 +31,7 @@ def generate_shap_plots(
     max_display: int = 20,
     max_samples: int = 2000,
     save_csv: bool = True,
+    show_titles: bool = True,
     **_
 ) -> dict | None:
     # 0) basic guards
@@ -167,7 +168,8 @@ def generate_shap_plots(
     title = f"Feature Importance: {tlabel}"
     if target_unit:
         title += f" [{target_unit}]"
-    ax.set_title(f"{title}\n({file_type})", fontsize=14, fontweight="bold", pad=16)
+    if show_titles:
+        ax.set_title(f"{title}\n({file_type})", fontsize=14, fontweight="bold", pad=16)
 
     sm = cm.ScalarMappable(cmap=cmap, norm=Normalize(vmin=0, vmax=1))
     sm.set_array([])

@@ -309,6 +309,7 @@ def generate_strip_plot(
     unit_conversions=None,
     optimal_point=True,
     registry=None,
+    show_titles=True,
     figsize=(14, 6),
     frac=0.12,
     df=None,
@@ -331,6 +332,7 @@ def generate_strip_plot(
                          Example: {'t_startup': {'factor': 1/(24*3600), 'unit': 'days'}}
         optimal_point: If True, mark optimal point minimizing all metrics (default: True)
         registry: ParameterRegistry instance (optional, will create if not provided)
+        show_titles: If False, omit the figure title
         figsize: Figure size tuple (default: (14, 6))
         frac: LOWESS smoothing fraction (default: 0.12)
         
@@ -369,6 +371,7 @@ def generate_strip_plot(
         optimal_point = strip_settings.get("optimal_point", True)
     if frac is None:
         frac = strip_settings.get("frac", 0.12)
+    show_titles = strip_settings.get("show_titles", show_titles)
 
     # Validate inputs
     if not y_metrics or len(y_metrics) == 0:
@@ -497,8 +500,9 @@ def generate_strip_plot(
     
     # Add title
     file_name = Path(h5_file).stem if h5_file is not None else "dataframe"
-    title = f'Strip Plot: {", ".join([get_label(m, unit_conversions, registry) for m in y_metrics])}\n{file_name}'
-    ax1.set_title(title, fontsize=14, fontweight='bold')
+    if show_titles:
+        title = f'Strip Plot: {", ".join([get_label(m, unit_conversions, registry) for m in y_metrics])}\n{file_name}'
+        ax1.set_title(title, fontsize=14, fontweight='bold')
     
     # Add optimal point marker if requested
     if optimal_point and len(y_metrics) >= 2:

@@ -721,7 +721,13 @@ def collect_plot_settings(config: Dict[str, Any], args, targets: List[str], plot
     style_cfg = plots.get("style", {}) or {}
     show_titles = bool(style_cfg.get("show_titles", True))
     font_scale = style_cfg.get("font_scale")
-    return shap_interp, pdf_smooth, ml_pair, strip, show_titles, font_scale
+    surface3d = plots.get("surface3d_settings", {})
+    axes = surface3d.get("axes")
+    if "surface3d" in plot_types and axes:
+        if isinstance(axes, str):
+            axes = [axes]
+        print(f"🔷 Surface3D axes: {', '.join(axes[:3])}")
+    return shap_interp, pdf_smooth, ml_pair, strip, show_titles, font_scale, surface3d
 
 def generate_plots_for_file(
     path: Path,
@@ -737,6 +743,7 @@ def generate_plots_for_file(
     pdf_smooth: bool = False,
     ml_pairwise_settings: Dict[str, Any] | None = None,
     strip_settings: Dict[str, Any] | None = None,
+    surface3d_settings: Dict[str, Any] | None = None,
     chunk_size: int | None = None,
     n_jobs: int = 1,
     batch_size: int = 100_000,
@@ -813,6 +820,7 @@ def generate_plots_for_file(
         ("ml_pairwise", "ddstartup.postprocessing.plot_ML_pairwise_functions",         "generate_ml_pairwise_plots"),
         ("strip",       "ddstartup.postprocessing.plot_strips",                        "generate_strip_plot"),
         ("quartprob",   "ddstartup.postprocessing.plot_quartile_probability_functions","quartile_probability_plot"),
+        ("surface3d",   "ddstartup.postprocessing.plot_surface3d",                     "generate_surface3d_plot"),
     ]
 
     inner_dims = (df.attrs or {}).get("_inner_dims", {})
@@ -860,7 +868,9 @@ def generate_plots_for_file(
                 shap_interpolate=shap_interpolate,
                 ml_pairwise_settings=ml_pairwise_settings or {},
                 strip_settings=strip_settings or {},
+                surface3d_settings=surface3d_settings or {},
                 plot_name_prefix=path.stem,
+                show_titles=show_titles,
             )
 
             

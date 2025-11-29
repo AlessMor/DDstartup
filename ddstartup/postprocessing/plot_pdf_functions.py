@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, NullFormatter
 from scipy.stats import gaussian_kde
 
+from ddstartup.postprocessing.plot_utils_functions import ensure_registry, resolve_outdir_and_stem
+
 
 def generate_pdf_plot(
     dataframes_dict=None,
@@ -29,6 +31,7 @@ def generate_pdf_plot(
     pdf_smooth=False,
     kde_bandwidth='scott',
     registry=None,
+    show_titles=True,
     **_,
 ):
     """
@@ -43,24 +46,23 @@ def generate_pdf_plot(
         smooth: If True, use KDE smoothing instead of histogram bins (default: False)
         kde_bandwidth: Bandwidth method for KDE ('scott', 'silverman', or float) (default: 'scott')
         registry: ParameterRegistry instance (optional, will create if not provided)
+        show_titles: If False, omit the figure title
     """
     # Normalize arguments
     filters = filters or {}
     if var is None:
         var = target
     if output_path is None:
-        outdir = output_dir if output_dir is not None else outputs_dir
-        if outdir is None:
-            outdir = "."
-        outdir = Path(outdir)
-        outdir.mkdir(parents=True, exist_ok=True)
-        stem = plot_name_prefix or plot_name or f"pdf_{var}"
+        outdir, stem = resolve_outdir_and_stem(
+            output_dir=output_dir,
+            outputs_dir=outputs_dir,
+            plot_name_prefix=plot_name_prefix,
+            plot_name=plot_name,
+            default_stem=f"pdf_{var}",
+        )
         output_path = outdir / f"{stem}.png"
 
-    # Get registry if not provided
-    if registry is None:
-        from ddstartup.utils.parameter_registry import get_registry
-        registry = get_registry()
+    registry = ensure_registry(registry)
     
     vmin = filters.get(var, {}).get('min', None)
     vmax = filters.get(var, {}).get('max', None)
@@ -159,11 +161,11 @@ def generate_pdf_plot(
     plt.ylabel('Probability Density')
     
     # Add subtitle indicating mode
-    title_text = f'PDF of {symbol}'
-    if smooth:
-        title_text += '\n(Kernel Density Estimation)'
-    
-    plt.title(title_text)
+    if show_titles:
+        title_text = f'PDF of {symbol}'
+        if smooth:
+            title_text += '\n(Kernel Density Estimation)'
+        plt.title(title_text)
     if has_data:
         plt.legend()
     if vmin is not None or vmax is not None:

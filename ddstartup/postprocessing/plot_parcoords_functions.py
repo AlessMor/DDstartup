@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 
+from ddstartup.postprocessing.plot_utils_functions import ensure_registry, resolve_outdir_and_stem
 from ddstartup.postprocessing.postprocess_functions import get_discrete_colorscale
 
 
@@ -25,6 +26,7 @@ def generate_parcoords_plot(
     plot_name_prefix=None,
     plot_name=None,
     registry=None,
+    show_titles=True,
     **_,
 ):
     """
@@ -38,6 +40,7 @@ def generate_parcoords_plot(
         file_type: Type of file (for plot title)
         output_path: Path to save HTML plot file
         registry: ParameterRegistry instance (optional, will create if not provided)
+        show_titles: If False, omit figure title
     """
     df_filtered = df_filtered if df is None else df
     if df_filtered is None or len(df_filtered) == 0:
@@ -45,18 +48,16 @@ def generate_parcoords_plot(
         return
 
     inputs = input_parameters if inputs is None else inputs
-    outdir = output_dir if output_dir is not None else outputs_dir
-    if outdir is None:
-        outdir = "."
-    outdir = Path(outdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    stem = plot_name_prefix or plot_name or f"parcoords_{target or 'target'}"
+    outdir, stem = resolve_outdir_and_stem(
+        output_dir=output_dir,
+        outputs_dir=outputs_dir,
+        plot_name_prefix=plot_name_prefix,
+        plot_name=plot_name,
+        default_stem=f"parcoords_{target or 'target'}",
+    )
     output_path = outdir / f"{stem}.html"
 
-    # Get registry if not provided
-    if registry is None:
-        from ddstartup.utils.parameter_registry import get_registry
-        registry = get_registry()
+    registry = ensure_registry(registry)
     
     # Sample if too many rows
     max_plot_rows = int(1e6)
@@ -129,7 +130,7 @@ def generate_parcoords_plot(
     ))
     
     fig.update_layout(
-        title=f"Parallel Coordinates Plot - {file_type} ({target_symbol})",
+        title=f"Parallel Coordinates Plot - {file_type} ({target_symbol})" if show_titles else None,
         font=dict(size=12),
         width=1400,
         height=700,

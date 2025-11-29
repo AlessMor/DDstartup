@@ -231,6 +231,7 @@ def generate_ml_pairwise_plots(
     plot_name_prefix: str,
     registry=None,
     ml_pairwise_settings: dict | None = None,
+    show_titles: bool = True,
     **_
 ) -> None:
     """
@@ -244,6 +245,7 @@ def generate_ml_pairwise_plots(
         return
 
     mlcfg = ml_pairwise_settings or {}
+    show_titles = bool(mlcfg.get("show_titles", show_titles))
     pairs_mode     = mlcfg.get("pairs", "auto")              # 'auto' | 'all' | list[(i,j)]
     grid_size      = int(mlcfg.get("grid_size", 60))
     max_train      = int(mlcfg.get("max_train_samples", 100_000))
@@ -380,7 +382,8 @@ def generate_ml_pairwise_plots(
 
             # title
             tshort = registry.get_param_label(target) if registry is not None else target
-            ax.set_title(f"ML Pairwise PDP: {tshort} ({file_type})", fontsize=12, fontweight="bold")
+            if show_titles:
+                ax.set_title(f"ML Pairwise PDP: {tshort} ({file_type})", fontsize=12, fontweight="bold")
 
             plt.tight_layout()
 

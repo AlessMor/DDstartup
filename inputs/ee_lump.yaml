@@ -13,7 +13,7 @@ output_metrics:                      # Output variables to analyze
   - 'unrealized_profits'
 
 # Time and output settings
-max_simulation_time: 31536000        # 1 year in seconds
+max_simulation_time: 315360000        # 10 year in seconds
 vector_length: 200                   # Number of time points to store
 output_dir: 'outputs'                # Output directory
 
