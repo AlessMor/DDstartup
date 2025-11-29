@@ -8,14 +8,20 @@ from typing import Any, Dict, List
 # Project registry (schema + units)
 # -----------------------------------------------------------------------------
 from ddstartup.utils.parameter_registry import get_registry, PARAMETER_SCHEMA
-from ddstartup.utils.io_functions import resolve_file_path, resolve_h5_inputs, h5_to_df_core
+from ddstartup.utils.io_functions import resolve_file_path, resolve_h5_inputs
+from ddstartup.postprocessing.postprocess_functions import (
+    resolve_file_paths,
+    apply_h5_runtime_defaults,
+    parse_filters_and_additional,
+    generate_plots_for_file,
+)
 
 class PlotOrchestrator:
     """
     Minimal orchestrator that:
       - resolves files
       - applies HDF5/runtime defaults
-      - parses filters & computed variables
+      - parses filters & additional variables
       - runs generate_plots_for_file for selected plot types
     Keeps CLI thin and testable.
     """
@@ -29,8 +35,9 @@ class PlotOrchestrator:
         self.files: List[Path] | None = None
         self.runtime: Dict[str, Any] | None = None
         self.filters_exprs: List[str] | None = None
-        self.computed_map: Dict[str, str] | None = None
-        self.computed_meta: Dict[str, Dict[str, str]] | None = None
+        self.additional_map: Dict[str, str] | None = None
+        self.additional_meta: Dict[str, Dict[str, str]] | None = None
+        self.passthrough_vars: set[str] | None = None
         self.targets: List[str] = list(self.config.get("target_variables", ["unrealized_profits", "t_startup"]))
         # derive default plot types from config if present, otherwise use DEFAULT_PLOTS
         plots_cfg = self.config.get("plots", {}) or {}
@@ -48,7 +55,7 @@ class PlotOrchestrator:
         # resolve files, runtime defaults, and parse filters/computed
         self.files = resolve_file_paths(self.config, self.root)
         self.runtime = apply_h5_runtime_defaults(self.config, self.files)
-        self.filters_exprs, self.computed_map, self.computed_meta = parse_filters_and_computed(self.config)
+        self.filters_exprs, self.additional_map, self.additional_meta, self.passthrough_vars = parse_filters_and_additional(self.config)
 
     def run(
         self,
@@ -58,6 +65,8 @@ class PlotOrchestrator:
         pdf_smooth: bool = False,
         ml_pairwise_settings: Dict[str, Any] | None = None,
         strip_settings: Dict[str, Any] | None = None,
+        show_titles: bool = True,
+        font_scale: float | None = None,
     ) -> None:
         if self.files is None or self.runtime is None or self.filters_exprs is None:
             self.prepare()
@@ -71,7 +80,8 @@ class PlotOrchestrator:
         plot_types = [p for p in plot_types if p in self.available_plots()]
 
         rt = self.runtime or {}
-        chunk_def = int(rt.get("chunk_size", 500_000))
+        chunk_raw = rt.get("chunk_size", None)
+        chunk_def = int(chunk_raw) if chunk_raw not in (None, 0) else None
         n_jobs_def = int(rt.get("n_jobs", 1))
         batch_def = int(rt.get("batch_size", 100_000))
         downcast_def = bool(rt.get("downcast_float32", False))
@@ -87,8 +97,9 @@ class PlotOrchestrator:
                 path,
                 targets=self.targets,
                 filters_exprs=self.filters_exprs or [],
-                computed_map=self.computed_map or {},
-                computed_meta=self.computed_meta,
+                additional_map=self.additional_map or {},
+                passthrough_vars=self.passthrough_vars or set(),
+                additional_meta=self.additional_meta,
                 plot_types=plot_types,
                 output_dir=output_dir,
                 shap_interpolate=shap_interpolate,
@@ -99,4 +110,6 @@ class PlotOrchestrator:
                 n_jobs=n_jobs_def,
                 batch_size=batch_def,
                 downcast_float32=downcast_def,
+                show_titles=show_titles,
+                font_scale=font_scale,
             )

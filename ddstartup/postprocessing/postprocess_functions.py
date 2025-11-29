@@ -4,13 +4,14 @@ from itertools import chain
 
 import sys, re, ast, json, inspect, gc
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Set
 import importlib, inspect, gc
 
 import numpy as np
 import pandas as pd
 import h5py
 from tqdm import tqdm
+from contextlib import contextmanager
 
 # Optional compression plugins (skip if missing)
 try:
@@ -23,7 +24,7 @@ except ImportError:
 # Project registry (schema + units)
 # -----------------------------------------------------------------------------
 from ddstartup.utils.parameter_registry import get_registry, PARAMETER_SCHEMA
-from ddstartup.utils.io_functions import resolve_file_path, resolve_h5_inputs, h5_to_df_core
+from ddstartup.utils.io_functions import resolve_file_path, resolve_h5_inputs, stream_h5_to_df
 
 
 # -----------------------------------------------------------------------------
@@ -175,16 +176,18 @@ def apply_h5_runtime_defaults(config: Dict[str, Any], files: List[Path]) -> Dict
     meta = _runtime_from_h5(files)
     for k in ("chunk_size","n_jobs","batch_size"):
         if rt.get(k) in (None, 0) and k in meta: rt[k] = meta[k]
-    rt.setdefault("chunk_size", 500_000)
+    rt.setdefault("chunk_size", None)  # allow auto/heuristic
     rt.setdefault("n_jobs", 1)
     rt.setdefault("batch_size", 100_000)
     rt.setdefault("downcast_float32", False)
-    print("\n🧰 Runtime: " + ", ".join(f"{k}={rt[k]}" for k in ("chunk_size","n_jobs","batch_size","downcast_float32")))
+    def _fmt(v):
+        return "auto" if v in (None, 0) else v
+    print("\n🧰 Runtime: " + ", ".join(f"{k}={_fmt(rt[k])}" for k in ("chunk_size","n_jobs","batch_size","downcast_float32")))
     return rt
 
 
 # -----------------------------------------------------------------------------
-# Filters + computed parsing (compact)
+# Filters + additional parsing (compact)
 # -----------------------------------------------------------------------------
 _ALLOWED_FUNCS = {
     "abs": np.abs, "sqrt": np.sqrt, "log": np.log, "log10": np.log10,
@@ -207,10 +210,12 @@ def _ast_vars(expr: str) -> set[str]:
     return {x for x in v.n if x not in {"True","False","None"} and x not in _ALLOWED_FUNCS}
 
 
-def parse_filters_and_computed(config: Dict[str, Any]) -> Tuple[List[str], Dict[str, str], Dict[str, Dict[str, str]]]:
+def parse_filters_and_additional(config: Dict[str, Any]) -> Tuple[List[str], Dict[str, str], Dict[str, Dict[str, str]], Set[str]]:
     """
-    Parse filters and computed variables from config.
-    Returns (filters_exprs, computed_map, computed_meta).
+    Parse filters and additional variables from config.
+    Returns (filters_exprs, additional_map, additional_meta, passthrough_vars).
+      - additional_map: name -> expression (will be evaluated)
+      - passthrough_vars: names to load directly from H5 (expr blank or same name)
     """
     # 1) Filters
     filters_exprs = [
@@ -219,10 +224,12 @@ def parse_filters_and_computed(config: Dict[str, Any]) -> Tuple[List[str], Dict[
         if isinstance(s, str) and s.strip()
     ]
 
-    # 2) Computed (support dict or "expr, unit, symbol" string)
-    raw = config.get("computed_variables", {}) or {}
-    computed_map: Dict[str, str] = {}
-    computed_meta: Dict[str, Dict[str, str]] = {}
+    # 2) Additional (support dict or "expr, unit, symbol" string)
+    raw = config.get("additional_variables", {}) or {}
+
+    additional_map: Dict[str, str] = {}
+    additional_meta: Dict[str, Dict[str, str]] = {}
+    passthrough: Set[str] = set()
     for name, spec in raw.items():
         if isinstance(spec, dict):
             expr   = spec.get("expr", "") or ""
@@ -234,18 +241,23 @@ def parse_filters_and_computed(config: Dict[str, Any]) -> Tuple[List[str], Dict[
             unit   = parts[1] if len(parts) >= 2 and parts[1] else None
             symbol = parts[2] if len(parts) >= 3 and parts[2] else None
 
-        if expr.strip():
-            computed_map[name] = normalize_expr(expr)
-            computed_meta[name] = {"unit": unit or "", "symbol": symbol or name}
+        expr = expr.strip()
+        if not expr or expr == name:
+            passthrough.add(name)
+            additional_meta[name] = {"unit": unit or "", "symbol": symbol or name}
+        else:
+            additional_map[name] = normalize_expr(expr)
+            additional_meta[name] = {"unit": unit or "", "symbol": symbol or name}
 
-    # 3) Validate symbols against schema + computed
+    # 3) Validate symbols against schema + additional
     schema_names = set(PARAMETER_SCHEMA.keys())
     refs = set()
     if filters_exprs:
         refs |= set().union(*(_ast_vars(e) for e in filters_exprs))
-    if computed_map:
-        refs |= set().union(*(_ast_vars(e) for e in computed_map.values()))
-    unknown = refs - (schema_names | set(computed_map.keys()))
+    if additional_map:
+        refs |= set().union(*(_ast_vars(e) for e in additional_map.values()))
+    allowed_symbols = schema_names | set(additional_map.keys()) | passthrough
+    unknown = refs - allowed_symbols
     if unknown:
         print(f"Unknown symbols in expressions: {sorted(unknown)}")
         sys.exit(1)
@@ -255,13 +267,19 @@ def parse_filters_and_computed(config: Dict[str, Any]) -> Tuple[List[str], Dict[
         print("\n🔍 Filters:")
         for e in filters_exprs:
             print(f"  {e}")
-    if computed_map:
-        print("\n🧮 Computed variables:")
-        for k, v in computed_map.items():
-            u = computed_meta.get(k, {}).get("unit")
+    if additional_map:
+        print("\n🧮 Additional variables (computed):")
+        for k, v in additional_map.items():
+            u = additional_meta.get(k, {}).get("unit")
             print(f"  {k} = {v}" + (f", Defined Unit: {u}" if u else ""))
 
-    return filters_exprs, computed_map, computed_meta
+    if passthrough:
+        print("\n📦 Additional variables (loaded directly):")
+        for k in sorted(passthrough):
+            u = additional_meta.get(k, {}).get("unit")
+            print(f"  {k}" + (f" [{u}]" if u else ""))
+
+    return filters_exprs, additional_map, additional_meta, passthrough
 
 
 # -----------------------------------------------------------------------------
@@ -272,8 +290,9 @@ def load_h5_to_df(
     *,
     targets: List[str] | None = None,
     filters_exprs: List[str] | None = None,
-    computed_map: Dict[str, str] | None = None,
-    chunk_size: int = 500_000,
+    additional_map: Dict[str, str] | None = None,
+    passthrough_vars: Set[str] | None = None,
+    chunk_size: int | None = None,
     downcast_float32: bool = False,
     verbose: bool = True,
     keep: str = "slim",
@@ -283,12 +302,13 @@ def load_h5_to_df(
     Read a minimal, plot-ready DataFrame:
       - All schema inputs/flexible parameters
       - Requested targets
-      - Variables needed to compute *requested* computed targets
+      - Variables needed to compute *requested* additional targets
       - Variables referenced by filters
       - 'sol_success' if present
     Optionally keep only those columns ('slim'), default behavior for low memory.
     """
-    computed_map   = computed_map   or {}
+    additional_map   = additional_map   or {}
+    passthrough_vars = set(passthrough_vars or [])
     filters_exprs  = filters_exprs  or []
     targets        = list(targets or [])
 
@@ -331,169 +351,185 @@ def load_h5_to_df(
         return set().union(*(_ast_vars(e) for e in exprs))
 
     def _gather_base_deps(name: str, seen: set[str] | None = None) -> set[str]:
-        """Recursively collect non-computed dependencies for a computed variable."""
+        """Recursively collect non-computed dependencies for an additional variable."""
         seen = seen or set()
-        if name in seen or name not in computed_map:
+        if name in seen or name not in additional_map:
             return set()
         seen.add(name)
-        deps = _vars_in([computed_map[name]])
+        deps = _vars_in([additional_map[name]])
         base: set[str] = set()
         for d in deps:
-            if d in computed_map:
+            if d in additional_map:
                 base |= _gather_base_deps(d, seen)
             else:
                 base.add(d)
         return base
 
-    def _gather_computed_chain(name: str, seen: set[str] | None = None) -> set[str]:
-        """Return all computed variables needed (recursively) for ``name`` including itself."""
+    def _gather_additional_chain(name: str, seen: set[str] | None = None) -> set[str]:
+        """Return all additional variables needed (recursively) for ``name`` including itself."""
         seen = seen or set()
-        if name in seen or name not in computed_map:
+        if name in seen or name not in additional_map:
             return set()
         seen.add(name)
-        deps = _vars_in([computed_map[name]])
+        deps = _vars_in([additional_map[name]])
         acc = {name}
         for d in deps:
-            if d in computed_map:
-                acc |= _gather_computed_chain(d, seen)
+            if d in additional_map:
+                acc |= _gather_additional_chain(d, seen)
         return acc
 
     filter_deps = _vars_in(filters_exprs)
-    computed_targets = {t for t in targets if t in computed_map}
-    computed_in_filters = {name for name in computed_map if name in filter_deps}
-    # we want all computed variables displayed, so collect every defined one (plus dependencies)
-    all_needed_computed: set[str] = set(computed_map.keys())
+    additional_targets = {t for t in targets if t in additional_map}
+    additional_in_filters = {name for name in additional_map if name in filter_deps}
+    # we want all additional variables displayed, so collect every defined one (plus dependencies)
+    all_needed_additional: set[str] = set(additional_map.keys())
 
-    # include any chained computed dependencies
-    for name in list(all_needed_computed):
-        all_needed_computed |= _gather_computed_chain(name)
+    # include any chained additional dependencies
+    for name in list(all_needed_additional):
+        all_needed_additional |= _gather_additional_chain(name)
 
-    computed_base_deps = set()
-    for name in all_needed_computed:
-        computed_base_deps |= _gather_base_deps(name)
+    additional_base_deps = set()
+    for name in all_needed_additional:
+        additional_base_deps |= _gather_base_deps(name)
 
     # ---- Column wish-list
-    wanted = set(schema_inputs) | set(targets) | computed_base_deps | filter_deps | {"sol_success"}
+    wanted = set(schema_inputs) | set(targets) | additional_base_deps | filter_deps | set(additional_map.keys()) | passthrough_vars | {"sol_success"}
     read_cols = sorted(wanted & file_keys)
 
     if verbose:
         print(f"   Columns selected to read: {len(read_cols)} "
               f"(inputs={len(schema_inputs)}, targets={len(set(targets))}, "
-              f"deps={len((computed_base_deps|filter_deps) & file_keys)})")
+              f"deps={len((additional_base_deps|filter_deps) & file_keys)})")
 
-    # ---- Core read (zero extra logic; vector columns preserved)
-    df = h5_to_df_core(
+    # ---- Helpers for additional + filters (chunk-local)
+    def _col_to_2d(s: pd.Series) -> np.ndarray:
+        if s.dtype == object:
+            arr = np.array([v[-1] if isinstance(v, (list, np.ndarray)) and len(v) > 0 else np.nan for v in s])
+            return arr[:, None]
+        arr = pd.to_numeric(s, errors="coerce").to_numpy()
+        return arr[:, None]
+
+    def _env_from_df(df_) -> dict:
+        env = {**_ALLOWED_FUNCS}
+        for c in df_.columns:
+            env[c] = _col_to_2d(df_[c])
+        return env
+
+    def _reduce_mask(val: np.ndarray) -> np.ndarray:
+        if val.dtype != bool:
+            with np.errstate(all="ignore"):
+                vv = val.astype(float)
+            val = np.isfinite(vv) & (vv != 0)
+        return val.any(axis=1) if val.ndim == 2 else val
+
+    def _order_columns(df_: pd.DataFrame) -> list[str]:
+        def _add_unique(dst: list[str], names: list[str]):
+            for n in names:
+                if n in df_.columns and n not in dst:
+                    dst.append(n)
+        ordered_cols: list[str] = []
+        _add_unique(ordered_cols, input_params)
+        _add_unique(ordered_cols, flexible_params)
+        outputs_needed = [
+            n for n in output_params
+            if n in df_.columns and (n in additional_base_deps or n in filter_deps or n in targets)
+        ]
+        _add_unique(ordered_cols, outputs_needed)
+        if "sol_success" in df_.columns and "sol_success" not in ordered_cols:
+            ordered_cols.append("sol_success")
+        additional_order = [name for name in additional_map.keys() if name in df_.columns]
+        for name in passthrough_vars:
+            if name in df_.columns and name not in additional_order:
+                additional_order.append(name)
+        _add_unique(ordered_cols, additional_order)
+        remaining = [c for c in df_.columns if c not in ordered_cols]
+        _add_unique(ordered_cols, remaining)
+        return ordered_cols
+
+    # ---- Precompute dependency graph for additional variables with expressions
+    need_additional = all_needed_additional
+    dep_graph = {name: _vars_in([additional_map[name]]) for name in need_additional}
+
+    parts: list[pd.DataFrame] = []
+    inner_dims_all: dict[str, int] = {}
+
+    for df_chunk in stream_h5_to_df(
         h5_path,
         columns=read_cols,
         chunk_size=chunk_size,
         downcast_float32=downcast_float32,
         verbose=verbose,
-    )
-    
-    if df.empty:
-        return df
+    ):
+        if df_chunk.empty:
+            continue
 
-    # ---- Computed columns (evaluate only those requested OR referenced by filters)
-    # If you also want computed variables not in targets but referenced by filters, keep them here.
-    need_computed = all_needed_computed
+        inner = dict(df_chunk.attrs.get("_inner_dims", {}))
 
-    if need_computed:
-        def _col_to_2d(s: pd.Series) -> np.ndarray:
-            if s.dtype == object:
-                    arr = np.array([v[-1] if isinstance(v, (list, np.ndarray)) and len(v) > 0 else np.nan for v in s])
-                    return arr[:, None]
-            arr = pd.to_numeric(s, errors="coerce").to_numpy()
-            return arr[:, None]
-        def _env_from_df(df_) -> dict:
-            env = {**_ALLOWED_FUNCS}
-            for c in df_.columns:
-                env[c] = _col_to_2d(df_[c])
-            return env
+        # ---- Computed columns, chunk-local
+        if need_additional:
+            env = _env_from_df(df_chunk)
+            remaining = set(need_additional)
+            skipped: dict[str, list[str]] = {}
+            while remaining:
+                progress = False
+                for cname in list(remaining):
+                    deps = dep_graph.get(cname, set())
+                    if all((d in env) for d in deps):
+                        expr = additional_map[cname]
+                        out = eval(expr, {"__builtins__": {}}, env)
+                        a = np.asarray(out)
+                        if a.ndim == 1 or (a.ndim == 2 and a.shape[1] == 1):
+                            df_chunk[cname] = a if a.ndim == 1 else a[:, 0]
+                            inner[cname] = 1
+                        else:
+                            df_chunk[cname] = [a[i].copy() for i in range(a.shape[0])]
+                            inner[cname] = int(a.shape[1])
+                        env[cname] = _col_to_2d(df_chunk[cname])
+                        remaining.remove(cname)
+                        progress = True
+                if not progress:
+                    for c in list(remaining):
+                        missing = sorted(dep_graph.get(c, set()) - set(env.keys()))
+                        skipped[c] = missing
+                        remaining.remove(c)
+                    if skipped:
+                        print(f"   ⚠️  Skipping additional variables with missing dependencies: {skipped}")
+                    break
+            if filters_exprs:
+                env = _env_from_df(df_chunk)
+        else:
+            env = _env_from_df(df_chunk) if filters_exprs else {}
 
-        dep_graph = {name: _vars_in([computed_map[name]]) for name in need_computed}
-        env = _env_from_df(df)
-        inner = (df.attrs or {}).setdefault("_inner_dims", {})
-
-        remaining = set(need_computed)
-        skipped: dict[str, list[str]] = {}
-        while remaining:
-            progress = False
-            for cname in list(remaining):
-                deps = dep_graph.get(cname, set())
-                if all((d in env) for d in deps):
-                    expr = computed_map[cname]
-                    out = eval(expr, {"__builtins__": {}}, env)
-                    a = np.asarray(out)
-                    if a.ndim == 1 or (a.ndim == 2 and a.shape[1] == 1):
-                        df[cname] = a if a.ndim == 1 else a[:, 0]
-                        inner[cname] = 1
-                    else:
-                        df[cname] = [a[i].copy() for i in range(a.shape[0])]
-                        inner[cname] = int(a.shape[1])
-                    env[cname] = _col_to_2d(df[cname])
-                    remaining.remove(cname)
-                    progress = True
-            if not progress:
-                for c in list(remaining):
-                    missing = sorted(dep_graph.get(c, set()) - set(env.keys()))
-                    skipped[c] = missing
-                    remaining.remove(c)
-                if skipped:
-                    print(f"   ⚠️  Skipping computed variables with missing dependencies: {skipped}")
-                break
-        # recompute env only if you’ll apply filters below
+        # ---- Filters per chunk
         if filters_exprs:
-            env = _env_from_df(df)
+            mask = np.ones(len(df_chunk), dtype=bool)
+            for expr in filters_exprs:
+                val = np.asarray(eval(expr, {"__builtins__": {}}, env))
+                mask &= _reduce_mask(val)
+            if not mask.all():
+                df_chunk = df_chunk.loc[mask].reset_index(drop=True)
+            if df_chunk.empty:
+                continue
 
-    # ---- Post filters (reduce vector masks with any(axis=1))
-    if filters_exprs:
-        def _reduce_mask(val: np.ndarray) -> np.ndarray:
-            if val.dtype != bool:
-                with np.errstate(all="ignore"):
-                    vv = val.astype(float)
-                val = np.isfinite(vv) & (vv != 0)
-            return val.any(axis=1) if val.ndim == 2 else val
-        env = locals().get("env") or {**_ALLOWED_FUNCS, **{c: (np.stack(df[c].values) if df[c].dtype==object else pd.to_numeric(df[c], errors="coerce").to_numpy()[:,None]) for c in df.columns}}
-        mask = np.ones(len(df), dtype=bool)
-        for expr in filters_exprs:
-            val = np.asarray(eval(expr, {"__builtins__": {}}, env))
-            mask &= _reduce_mask(val)
-        if not mask.all():
-            df = df.loc[mask].reset_index(drop=True)
+        # ---- Keep only needed columns (chunk-local)
+        if keep == "slim":
+            ordered_cols = _order_columns(df_chunk)
+            df_chunk = df_chunk[ordered_cols].copy()
+            # prune inner dims to kept columns
+            inner = {k: v for k, v in inner.items() if k in df_chunk.columns}
 
-    # ---- Keep only the columns you asked for (inputs + targets + deps [+ computed targets]) unless keep=="all"
-    if keep == "slim":
-        def _add_unique(dst: list[str], names: list[str]):
-            for n in names:
-                if n in df.columns and n not in dst:
-                    dst.append(n)
+        if success_only and "sol_success" in df_chunk.columns:
+            df_chunk = df_chunk.loc[df_chunk["sol_success"].astype(bool)].reset_index(drop=True)
+            if df_chunk.empty:
+                continue
 
-        ordered_cols: list[str] = []
-        _add_unique(ordered_cols, input_params)
-        _add_unique(ordered_cols, flexible_params)
+        df_chunk.attrs["_inner_dims"] = inner
+        inner_dims_all.update(inner)
+        parts.append(df_chunk)
 
-        # outputs only if they participate in computed variables, filters, or targets
-        outputs_needed = [
-            n for n in output_params
-            if n in df.columns and (n in computed_base_deps or n in filter_deps or n in targets)
-        ]
-        _add_unique(ordered_cols, outputs_needed)
-
-        # ensure sol_success is kept (before computed to preserve original behavior)
-        if "sol_success" in df.columns and "sol_success" not in ordered_cols:
-            ordered_cols.append("sol_success")
-
-        computed_order = [name for name in computed_map.keys() if name in df.columns]
-        _add_unique(ordered_cols, computed_order)
-
-        # include any remaining requested/target/filter columns
-        remaining = [c for c in df.columns if c not in ordered_cols]
-        _add_unique(ordered_cols, remaining)
-
-        df = df[ordered_cols].copy()
-    if success_only and "sol_success" in df.columns:
-        df = df.loc[df["sol_success"].astype(bool)].reset_index(drop=True)
-    if verbose:
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    df.attrs["_inner_dims"] = inner_dims_all
+    if verbose and not df.empty:
         print_columns_overview(df, title="Columns kept")
     return df
 
@@ -524,20 +560,46 @@ def print_columns_overview(df: pd.DataFrame, *, title: str) -> None:
     rows = len(df)
     inner = (df.attrs or {}).get("_inner_dims", {})
     print()
-    print(f"{title:>18}   {'Rows':<8} {'Inner':<5} {'first 5 values'}")
+    print(f"{title:>18}   {'Rows':<8} {'Inner':<5} {'Stats (min/avg/max)':<32} {'preview'}")
     for c in df.columns:
         inn = int(inner.get(c, 1))
-        head = df[c].iloc[:5].tolist()
-        prev = ", ".join(_preview_cell(v) for v in head)
-        print(f"{c:>18} {rows:<8d} {inn:<5d} {prev}")
+        col = df[c]
+        # Scalar stats
+        if inn == 1 and col.dtype != object:
+            vals = pd.to_numeric(col, errors="coerce").to_numpy()
+            if np.isnan(vals).all():
+                stats = "min=nan, avg=nan, max=nan"
+            else:
+                stats = f"min={_fmt_scalar(np.nanmin(vals))}, avg={_fmt_scalar(np.nanmean(vals))}, max={_fmt_scalar(np.nanmax(vals))}"
+            preview = _fmt_scalar(col.iloc[0]) if rows else ""
+        else:
+            # Vector: use last element for stats; preview as [..., second_last, last]
+            last_vals = []
+            second_vals = []
+            for v in col:
+                arr = np.asarray(v)
+                if arr.size == 0:
+                    last_vals.append(np.nan); second_vals.append(np.nan)
+                else:
+                    last_vals.append(arr[-1])
+                    second_vals.append(arr[-2] if arr.size > 1 else arr[-1])
+            larr = pd.to_numeric(last_vals, errors="coerce")
+            if np.isnan(larr).all():
+                stats = "min=nan, avg=nan, max=nan"
+            else:
+                stats = f"min={_fmt_scalar(np.nanmin(larr))}, avg={_fmt_scalar(np.nanmean(larr))}, max={_fmt_scalar(np.nanmax(larr))}"
+            sec0 = second_vals[0] if rows else np.nan
+            last0 = last_vals[0] if rows else np.nan
+            preview = f"[..., {_fmt_scalar(sec0)}, {_fmt_scalar(last0)}]"
+        print(f"{c:>18} {rows:<8d} {inn:<5d} {stats:<32} {preview}")
 
 
 # -----------------------------------------------------------------------------
 # Registry wrapper (keep for plot label/unit compatibility)
 # -----------------------------------------------------------------------------
-class ComputedAwareRegistry:
-    def __init__(self, base, computed_meta: dict|None):
-        self._base = base; self._meta = computed_meta or {}
+class AdditionalAwareRegistry:
+    def __init__(self, base, additional_meta: dict|None):
+        self._base = base; self._meta = additional_meta or {}
     def get_param_label(self, name: str, *a, **k):
         m = self._meta.get(name)
         if m and m.get("symbol") and not k.get("prefer_base", False): return m["symbol"]
@@ -547,6 +609,77 @@ class ComputedAwareRegistry:
         if m and m.get("unit"): return m["unit"]
         return self._base.get_param_unit(name, *a, **k) if hasattr(self._base,"get_param_unit") else None
     def __getattr__(self, attr): return getattr(self._base, attr)
+
+
+@contextmanager
+def plot_style_context(show_titles: bool = True, font_scale: float | None = None):
+    """
+    Temporarily apply plotting style:
+      - Disable titles/supertitles when show_titles=False
+      - Scale common font rcParams when font_scale is provided
+    Restores original settings afterwards.
+    """
+    import matplotlib
+    import matplotlib.pyplot as plt  # noqa: F401
+
+    saved_rc: dict[str, Any] = {}
+    if font_scale is not None:
+        try:
+            scale = float(font_scale)
+        except Exception:
+            scale = None
+        if scale and scale > 0:
+            for key in (
+                "font.size",
+                "axes.titlesize",
+                "axes.labelsize",
+                "xtick.labelsize",
+                "ytick.labelsize",
+                "legend.fontsize",
+                "figure.titlesize",
+            ):
+                saved_rc[key] = matplotlib.rcParams.get(key)
+                val = saved_rc[key]
+                if isinstance(val, (int, float)):
+                    matplotlib.rcParams[key] = val * scale
+        # also scale tick padding/label padding so spacing grows with font size
+        saved_rc["xtick.major.pad"] = matplotlib.rcParams.get("xtick.major.pad")
+        saved_rc["ytick.major.pad"] = matplotlib.rcParams.get("ytick.major.pad")
+        saved_rc["axes.labelpad"] = matplotlib.rcParams.get("axes.labelpad")
+        if scale and scale > 0:
+            try:
+                matplotlib.rcParams["xtick.major.pad"] = float(saved_rc["xtick.major.pad"]) * scale
+                matplotlib.rcParams["ytick.major.pad"] = float(saved_rc["ytick.major.pad"]) * scale
+                matplotlib.rcParams["axes.labelpad"] = float(saved_rc["axes.labelpad"]) * scale
+            except Exception:
+                pass
+
+    saved_set_title = None
+    saved_suptitle = None
+    if not show_titles:
+        saved_set_title = matplotlib.axes.Axes.set_title
+        saved_suptitle = matplotlib.figure.Figure.suptitle
+
+        def _no_title(self, *args, **kwargs):
+            return None
+
+        def _no_suptitle(self, *args, **kwargs):
+            return None
+
+        matplotlib.axes.Axes.set_title = _no_title  # type: ignore
+        matplotlib.figure.Figure.suptitle = _no_suptitle  # type: ignore
+
+    try:
+        yield
+    finally:
+        if saved_set_title:
+            matplotlib.axes.Axes.set_title = saved_set_title  # type: ignore
+        if saved_suptitle:
+            matplotlib.figure.Figure.suptitle = saved_suptitle  # type: ignore
+        for key, val in saved_rc.items():
+            if val is None:
+                continue
+            matplotlib.rcParams[key] = val
 
 # colorscale kept for older plot modules
 def get_discrete_colorscale(n_chunks: int):
@@ -585,30 +718,36 @@ def collect_plot_settings(config: Dict[str, Any], args, targets: List[str], plot
         ys = strip.get("y_metrics", targets[:min(3,len(targets))])
         strip = {**strip, "y_metrics": ys}
         print(f"🔷 Strip plot metrics: {', '.join(ys)}")
-    return shap_interp, pdf_smooth, ml_pair, strip
+    style_cfg = plots.get("style", {}) or {}
+    show_titles = bool(style_cfg.get("show_titles", True))
+    font_scale = style_cfg.get("font_scale")
+    return shap_interp, pdf_smooth, ml_pair, strip, show_titles, font_scale
 
 def generate_plots_for_file(
     path: Path,
     *,
     targets: List[str],
     filters_exprs: List[str],
-    computed_map: Dict[str, str],
+    additional_map: Dict[str, str],
+    passthrough_vars: Set[str],
     plot_types: List[str],
     output_dir: Path,
-    computed_meta: Dict[str, Dict[str, str]] | None = None,
+    additional_meta: Dict[str, Dict[str, str]] | None = None,
     shap_interpolate: bool = False,
     pdf_smooth: bool = False,
     ml_pairwise_settings: Dict[str, Any] | None = None,
     strip_settings: Dict[str, Any] | None = None,
-    chunk_size: int = 500_000,
+    chunk_size: int | None = None,
     n_jobs: int = 1,
     batch_size: int = 100_000,
     downcast_float32: bool = False,
+    show_titles: bool = True,
+    font_scale: float | None = None,
 ) -> None:
-    # Registry (respect computed labels/units if provided)
+    # Registry (respect additional labels/units if provided)
     registry = get_registry()
-    if computed_meta:
-        registry = ComputedAwareRegistry(registry, computed_meta)
+    if additional_meta:
+        registry = AdditionalAwareRegistry(registry, additional_meta)
 
     print(f"\n📁 Processing: {path.name}")
 
@@ -632,7 +771,8 @@ def generate_plots_for_file(
         path,
         targets=targets,
         filters_exprs=filters_exprs,
-        computed_map=computed_map,
+        additional_map=additional_map,
+        passthrough_vars=passthrough_vars,
         chunk_size=chunk_size,
         downcast_float32=downcast_float32,
         verbose=True,
@@ -677,68 +817,69 @@ def generate_plots_for_file(
 
     inner_dims = (df.attrs or {}).get("_inner_dims", {})
 
-    for target in all_targets:
-        if target not in df.columns:
-            print(f"   ⚠️  Target '{target}' not present. Skipping.")
-            continue
+    with plot_style_context(show_titles=show_titles, font_scale=font_scale):
+        for target in all_targets:
+            if target not in df.columns:
+                print(f"   ⚠️  Target '{target}' not present. Skipping.")
+                continue
 
-        # scalar-only targets
-        if int(inner_dims.get(target, 1)) != 1:
-            print(f"   ⚠️  Target '{target}' is vector-valued. Skipping scalar plots.")
-            continue
+            # scalar-only targets
+            if int(inner_dims.get(target, 1)) != 1:
+                print(f"   ⚠️  Target '{target}' is vector-valued. Skipping scalar plots.")
+                continue
 
-        # Success-only frame for quartiles: finite target
-        y = pd.to_numeric(df[target], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        df_t = df.loc[y.notna()]
-        if df_t.empty:
-            print(f"   ⚠️  No finite data for '{target}'. Skipping.")
-            continue
+            # Success-only frame for quartiles: finite target
+            y = pd.to_numeric(df[target], errors="coerce").replace([np.inf, -np.inf], np.nan)
+            df_t = df.loc[y.notna()]
+            if df_t.empty:
+                print(f"   ⚠️  No finite data for '{target}'. Skipping.")
+                continue
 
-        inputs = [c for c in df_t.columns if c != target]
+            inputs = [c for c in df_t.columns if c != target]
 
-        # Target unit
-        if computed_meta and computed_meta.get(target, {}).get("unit"):
-            tunit = computed_meta[target]["unit"]
-        elif isinstance(PARAMETER_SCHEMA.get(target), dict):
-            tunit = PARAMETER_SCHEMA[target].get("unit", "") or ""
-        else:
-            tunit = ""
+            # Target unit
+            if additional_meta and additional_meta.get(target, {}).get("unit"):
+                tunit = additional_meta[target]["unit"]
+            elif isinstance(PARAMETER_SCHEMA.get(target), dict):
+                tunit = PARAMETER_SCHEMA[target].get("unit", "") or ""
+            else:
+                tunit = ""
 
-        common = dict(
-            df=df_t,
-            df_filtered=df_t,
-            target=target,
-            inputs=inputs,
-            target_unit=tunit,
-            output_dir=output_dir,
-            file_type=file_type,
-            registry=registry,
-            n_jobs=n_jobs,
-            batch_size=batch_size,
-            pdf_smooth=pdf_smooth,
-            shap_interpolate=shap_interpolate,
-            ml_pairwise_settings=ml_pairwise_settings or {},
-            strip_settings=strip_settings or {},
-            plot_name_prefix=path.stem,
-        )
+            common = dict(
+                df=df_t,
+                df_filtered=df_t,
+                target=target,
+                inputs=inputs,
+                target_unit=tunit,
+                output_dir=output_dir,
+                file_type=file_type,
+                registry=registry,
+                n_jobs=n_jobs,
+                batch_size=batch_size,
+                pdf_smooth=pdf_smooth,
+                shap_interpolate=shap_interpolate,
+                ml_pairwise_settings=ml_pairwise_settings or {},
+                strip_settings=strip_settings or {},
+                plot_name_prefix=path.stem,
+            )
 
-        
-        for key, mod, fn in pipeline:
-            if key in plot_types:
-                if key == "quartprob":
-                    # pass the FULL df (includes failures) so the plotter can compute FAILED per-bin
-                    _call(mod, fn, df=df,           # << full DF here
-                        target=target,
-                        inputs=inputs,
-                        target_unit=tunit,
-                        output_dir=output_dir,
-                        file_type=file_type,
-                        registry=registry,
-                        plot_name_prefix=path.stem,
-                        COUNT_FAILED=True, AVG_POINTS=10, PLOT_STYLE="line")
-                else:
-                    _call(mod, fn, **common)
+            
+            for key, mod, fn in pipeline:
+                if key in plot_types:
+                    if key == "quartprob":
+                        # pass the FULL df (includes failures) so the plotter can compute FAILED per-bin
+                        _call(mod, fn, df=df,           # << full DF here
+                            target=target,
+                            inputs=inputs,
+                            target_unit=tunit,
+                            output_dir=output_dir,
+                            file_type=file_type,
+                            registry=registry,
+                            plot_name_prefix=path.stem,
+                            COUNT_FAILED=True, AVG_POINTS=10, PLOT_STYLE="line")
+                    else:
+                        _call(mod, fn, **common)
 
-        gc.collect()
+            gc.collect()
 
     print("   🧹 Memory cleaned for next file")

@@ -30,11 +30,11 @@ files:
 #   - "20251007_153020_parametric_lump"
 
 # ============================================================================
-# COMPUTED VARIABLES
+# ADDITIONAL VARIABLES
 # ============================================================================
-# Additional variables to compute from existing metrics for analysis and plotting.
+# Additional variables to compute or passthrough from existing metrics for analysis and plotting.
 # These can be used as target variables or in plots.
-computed_variables:
+additional_variables:
   # K:
   #   expr: unrealized_profits / P_DT_eq
   #   unit: "$/W"            # optional override
@@ -43,6 +43,11 @@ computed_variables:
     expr: unrealized_profits / (capacity_factor*(eta_th*P_DT_eq - P_aux_DT_eq))
     unit: "$/W"            # optional override
     symbol: r"$K_{el}$"         # optional override
+
+  TBE_percent:
+    expr: TBE*V_plasma*100 # BE CAREFUL! THIS IS USED WITH AN OLDER VERSION OF THE CODE
+    unit: "%"            # optional override
+    symbol: "TBE"
   # c_T:
   #   expr: unrealized_profits / I_target
   #   unit: "$/kg"
@@ -59,16 +64,12 @@ computed_variables:
 # Common options:
 #   - t_startup: Time to reach DT operation
 #   - unrealized_profits: Economic cost of DD startup
-#   - Q_DD: Energy gain factor during DD phase
-#   - Q_DT_eq: Equivalent DT energy gain factor
-#   - E_lost: Lost energy during startup
-
 target_variables:
   #- c_T
   - K_el
-  - K
-  - unrealized_profits
-  - t_startup
+  # - K
+  # - unrealized_profits
+  # - t_startup
 
 # ============================================================================
 # FILTERS
@@ -87,6 +88,11 @@ filters:
 # Specify which types of plots to generate
 
 plots:
+
+  style:
+    show_titles: false   # hide all axes/suptitles
+    font_scale: 1.5      # enlarge all common text sizes
+
   # Generate all plot types
   generate_all: false
   
@@ -239,3 +245,4 @@ output:
 
 runtime:
   downcast_float32: true
+  chunk_size: 20000

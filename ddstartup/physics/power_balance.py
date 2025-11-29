@@ -284,7 +284,7 @@ def compute_tseeded_powers_and_energies(
     
     # TBE calculation with safe division
     with np.errstate(divide='ignore', invalid='ignore'):
-        TBE_raw = (n_D * n_T * sigmav_DT) / inj_rate
+        TBE_raw = (n_D * n_T * sigmav_DT * V_plasma) / inj_rate
     
     TBE = np.where(
         (N_st > N_st_min) & (inj_rate > 0),

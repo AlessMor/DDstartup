@@ -8,6 +8,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -23,9 +24,11 @@ except Exception:
 # ---- robust “per Joule” detector (matches 1/J, J^-1, per J, etc.; case-insensitive) ----
 PER_J_RE = re.compile(r'(?i)(?:^|[^a-z])(?:1\s*/\s*j|j\s*(?:\^|-)?\s*-?1|per\s*j)(?:$|[^a-z])')
 
+
 def _norm_unit(u: str) -> str:
     """Normalize a unit string for matching (lower; map 'joule'->'j'; strip brackets/odd chars)."""
     return re.sub(r"[^a-z0-9/^\-\s]", "", str(u or "").lower().replace("joule", "j"))
+
 
 def _clean_symbol_label(s: str | None) -> str:
     """
@@ -40,14 +43,15 @@ def _clean_symbol_label(s: str | None) -> str:
     m = re.fullmatch(r'(?is)\s*(?:ur|ru|r|u)?\s*([\'"])(.*)\1\s*', s)
     return m.group(2) if m else s
 
+
 def _strip_trailing_unit(label: str) -> str:
     """Remove a trailing ' [ ... ]' unit suffix from a label if present."""
     return re.sub(r"\s*\[[^\]]*\]\s*$", "", label or "")
 
+
 def _escape_dollars(s: str | None) -> str:
     """Escape $ so units like $/kWh don't break mathtext parsing."""
     return "" if not s else s.replace("$", r"\$")
-
 
 def quartile_probability_plot(
     *,
@@ -65,10 +69,8 @@ def quartile_probability_plot(
     COUNT_FAILED: bool = True,             # add grey series P(FAILED | x)
     PLOT_STYLE: str = "line",              # "line" | "bar"
     min_per_bin: int = 1,
-    AVG_POINTS: int = 10,                  # for continuous params
-    discrete_unique_threshold: int = 128,  # treat as exact-value plot if <= this
-    FORCE_DISCRETE: set[str] = frozenset({"I_target"}),
-    XTICK_CAP: int = 10,                   # show all discrete ticks up to this many
+    MAX_POINTS: int = 12,                  # target number of x points to display
+    RESCALE: bool = True,                  # auto-rescale y-axis per subplot based on data spread
     **_,
 ):
     if df is None or len(df) == 0:
@@ -128,16 +130,27 @@ def quartile_probability_plot(
 
     # ---------- colors & legend order ----------
     quart_colors = ["#2563EB", "#059669", "#D97706", "#DC2626"][:kq]  # Q1..Q4
-    cat_colors = {qlabels[i]: quart_colors[i] for i in range(kq)}
     FAILED_COLOR, FAILED_ALPHA = "#808080", 0.3
+
     if PLOT_STYLE == "bar":
-        legend_proxies = [Patch(facecolor=cat_colors[ql], edgecolor="none", label=ql) for ql in qlabels]
-        if COUNT_FAILED:
-            legend_proxies.append(Patch(facecolor=FAILED_COLOR, edgecolor="none", alpha=FAILED_ALPHA, label="FAILED"))
+        quart_legend_proxies = [
+            Patch(facecolor=quart_colors[i], edgecolor="none", label=qlabels[i])
+            for i in range(kq)
+        ]
+        fail_legend_proxy = Patch(
+            facecolor=FAILED_COLOR, edgecolor="none", alpha=FAILED_ALPHA, label="FAILED"
+        )
     else:
-        legend_proxies = [Line2D([0],[0], color=cat_colors[ql], marker="o", linewidth=1.5, label=ql) for ql in qlabels]
-        if COUNT_FAILED:
-            legend_proxies.append(Line2D([0],[0], color=FAILED_COLOR, alpha=FAILED_ALPHA, marker="o", linewidth=1.5, label="FAILED"))
+        quart_legend_proxies = [
+            Line2D([0], [0], color=quart_colors[i], marker="o", linewidth=1.5, label=qlabels[i])
+            for i in range(kq)
+        ]
+        fail_legend_proxy = Line2D(
+            [0], [0], color=FAILED_COLOR, alpha=FAILED_ALPHA, marker="o", linewidth=1.5, label="FAILED"
+        )
+
+    # track if FAILED ever actually appears
+    any_failed_plotted = False
 
     def _fmt(v: float) -> str:
         if not np.isfinite(v) or v == 0:
@@ -175,12 +188,16 @@ def quartile_probability_plot(
     n = len(varying)
     ncols = min(3, max(1, n))
     nrows = int(np.ceil(n / ncols))
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(4.2 * ncols, 3.0 * nrows + 2.0))
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(5.5 * ncols, 4.0 * nrows + 1.5),
+    )
     axes = np.atleast_1d(axes).ravel()
 
     fail_mask = (~sol) | (~t.notna())
     csv_rows = []
-    rpow = 9  # rounding precision for discrete grouping
+    rpow = 9  # rounding precision for discrete grouping (kept for future use)
 
     for i, param in enumerate(varying):
         ax = axes[i]
@@ -216,147 +233,227 @@ def quartile_probability_plot(
         finite_all = np.isfinite(x_all)
         xa = x_all[finite_all]
         if xa.size == 0:
-            ax.set_visible(False); continue
+            ax.set_visible(False)
+            continue
 
         # clean label to avoid trailing "[...]" duplication and keep mathtext
         p_label = _strip_trailing_unit(label0)
         p_unit  = _escape_dollars(unit_override or unit0)  # ESCAPE $ IN UNIT ONLY
 
-        # ---------- discrete vs continuous ----------
+        # ---------- choose representative x positions ----------
         xr = np.round(xa, rpow)
-        levels = np.unique(xr)
-        nlevels = levels.size
-        discrete_mode = (nlevels <= discrete_unique_threshold) or (nlevels <= 256 and nlevels / xa.size <= 1e-3)
-        if param in FORCE_DISCRETE:
-            discrete_mode = True
+        _levels = np.unique(xr)  # currently unused but kept for possible future discrete logic
 
-        if discrete_mode:
-            # exact levels
-            levels = np.sort(levels)
-            idx_map = {v: j for j, v in enumerate(levels)}
-
-            xr_all = np.round(x_all[finite_all], rpow)
-            idx_all = np.fromiter((idx_map[v] for v in xr_all), dtype=np.int64, count=xr_all.size)
-            totals = np.bincount(idx_all, minlength=len(levels))
-
-            if COUNT_FAILED:
-                idx_fail = idx_all[fail_mask.values[finite_all]]
-                fails = np.bincount(idx_fail, minlength=len(levels))
-            else:
-                fails = np.zeros(len(levels), dtype=np.int64)
-
-            finite_succ = np.isfinite(x_succ)
-            qr = np.round(x_succ[finite_succ], rpow)
-            valid = np.isin(qr, levels)
-            idx_s = np.fromiter((idx_map[v] for v in qr[valid]), dtype=np.int64, count=int(valid.sum()))
-            q_s = qcodes[finite_succ][valid]
-
-            counts_q = np.zeros((len(levels), kq), dtype=np.int64)
-            for q in range(kq):
-                sel = (q_s == q)
-                if sel.any():
-                    np.add.at(counts_q[:, q], idx_s[sel], 1)
-
-            keep = totals >= max(1, min_per_bin)
-            if not np.any(keep):
-                ax.set_visible(False); continue
-
-            x_pos   = levels[keep]   # exact values (already converted if needed)
-            totals  = totals[keep]
-            counts_q = counts_q[keep, :]
-            fails   = fails[keep] if COUNT_FAILED else None
-
+        uniq_vals = np.sort(np.unique(x_all[np.isfinite(x_all)]))
+        if uniq_vals.size == 0:
+            ax.set_visible(False)
+            continue
+        if uniq_vals.size <= MAX_POINTS:
+            x_pos = uniq_vals
         else:
-            # continuous: even-width bins on ALL rows; x plotted at per-bin mean
-            vmin, vmax = float(np.min(xa)), float(np.max(xa))
-            if vmin == vmax:
-                eps = (abs(vmin) + 1.0) * 1e-12
-                edges = np.array([vmin - eps, vmax + eps], dtype=np.float64)
-            else:
-                edges = np.linspace(vmin, vmax, AVG_POINTS + 1, dtype=np.float64)
-            nb = edges.size - 1
+            targets = np.linspace(float(uniq_vals[0]), float(uniq_vals[-1]), MAX_POINTS)
+            mapped = []
+            for tval in targets:
+                idx = np.searchsorted(uniq_vals, tval)
+                candidates = []
+                if idx < uniq_vals.size:
+                    candidates.append(uniq_vals[idx])
+                if idx > 0:
+                    candidates.append(uniq_vals[idx - 1])
+                mapped.append(min(candidates, key=lambda v: abs(v - tval)) if candidates else tval)
+            x_pos = np.array(sorted(set(mapped)), dtype=float)
 
-            idx_all = np.digitize(xa, edges, right=True) - 1
-            idx_all[idx_all < 0] = 0; idx_all[idx_all >= nb] = nb - 1
-            totals = np.bincount(idx_all, minlength=nb)
+        # bins at midpoints between chosen values
+        if x_pos.size == 1:
+            edges = np.array([x_pos[0] - 1, x_pos[0] + 1], dtype=float)
+        else:
+            mids = 0.5 * (x_pos[:-1] + x_pos[1:])
+            edges = np.concatenate(([-np.inf], mids, [np.inf]))
 
-            sumx = np.bincount(idx_all, weights=xa, minlength=nb)
-            means = np.divide(sumx, totals, out=np.full(nb, np.nan, dtype=np.float64), where=totals > 0)
+        idx_all = np.digitize(xa, edges, right=True) - 1
+        idx_all[idx_all < 0] = 0
+        idx_all[idx_all >= x_pos.size] = x_pos.size - 1
+        totals = np.bincount(idx_all, minlength=x_pos.size)
 
-            if COUNT_FAILED:
-                idx_fail = idx_all[fail_mask.values[finite_all]]
-                fails = np.bincount(idx_fail, minlength=nb)
-            else:
-                fails = np.zeros(nb, dtype=np.int64)
+        if COUNT_FAILED:
+            idx_fail = idx_all[fail_mask.values[finite_all]]
+            fails = np.bincount(idx_fail, minlength=x_pos.size)
+        else:
+            fails = np.zeros(x_pos.size, dtype=np.int64)
 
-            finite_succ = np.isfinite(x_succ)
-            xs = x_succ[finite_succ]
-            qs = qcodes[finite_succ].astype(np.int32, copy=False)
-            idx_s = np.digitize(xs, edges, right=True) - 1
-            idx_s[idx_s < 0] = 0; idx_s[idx_s >= nb] = nb - 1
+        finite_succ = np.isfinite(x_succ)
+        xs = x_succ[finite_succ]
+        qs = qcodes[finite_succ].astype(np.int32, copy=False)
+        idx_s = np.digitize(xs, edges, right=True) - 1
+        idx_s[idx_s < 0] = 0
+        idx_s[idx_s >= x_pos.size] = x_pos.size - 1
 
-            counts_q = np.zeros((nb, kq), dtype=np.int64)
-            for q in range(kq):
-                sel = (qs == q)
-                if sel.any():
-                    np.add.at(counts_q[:, q], idx_s[sel], 1)
+        counts_q = np.zeros((x_pos.size, kq), dtype=np.int64)
+        for q in range(kq):
+            sel = (qs == q)
+            if sel.any():
+                np.add.at(counts_q[:, q], idx_s[sel], 1)
 
-            keep = totals >= max(1, min_per_bin)
-            if not np.any(keep):
-                ax.set_visible(False); continue
+        keep = totals >= max(1, min_per_bin)
+        if not np.any(keep):
+            keep = np.ones_like(totals, dtype=bool)
 
-            x_pos   = means[keep]
-            totals  = totals[keep]
-            counts_q = counts_q[keep, :]
-            fails   = fails[keep] if COUNT_FAILED else None
+        x_pos   = x_pos[keep]
+        totals  = totals[keep]
+        counts_q = counts_q[keep, :]
+        fails   = fails[keep] if COUNT_FAILED else None
 
-        # ---------- probabilities ----------
+        # ---------- probabilities (per parameter) ----------
         denom = totals.astype(np.float64)
         denom[denom == 0] = np.nan
         probs_q = np.nan_to_num(counts_q / denom[:, None], nan=0.0)
-        prob_failed = (np.nan_to_num(fails / denom, nan=0.0) if (COUNT_FAILED and fails is not None) else None)
+        prob_failed = (
+            np.nan_to_num(fails / denom, nan=0.0)
+            if (COUNT_FAILED and fails is not None)
+            else None
+        )
+        include_failed = COUNT_FAILED and (prob_failed is not None) and np.nanmax(prob_failed) > 0.0
+        if not include_failed:
+            prob_failed = None
+        else:
+            any_failed_plotted = True
 
-        # ---------- draw ----------
+        # Decide plotting positions: direct when few points, normalized otherwise
+        direct_plot = x_pos.size <= MAX_POINTS
+        if direct_plot:
+            x_plot = x_pos
+        else:
+            x_plot = np.linspace(0.0, 1.0, x_pos.size)
+
+        # ---------- draw (per parameter) ----------
         if PLOT_STYLE == "bar":
-            xpos = np.arange(x_pos.size)
+            xpos = x_plot
             bottom = np.zeros(x_pos.size, float)
+            width = (x_plot[1] - x_plot[0]) * 0.8 if x_pos.size > 1 else 0.5
             for q, lab in enumerate(qlabels):
-                ax.bar(xpos, probs_q[:, q], bottom=bottom, width=0.9, align="center",
-                       edgecolor="none", color=cat_colors[lab], label=lab)
+                ax.bar(
+                    xpos,
+                    probs_q[:, q],
+                    bottom=bottom,
+                    width=width,
+                    align="center",
+                    edgecolor="none",
+                    color=quart_colors[q],
+                    label=lab,
+                )
                 bottom += probs_q[:, q]
-            if COUNT_FAILED and prob_failed is not None:
-                ax.bar(xpos, prob_failed, bottom=bottom, width=0.9, align="center",
-                       edgecolor="none", color=FAILED_COLOR, alpha=FAILED_ALPHA, label="FAILED")
+            if include_failed and prob_failed is not None:
+                ax.bar(
+                    xpos,
+                    prob_failed,
+                    bottom=bottom,
+                    width=width,
+                    align="center",
+                    edgecolor="none",
+                    color=FAILED_COLOR,
+                    alpha=FAILED_ALPHA,
+                    label="FAILED",
+                )
             tick_pos = xpos
             tick_labels = [_fmt(v) for v in x_pos]
         else:
             for q, lab in enumerate(qlabels):
-                ax.plot(x_pos, probs_q[:, q], marker="o", linestyle="-", linewidth=1.5, markersize=4,
-                        color=cat_colors[lab], label=lab)
-            if COUNT_FAILED and prob_failed is not None:
-                ax.plot(x_pos, prob_failed, marker="o", linestyle="-", linewidth=1.5, markersize=4,
-                        color=FAILED_COLOR, alpha=FAILED_ALPHA, label="FAILED")
-            tick_pos = x_pos
+                ax.plot(
+                    x_plot,
+                    probs_q[:, q],
+                    marker="o",
+                    linestyle="-",
+                    linewidth=1.5,
+                    markersize=4,
+                    color=quart_colors[q],
+                    label=lab,
+                )
+            if include_failed and prob_failed is not None:
+                ax.plot(
+                    x_plot,
+                    prob_failed,
+                    marker="o",
+                    linestyle="-",
+                    linewidth=1.5,
+                    markersize=4,
+                    color=FAILED_COLOR,
+                    alpha=FAILED_ALPHA,
+                    label="FAILED",
+                )
+            tick_pos = x_plot
             tick_labels = [_fmt(v) for v in x_pos]
 
-        # ticks: show all discrete ticks if <= XTICK_CAP; otherwise thin
-        if discrete_mode and len(tick_labels) <= XTICK_CAP:
-            pass  # keep all
+        # ticks: direct scale for few points, normalized otherwise
+        if direct_plot:
+            xmin, xmax = float(np.min(x_pos)), float(np.max(x_pos))
+            if xmax == xmin:
+                pad = (abs(xmin) + 1.0) * 1e-3
+                xmin -= pad; xmax += pad
+            else:
+                pad = (xmax - xmin) * 0.05
+                xmin -= pad; xmax += pad
+            ax.set_xlim(xmin, xmax)
+            ax.set_xticks(x_pos)
+
+            # scientific formatting with exponent only if |order| >= 2
+            xformatter = mticker.ScalarFormatter(useMathText=True)
+            xformatter.set_scientific(True)
+            xformatter.set_powerlimits((-2, 2))  # no sci for ~10^1 or ~10^-1
+            ax.xaxis.set_major_formatter(xformatter)
         else:
-            cap = XTICK_CAP if discrete_mode else 10
-            if len(tick_labels) > cap:
-                step = int(np.ceil(len(tick_labels) / cap))
-                tick_labels = [lbl if (j % step == 0) else "" for j, lbl in enumerate(tick_labels)]
+            ax.set_xlim(-0.05, 1.05)
+            ax.set_xticks(tick_pos)
+            ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=12)
 
-        ax.set_xticks(tick_pos)
-        ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
-        ax.set_ylim(0, 1.0)
-        ax.set_ylabel("Probability", fontsize=9)
+        for lbl in ax.get_xticklabels():
+            lbl.set_rotation(45)
+            lbl.set_ha("right")
+            lbl.set_fontsize(12)
 
-        # title: cleaned mathtext label + our (escaped) unit
-        ax.set_title(p_label if not p_unit else f"{p_label} [{p_unit}]", fontsize=10)
+        if RESCALE:
+            vals = [probs_q]
+            if prob_failed is not None:
+                vals.append(prob_failed)
+            vals = np.concatenate([v.ravel() for v in vals if v is not None])
+            if vals.size == 0 or not np.isfinite(vals).any():
+                y_min, y_max = 0.0, 1.0
+            else:
+                min_prob = float(np.nanmin(vals))
+                max_prob = float(np.nanmax(vals))
+                spread = max_prob - min_prob
+                pad = spread * 0.1
+                if pad == 0:
+                    pad = max_prob * 0.05 if max_prob > 0 else 0.05
+                y_min = max(min_prob - pad, 0.0)
+                y_max = max_prob + pad
+                if y_max <= y_min:
+                    y_min, y_max = 0.0, 1.0
+            ax.set_ylim(y_min, y_max)
+        else:
+            ax.set_ylim(0, 1.0)
+        ax.set_ylabel("Probability", fontsize=11)
 
-        # CSV
+        # y-axis scientific formatting (if needed)
+        yformatter = mticker.ScalarFormatter(useMathText=True)
+        yformatter.set_scientific(True)
+        yformatter.set_powerlimits((-3, 3))
+        ax.yaxis.set_major_formatter(yformatter)
+
+        # per-subplot label: tiny legend below the x-axis instead of title
+        label_text = p_label if not p_unit else f"{p_label} [{p_unit}]"
+        dummy = [Line2D([], [], color="none", marker="", linestyle="")]
+        ax.legend(
+            dummy,
+            [label_text],
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.25),
+            frameon=False,
+            handlelength=0,
+            handletextpad=0.0,
+            fontsize=11,
+        )
+
+        # CSV rows for this parameter
         for j in range(x_pos.size):
             row = {
                 "parameter": param,
@@ -381,12 +478,40 @@ def quartile_probability_plot(
     title = f"P(quartile | parameter value) wrt {t_label if not t_unit else f'{t_label} [{t_unit}]'}"
     if file_type:
         title += f" • {file_type}"
-    fig.suptitle(title, fontsize=14)
+    has_title = bool(title.strip())
+    if has_title:
+        fig.suptitle(title, fontsize=14)
 
-    legend_labels = qlabels + (["FAILED"] if COUNT_FAILED else [])
-    fig.legend(legend_proxies, legend_labels, loc="lower center",
-               ncol=min(5, len(legend_labels)), bbox_to_anchor=(0.5, 0.02))
-    fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    # ---------- global legend (omit FAILED if never plotted) ----------
+    legend_labels = list(qlabels)
+    legend_proxies = list(quart_legend_proxies)
+    if any_failed_plotted:
+        legend_labels.append("FAILED")
+        legend_proxies.append(fail_legend_proxy)
+
+    legend_title = t_label if not t_unit else f"{t_label} [{t_unit}]"
+
+    # layout: no top blank if no title; legend in bottom band with less extra white space
+    top = 0.90 if has_title else 0.99   # almost no blank when no title
+    bottom = 0.20                       # axes region bottom
+    left = 0.08
+    right = 0.98
+
+    # legend centered in the band below axes; small gap to bottom
+    legend_y = 0.06
+
+    fig.legend(
+        legend_proxies,
+        legend_labels,
+        loc="lower center",
+        ncol=max(2, (len(legend_labels) + 1) // 2),
+        bbox_to_anchor=(0.5, legend_y),
+        title=legend_title,
+        title_fontsize=13,
+    )
+
+    fig.tight_layout(rect=[left, bottom, right, top])
+    fig.subplots_adjust(wspace=0.4, hspace=0.6, top=top, bottom=bottom, left=left, right=right)
 
     out_png = outdir / f"{stem}__{target}.png"
     fig.savefig(out_png, dpi=150)

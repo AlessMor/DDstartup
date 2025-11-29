@@ -472,21 +472,60 @@ def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List
     return uniq, latest_folder
 
 
-def h5_to_df_core(
+def _row_nbytes(ds: h5py.Dataset) -> int:
+    """Bytes occupied by a single row of a dataset (all trailing dims)."""
+    mult = 1
+    if ds.ndim > 1:
+        mult = int(np.prod(ds.shape[1:], dtype=int))
+    return int(ds.dtype.itemsize * mult)
+
+
+def _choose_chunk_rows(f: h5py.File, read_names: List[str], user_chunk_size: int | None = None, target_mb: int = 128) -> int:
+    """Heuristic for chunk rows: honor user value, else aim for ~target_mb and align with HDF5 chunking."""
+    if user_chunk_size is not None and user_chunk_size > 0:
+        return int(user_chunk_size)
+
+    total_row_bytes = 0
+    chunk_axis_candidates = []
+    for name in read_names:
+        ds = f[name]
+        total_row_bytes += _row_nbytes(ds)
+        if ds.chunks and len(ds.chunks) >= 1 and ds.chunks[0]:
+            chunk_axis_candidates.append(int(ds.chunks[0]))
+
+    if total_row_bytes <= 0:
+        return user_chunk_size or 1
+
+    target_bytes = int(target_mb * 1024 * 1024)
+    est_rows = max(1, target_bytes // total_row_bytes)
+
+    # Align to smallest chunk size on axis 0 if available
+    if chunk_axis_candidates:
+        align = min(chunk_axis_candidates)
+        if est_rows < align:
+            est_rows = align
+        else:
+            est_rows = max(align, (est_rows // align) * align)
+
+    return int(est_rows)
+
+
+def stream_h5_to_df(
     h5_path: Path,
     *,
     columns: List[str] | None = None,   # which datasets to read (default: all present)
-    chunk_size: int = 500_000,
+    chunk_size: int | None = None,
     downcast_float32: bool = False,
     verbose: bool = True,
-) -> pd.DataFrame:
+):
     """
-    Stream an HDF5 file to a DataFrame, preserving 1D vectors as per-row ndarrays.
-    No computed variables, no filters. Pure I/O.
+    Generator that streams an HDF5 file into DataFrame chunks, preserving 1D vectors as per-row ndarrays.
     """
     def _to2d(a: np.ndarray) -> np.ndarray:
-        if a.ndim == 1: return a[:, None]
-        if a.ndim == 2: return a
+        if a.ndim == 1:
+            return a[:, None]
+        if a.ndim == 2:
+            return a
         return a.reshape(a.shape[0], int(np.prod(a.shape[1:], dtype=int)))
 
     def _append_col(builder: dict, name: str, a2d: np.ndarray, downcast_f32: bool) -> int:
@@ -508,9 +547,6 @@ def h5_to_df_core(
             builder[name] = [a2d[i].copy() for i in range(a2d.shape[0])]
             return int(a2d.shape[1])
 
-    parts: list[pd.DataFrame] = []
-    inner_dims: dict[str, int] = {}
-
     with h5py.File(h5_path, "r") as f:
         # Which datasets to read
         if columns is None:
@@ -519,27 +555,58 @@ def h5_to_df_core(
             read_names = [k for k in columns if k in f]  # intersect with actual file contents
 
         # Determine row count
-        n = next(
-            (f[k].shape[0] for k in f.keys() if isinstance(f[k], h5py.Dataset) and f[k].ndim >= 1),
-            0
-        )
+        n = f[read_names[0]].shape[0] if read_names else 0
+        chunk_rows = _choose_chunk_rows(f, read_names, user_chunk_size=chunk_size)
         if verbose:
             scal = sum(1 for k in read_names if f[k].ndim == 1)
             vec  = sum(1 for k in read_names if f[k].ndim > 1)
-            print(f"   Loading data (core), chunk_size={chunk_size} ...")
-            print(f"   Loading chunks of {chunk_size:,} rows; will read {scal} scalar and {vec} vector datasets.")
+            print(f"   Loading data (core), chunk_size={chunk_rows} ...")
+            print(f"   Loading chunks of {chunk_rows:,} rows; will read {scal} scalar and {vec} vector datasets.")
 
-        for start in tqdm(range(0, n, chunk_size), desc="   Loading chunks", unit="chunk"):
-            end = min(start + chunk_size, n)
+        for start in tqdm(range(0, n, chunk_rows), desc="   Loading chunks", unit="chunk"):
+            end = min(start + chunk_rows, n)
             coldict: dict[str, Any] = {}
+            inner_dims: dict[str, int] = {}
 
             for name in read_names:
-                arr = f[name][start:end]
-                a2d = _to2d(np.asarray(arr))
+                ds = f[name]
+                dest_shape = (end - start, *ds.shape[1:])
+                buf = np.empty(dest_shape, dtype=ds.dtype)
+                # Copy avoidance: read directly into buffer
+                ds.read_direct(buf, source_sel=np.s_[start:end], dest_sel=np.s_[: end - start])
+                a2d = _to2d(np.asarray(buf))
                 inn = _append_col(coldict, name, a2d, downcast_float32)
                 inner_dims.setdefault(name, inn)
 
-            parts.append(pd.DataFrame(coldict))
+            df_chunk = pd.DataFrame(coldict)
+            df_chunk.attrs["_inner_dims"] = inner_dims
+            yield df_chunk
+
+
+def h5_to_df_core(
+    h5_path: Path,
+    *,
+    columns: List[str] | None = None,   # which datasets to read (default: all present)
+    chunk_size: int | None = 500_000,
+    downcast_float32: bool = False,
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Stream an HDF5 file to a DataFrame, preserving 1D vectors as per-row ndarrays.
+    No computed variables, no filters. Pure I/O.
+    """
+    parts: list[pd.DataFrame] = []
+    inner_dims: dict[str, int] = {}
+
+    for df_chunk in stream_h5_to_df(
+        h5_path,
+        columns=columns,
+        chunk_size=chunk_size,
+        downcast_float32=downcast_float32,
+        verbose=verbose,
+    ):
+        inner_dims.update(df_chunk.attrs.get("_inner_dims", {}))
+        parts.append(df_chunk)
 
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.attrs["_inner_dims"] = inner_dims

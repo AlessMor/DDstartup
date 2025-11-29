@@ -21,7 +21,7 @@ from ddstartup.postprocessing.postprocess_functions import (
     load_config_from_args,
     apply_cli_overrides,
     resolve_file_paths,
-    parse_filters_and_computed,
+    parse_filters_and_additional,
     collect_plot_settings,
     generate_plots_for_file,
 )
@@ -76,8 +76,8 @@ def main() -> None:
     if DEBUG: print(file_paths)
     
     # Step 2: Parse filters + computed
-    filters_exprs, computed_map, computed_meta = parse_filters_and_computed(config)
-    if DEBUG: print("🧾 Filters and computed variables:"), pprint({"filters_exprs": filters_exprs, "computed_map": computed_map, "computed_meta": computed_meta,})
+    filters_exprs, additional_map, additional_meta, passthrough_vars = parse_filters_and_additional(config)
+    if DEBUG: print("🧾 Filters and additional variables:"), pprint({"filters_exprs": filters_exprs, "additional_map": additional_map, "additional_meta": additional_meta, "passthrough": passthrough_vars,})
     
     # Step 3: Targets settings
     targets = list(config.get("target_variables", ["unrealized_profits", "t_startup"]))
@@ -91,7 +91,7 @@ def main() -> None:
         plot_types = [k for k in ["kde","parcoords","pdf","importance","kmeans","contour","shap","ml_pairwise","strip", "quartprob"] if plots_cfg.get(k, False)]
     print(f"\n📊 Plot types: {', '.join(plot_types)}")
     if DEBUG: print(f"📊 Plot types to generate: {plot_types}")
-    shap_interpolate, pdf_smooth, ml_pairwise_settings, strip_settings = collect_plot_settings(config, args, targets, plot_types)
+    shap_interpolate, pdf_smooth, ml_pairwise_settings, strip_settings, show_titles, font_scale = collect_plot_settings(config, args, targets, plot_types)
     
     # Step 5: Output directory
     out_spec = config.get("output", "default")
@@ -139,7 +139,11 @@ def main() -> None:
 
     # Step 6: Per-file plotting
     for path in file_paths:
-        chunk_size = _as_int(rt_cfg.get("chunk_size")) or _h5_int(path, "chunk_size") or 500_000
+        chunk_size = _as_int(rt_cfg.get("chunk_size"))
+        if chunk_size in (None, 0):
+            chunk_size = _h5_int(path, "chunk_size")
+        chunk_size = None if chunk_size in (None, 0) else chunk_size
+
         n_jobs     = _as_int(rt_cfg.get("n_jobs"))     or _h5_int(path, "n_jobs")     or 1
         batch_size = _as_int(rt_cfg.get("batch_size")) or _h5_int(path, "batch_size") or 100_000
         downcast_float32 = bool(rt_cfg.get("downcast_float32", False))
@@ -153,8 +157,9 @@ def main() -> None:
             path,
             targets=targets,
             filters_exprs=filters_exprs,
-            computed_map=computed_map,
-            computed_meta=computed_meta,
+            additional_map=additional_map,
+            passthrough_vars=passthrough_vars,
+            additional_meta=additional_meta,
             plot_types=plot_types,
             output_dir=output_dir,
             shap_interpolate=shap_interpolate,
@@ -165,6 +170,8 @@ def main() -> None:
             n_jobs=n_jobs,
             batch_size=batch_size,
             downcast_float32=downcast_float32,
+            show_titles=show_titles,
+            font_scale=font_scale,
         )
 
     print(f"\n{'='*80}")
