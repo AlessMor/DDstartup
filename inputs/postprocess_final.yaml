@@ -20,7 +20,7 @@
 
 files: 
 - 'test_parametric_T_seeded'  # Folder name (relative to outputs/)
-- 'test_parametric_lump'  # Default: process files in the latest folder
+# - 'test_parametric_lump'  # Default: process files in the latest folder
 
 # Alternative examples:
 # files: "20251008_081422_parametric_T_seeded"  # Specific folder
@@ -44,10 +44,10 @@ additional_variables:
     expr: TBE*V_plasma*100 # BE CAREFUL! THIS IS DEFINED FOR AN OLDER VERSION OF THE CODE
     unit: "%"            # optional override
     symbol: "TBE"
-  c_T:
-    expr: unrealized_profits / I_target
-    unit: "$/kg"
-    symbol: r"$c_T$"
+  # c_T:
+  #   expr: unrealized_profits / I_target
+  #   unit: "$/kg"
+  #   symbol: r"$c_T$"
   # Tdot_tot_eff:
   #   expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
   #   unit: "1/s"
@@ -61,7 +61,7 @@ additional_variables:
 #   - t_startup: Time to reach DT operation
 #   - unrealized_profits: Economic cost of DD startup
 target_variables:
-  - c_T
+  # - c_T
   - K_el
   - unrealized_profits
 
@@ -73,8 +73,8 @@ target_variables:
 filters:
 - K_el < 5
 - K_el > 0
-- c_T < 2e9
-- c_T > 0
+# - c_T < 2e9
+# - c_T > 0
 
 # ============================================================================
 # PLOT CONFIGURATION
@@ -171,7 +171,7 @@ plots:
   # ==========================================================================
   # PAIRWISE CONTOUR PLOT SETTINGS - ENHANCED WITH MACHINE LEARNING
   # ==========================================================================
-  ml_pairwise: false      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
+  ml_pairwise: true      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
   
   ml_pairwise_settings:
     pairs: all          # Pairs to plot: 'auto' (top 5x5), 'all', or list like [[0,1], [2,3]]

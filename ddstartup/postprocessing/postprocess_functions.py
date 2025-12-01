@@ -968,7 +968,7 @@ def generate_plots_for_file(
         ("parcoords",   "ddstartup.postprocessing.plot_parcoords_functions",           "generate_parcoords_plot"),
         ("pdf",         "ddstartup.postprocessing.plot_pdf_functions",                 "generate_pdf_plot"),
         ("shap",        "ddstartup.postprocessing.plot_shap_functions",                "generate_shap_plots"),
-        ("ml_pairwise", "ddstartup.postprocessing.plot_ML_pairwise_functions",         "generate_ml_pairwise_plots"),
+        ("ml_pairwise", "ddstartup.postprocessing.plot_ML_pdp",                        "generate_ml_pairwise_plots"),
         ("strip",       "ddstartup.postprocessing.plot_strips",                        "generate_strip_plot"),
         ("quartprob",   "ddstartup.postprocessing.plot_quartile_probability_functions","quartile_probability_plot"),
         ("surface3d",   "ddstartup.postprocessing.plot_surface3d",                     "generate_surface3d_plot"),

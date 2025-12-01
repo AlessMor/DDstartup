@@ -1,59 +1,174 @@
 # -*- coding: utf-8 -*-
-# mlp_grid_plot_13d.py
+"""
+MLP training + PDP helpers (DataFrame-friendly).
+
+Key entry points:
+- clean_dataframe: select usable numeric features, drop NaN/Inf rows.
+- train_model: train an MLP with log-target handling and diagnostics.
+- plot_overfitting_diagnostics: save diagnostic plots if desired.
+- predict_numpy / pairwise_pdp_grid / density_2d: helpers for PDP generation.
+- train_from_df: convenience wrapper to clean, train, and optionally save artifacts.
+"""
+
+from __future__ import annotations
+
+import math
 import pickle
+from pathlib import Path
+from typing import Iterable, List, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-import h5py
-from torch.utils.data import DataLoader, Dataset
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, KFold
-import matplotlib.pyplot as plt
+from torch.utils.data import DataLoader, Dataset
+
 
 # --------------------------
-# Data utilities
+# Dataset utilities
 # --------------------------
 class ArrayDataset(Dataset):
-    def __init__(self, X, y):
+    def __init__(self, X: np.ndarray, y: np.ndarray):
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32).reshape(-1, 1)
         self.X = torch.from_numpy(X)
         self.y = torch.from_numpy(y)
-    def __len__(self): return self.X.shape[0]
-    def __getitem__(self, i): return self.X[i], self.y[i]
+
+    def __len__(self) -> int:
+        return self.X.shape[0]
+
+    def __getitem__(self, i: int):
+        return self.X[i], self.y[i]
+
 
 # --------------------------
 # Model
 # --------------------------
 class MLPRegressor(nn.Module):
-    def __init__(self, n_in=13, hidden=(256, 256, 128), dropout=0.05, act=nn.SiLU):
+    def __init__(self, n_in: int, hidden: Iterable[int] = (128, 64, 32), dropout: float = 0.5, act=nn.SiLU):
         super().__init__()
-        layers = []
+        layers: List[nn.Module] = []
         prev = n_in
         for h in hidden:
             layers += [nn.Linear(prev, h), act(), nn.Dropout(dropout)]
             prev = h
-        layers += [nn.Linear(prev, 1)]
+        layers.append(nn.Linear(prev, 1))
         self.net = nn.Sequential(*layers)
-    def forward(self, x): return self.net(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+# --------------------------
+# Data cleaning
+# --------------------------
+def clean_dataframe(
+    df: pd.DataFrame,
+    target: str,
+    feature_cols: Iterable[str] | None = None,
+    *,
+    min_rows: int = 200,
+    verbose: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """
+    Select usable numeric columns, drop rows with NaN/Inf, and return X, y arrays.
+    """
+    if target not in df.columns:
+        raise ValueError(f"Target '{target}' not found in DataFrame columns.")
+
+    candidate_features = list(feature_cols) if feature_cols is not None else [c for c in df.columns if c != target]
+    usable: List[str] = []
+    summaries = []
+
+    for col in candidate_features:
+        s = pd.to_numeric(df[col], errors="coerce")
+        finite = np.isfinite(s)
+        finite_ratio = float(finite.mean())
+        std = float(np.nanstd(s))
+        if finite_ratio < 0.99:
+            continue
+        if std <= 1e-12:
+            continue
+        usable.append(col)
+        summaries.append((col, finite_ratio, std))
+
+    if verbose:
+        print("\n=== Feature screening ===")
+        if not usable:
+            print("No usable features after filtering.")
+        else:
+            for col, finite_ratio, std in summaries:
+                print(f"  {col}: finite={finite_ratio*100:5.1f}% | std={std:.3e}")
+
+    if len(usable) < 2:
+        raise ValueError(f"Need at least 2 usable features; found {len(usable)}.")
+
+    cols = usable + [target]
+    M = df[cols].apply(pd.to_numeric, errors="coerce")
+    M = M.replace([np.inf, -np.inf], np.nan)
+
+    n_before = len(M)
+    M = M.dropna(axis=0, how="any")
+    n_after = len(M)
+    if verbose:
+        removed = n_before - n_after
+        pct = (removed / max(n_before, 1)) * 100
+        print(f"\nData cleaning:")
+        print(f"  Rows before: {n_before:,}")
+        print(f"  Rows removed (NaN/Inf): {removed:,} ({pct:.2f}%)")
+        print(f"  Rows after: {n_after:,}")
+
+    if n_after < min_rows:
+        print(f"Warning: only {n_after} rows after cleaning; results may be unstable.")
+
+    X = M[usable].values.astype(np.float32)
+    y = M[target].values.astype(np.float64)
+    return X, y, usable
+
 
 # --------------------------
 # Training
 # --------------------------
-def train_model(X, y, hidden=(256,256,128), dropout=0.05, lr=1e-3, weight_decay=1e-4,
-                batch_size=4096, max_epochs=200, patience=20, device=None):
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+def train_model(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    hidden: Iterable[int] = (128, 64, 32),
+    dropout: float = 0.5,
+    lr: float = 3e-4,
+    weight_decay: float = 1e-2,
+    batch_size: int = 16384,
+    max_epochs: int = 100,
+    patience: int = 10,
+    num_workers: int = 4,
+    pin_memory: bool = True,
+    use_augmentation: bool = True,
+) -> Tuple[nn.Module, StandardScaler, StandardScaler, float, float, float, float, float, str, dict, float, bool]:
+    """
+    Train an MLP regressor with log-target + shift, early stopping, and diagnostics.
+    Returns (model, x_scaler, y_scaler, r2, mae, rmse, nrmse, mape, device, diagnostics, y_shift, y_is_log).
+    """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    X = np.asarray(X, dtype=np.float32)
+    y = np.asarray(y, dtype=np.float64)
 
-    # Sanity checks
-    assert X.ndim == 2 and y.ndim == 1 and X.shape[0] == y.shape[0], \
-        f"Inconsistent shapes: X{X.shape}, y{y.shape}"
+    y_shift = 0.0
+    y_min = float(np.min(y))
+    if y_min <= 0:
+        y_shift = abs(y_min) + 1.0
+        print(f"Applying positive shift to target: {y_shift:.4e}")
+        y_shifted = y + y_shift
+    else:
+        y_shifted = y
 
-    # ---- Split first (on raw data) to avoid leakage ----
-    X_tr_raw, X_tmp_raw, y_tr_raw, y_tmp_raw = train_test_split(X, y, test_size=0.30, random_state=42)
+    y_log = np.log(y_shifted)
+
+    X_tr_raw, X_tmp_raw, y_tr_raw, y_tmp_raw = train_test_split(X, y_log, test_size=0.30, random_state=42)
     X_va_raw, X_te_raw, y_va_raw, y_te_raw = train_test_split(X_tmp_raw, y_tmp_raw, test_size=0.50, random_state=42)
 
-    # ---- Fit scalers on training only, then transform all splits ----
     x_scaler = StandardScaler().fit(X_tr_raw)
     y_scaler = StandardScaler().fit(y_tr_raw.reshape(-1, 1))
 
@@ -65,632 +180,428 @@ def train_model(X, y, hidden=(256,256,128), dropout=0.05, lr=1e-3, weight_decay=
     y_va = y_scaler.transform(y_va_raw.reshape(-1, 1)).ravel()
     y_te = y_scaler.transform(y_te_raw.reshape(-1, 1)).ravel()
 
-    dl_tr = DataLoader(ArrayDataset(X_tr, y_tr), batch_size=batch_size, shuffle=True, drop_last=False)
-    dl_va = DataLoader(ArrayDataset(X_va, y_va), batch_size=batch_size, shuffle=False)
-    dl_te = DataLoader(ArrayDataset(X_te, y_te), batch_size=batch_size, shuffle=False)
+    if use_augmentation:
+        X_tr_aug = X_tr + np.random.normal(0, 0.02 * np.std(X_tr, axis=0), X_tr.shape)
+        y_tr_aug = y_tr.copy()
+        X_tr = np.vstack([X_tr, X_tr_aug]).astype(np.float32)
+        y_tr = np.concatenate([y_tr, y_tr_aug]).astype(np.float32)
+        print(f"Augmented training set: {X_tr.shape[0]:,} samples")
+    else:
+        X_tr = X_tr.astype(np.float32)
+        X_va = X_va.astype(np.float32)
+        X_te = X_te.astype(np.float32)
+        y_tr = y_tr.astype(np.float32)
+        y_va = y_va.astype(np.float32)
+        y_te = y_te.astype(np.float32)
+
+    bs = max(32, min(batch_size, len(X_tr)))
+    dl_tr = DataLoader(ArrayDataset(X_tr, y_tr), batch_size=bs, shuffle=True, num_workers=num_workers, pin_memory=pin_memory and device == "cuda")
+    dl_va = DataLoader(ArrayDataset(X_va, y_va), batch_size=bs, shuffle=False, num_workers=num_workers, pin_memory=pin_memory and device == "cuda")
+    dl_te = DataLoader(ArrayDataset(X_te, y_te), batch_size=bs, shuffle=False, num_workers=num_workers, pin_memory=pin_memory and device == "cuda")
 
     model = MLPRegressor(n_in=X.shape[1], hidden=hidden, dropout=dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', patience=5, factor=0.5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.3, patience=3, verbose=False)
 
-    best_val = float('inf'); best_state = None; patience_left = patience
-    for epoch in range(1, max_epochs+1):
-        # Train
+    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
+    use_amp = device == "cuda"
+
+    history = {"epoch": [], "train_loss": [], "val_loss": [], "lr": []}
+    best_state = None
+    best_val = float("inf")
+    best_epoch = 0
+    patience_left = patience
+
+    for epoch in range(1, max_epochs + 1):
         model.train()
-        running = 0.0; n = 0
+        running = 0.0
+        n = 0
         for xb, yb in dl_tr:
-            xb, yb = xb.to(device), yb.to(device)
+            xb = xb.to(device, non_blocking=True)
+            yb = yb.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
-            pred = model(xb)
-            loss = loss_fn(pred, yb)
-            loss.backward()
-            opt.step()
-            running += loss.item() * xb.size(0); n += xb.size(0)
-        train_loss = running / n
-
-        # Validate
-        model.eval()
-        running = 0.0; n = 0
-        with torch.no_grad():
-            for xb, yb in dl_va:
-                xb, yb = xb.to(device), yb.to(device)
+            if use_amp:
+                with torch.cuda.amp.autocast():
+                    pred = model(xb)
+                    loss = loss_fn(pred, yb)
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(opt)
+                scaler.update()
+            else:
                 pred = model(xb)
                 loss = loss_fn(pred, yb)
-                running += loss.item() * xb.size(0); n += xb.size(0)
-        val_loss = running / n
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                opt.step()
+            running += loss.item() * xb.size(0)
+            n += xb.size(0)
+        train_loss = running / max(n, 1)
+
+        model.eval()
+        running = 0.0
+        n = 0
+        with torch.no_grad():
+            for xb, yb in dl_va:
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+                if use_amp:
+                    with torch.cuda.amp.autocast():
+                        pred = model(xb)
+                        loss = loss_fn(pred, yb)
+                else:
+                    pred = model(xb)
+                    loss = loss_fn(pred, yb)
+                running += loss.item() * xb.size(0)
+                n += xb.size(0)
+        val_loss = running / max(n, 1)
         scheduler.step(val_loss)
 
-        # Early stopping
+        history["epoch"].append(epoch)
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["lr"].append(opt.param_groups[0]["lr"])
+
+        print(f"Epoch {epoch:03d} | train_loss={train_loss:.5f} | val_loss={val_loss:.5f} | lr={opt.param_groups[0]['lr']:.2e}")
+
         if val_loss < best_val - 1e-6:
-            best_val = val_loss; best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_val = val_loss
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            best_epoch = epoch
             patience_left = patience
         else:
             patience_left -= 1
             if patience_left <= 0:
+                print(f"Early stopping at epoch {epoch} (best epoch: {best_epoch})")
                 break
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    model.eval()
+    else:
+        print("Warning: no best_state saved, using final model parameters.")
 
-    # ---- Test metrics: R², MAE, RMSE (in original target units) ----
-    def _eval_metrics(dl):
-        y_true_s, y_pred_s = [], []
+    def _eval(dl):
+        model.eval()
+        preds = []
+        trues = []
         with torch.no_grad():
             for xb, yb in dl:
-                xb = xb.to(device)
-                y_pred_s.append(model(xb).cpu().numpy().ravel())
-                y_true_s.append(yb.numpy().ravel())
-        y_true_s = np.concatenate(y_true_s)
-        y_pred_s = np.concatenate(y_pred_s)
-        # inverse-transform to original units
-        y_true = y_scaler.inverse_transform(y_true_s.reshape(-1,1)).ravel()
-        y_pred = y_scaler.inverse_transform(y_pred_s.reshape(-1,1)).ravel()
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+                pred = model(xb)
+                preds.append(pred.cpu().numpy())
+                trues.append(yb.cpu().numpy())
+        preds = np.concatenate(preds, axis=0).reshape(-1, 1)
+        trues = np.concatenate(trues, axis=0).reshape(-1, 1)
+        y_true_log = y_scaler.inverse_transform(trues).ravel()
+        y_pred_log = y_scaler.inverse_transform(preds).ravel()
+        y_true = np.exp(y_true_log)
+        y_pred = np.exp(y_pred_log)
+        if y_shift != 0:
+            y_true -= y_shift
+            y_pred -= y_shift
         err = y_true - y_pred
+        mse = float(np.mean(err ** 2))
+        rmse = math.sqrt(mse)
         mae = float(np.mean(np.abs(err)))
-        rmse = float(np.sqrt(np.mean(err**2)))
-        y_std = float(np.std(y_true, ddof=0))
-        r2 = 1.0 - (rmse**2) / (y_std**2 + 1e-12)
-        nrmse = rmse / (y_std + 1e-12)
-        mape = float(np.mean(np.abs(err) / np.maximum(np.abs(y_true), 1e-12)))
-        return r2, mae, rmse, nrmse, mape
+        var = float(np.var(y_true))
+        r2 = 1 - mse / var if var > 0 else float("nan")
+        nrmse = rmse / (np.max(y_true) - np.min(y_true) + 1e-12)
+        mape = float(np.mean(np.abs(err) / (np.abs(y_true) + 1e-12))) * 100.0
+        return {
+            "r2": r2,
+            "rmse": rmse,
+            "mae": mae,
+            "nrmse": nrmse,
+            "mape": mape,
+            "y_true": y_true,
+            "y_pred": y_pred,
+        }
 
-    r2, mae, rmse, nrmse, mape = _eval_metrics(dl_te)
-    return model, x_scaler, y_scaler, r2, mae, rmse, nrmse, mape, device
+    print("\nFinal evaluation on each split (original target space):")
+    train_metrics = _eval(dl_tr)
+    val_metrics = _eval(dl_va)
+    test_metrics = _eval(dl_te)
+
+    for name, metrics in (("Train", train_metrics), ("Val", val_metrics), ("Test", test_metrics)):
+        print(f"{name:>5} | R^2={metrics['r2']:.4f} | RMSE={metrics['rmse']:.4f} | MAE={metrics['mae']:.4f} | NRMSE={metrics['nrmse']:.4f} | MAPE={metrics['mape']:.2f}%")
+
+    diagnostics = {
+        "history": history,
+        "train": train_metrics,
+        "val": val_metrics,
+        "test": test_metrics,
+        "best_epoch": best_epoch,
+    }
+
+    return (
+        model,
+        x_scaler,
+        y_scaler,
+        test_metrics["r2"],
+        test_metrics["mae"],
+        test_metrics["rmse"],
+        test_metrics["nrmse"],
+        test_metrics["mape"],
+        device,
+        diagnostics,
+        y_shift,
+        True,  # y_is_log
+    )
+
 
 # --------------------------
 # Inference helpers
 # --------------------------
-def predict_numpy(model, x_scaler, y_scaler, X, device="cpu", mc_samples=0):
-    """Returns y_pred in original scale. If mc_samples>0, returns (mean, std)."""
-    Xs = x_scaler.transform(np.asarray(X, dtype=np.float32)).astype(np.float32)  # ensure float32
-    xb = torch.from_numpy(Xs).to(device)  # now float32, matches model dtype
+def predict_numpy(
+    model: nn.Module,
+    x_scaler: StandardScaler,
+    y_scaler: StandardScaler,
+    X_input: np.ndarray,
+    *,
+    device: str = "cpu",
+    y_shift: float = 0.0,
+    y_is_log: bool = True,
+) -> np.ndarray:
+    """
+    Predict using the trained model with inverse transform handling.
+    """
+    Xs = x_scaler.transform(np.asarray(X_input, dtype=np.float32))
+    xb = torch.from_numpy(Xs.astype(np.float32)).to(device)
     with torch.no_grad():
-        if mc_samples and any(isinstance(m, nn.Dropout) for m in model.modules()):
-            preds = []
-            model.train()  # enable dropout
-            for _ in range(mc_samples):
-                preds.append(model(xb).cpu().numpy())
-            model.eval()
-            yhat_s = np.stack(preds, axis=0).squeeze(-1)  # [T,N]
-            yhat_mean = yhat_s.mean(axis=0, keepdims=True).T  # [N,1]
-            yhat_std = yhat_s.std(axis=0, ddof=1, keepdims=True).T
-            y_mean = y_scaler.inverse_transform(yhat_mean).ravel()
-            y_std = yhat_std * float(y_scaler.scale_)  # std rescales by scaler.scale_
-            return y_mean, y_std.ravel()
-        else:
-            yhat = model(xb).cpu().numpy()
-            return y_scaler.inverse_transform(yhat).ravel()
+        yhat = model(xb).cpu().numpy()
+    y_pred = y_scaler.inverse_transform(yhat).ravel()
+    if y_is_log:
+        y_pred = np.exp(y_pred)
+        if y_shift != 0:
+            y_pred = y_pred - y_shift
+    return y_pred
+
 
 # --------------------------
-# Grid evaluation 
+# PDP helpers
 # --------------------------
-def baseline_from_data(X_raw, strategy="median"):
-    """Return a baseline feature vector to hold constant (median or mean)."""
-    if strategy == "median":
-        return np.median(X_raw, axis=0).astype(np.float32)
-    elif strategy == "mean":
-        return np.mean(X_raw, axis=0).astype(np.float32)
-    else:
-        raise ValueError(f"Unknown baseline strategy: {strategy}")
-
-def feature_range(X_raw, idx, name=None, explicit=None, qrange=(0.05, 0.95)):
-    """Return (lo, hi) for feature idx. Prefer explicit[name] if provided, else use quantiles."""
-    if explicit and name in explicit:
-        lo, hi = explicit[name]
-        return float(lo), float(hi)
-    col = X_raw[:, idx]
+def _safe_quantile_range(col: np.ndarray, qrange: Tuple[float, float]) -> Tuple[float, float]:
     lo, hi = np.quantile(col, qrange)
     if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
-        m = float(np.nanmedian(col))
+        m = np.nanmedian(col)
         span = max(1e-6, 0.01 * max(1.0, abs(m)))
         lo, hi = m - span, m + span
     return float(lo), float(hi)
 
-def grid_output_two_features(model, x_scaler, y_scaler, baseline_x, i, j,
-                             range_i, range_j, grid_size=60, device="cpu", mc_samples=0):
-    """Fix all features to baseline_x, vary i and j, predict.
-       Returns (grid_i, grid_j, Z) if mc_samples==0, else (grid_i, grid_j, Z_mean, Z_std)."""
-    grid_i = np.linspace(range_i[0], range_i[1], grid_size, dtype=np.float32)
-    grid_j = np.linspace(range_j[0], range_j[1], grid_size, dtype=np.float32)
-    ii, jj = np.meshgrid(grid_i, grid_j, indexing='ij')
+
+def pairwise_pdp_grid(
+    model: nn.Module,
+    x_scaler: StandardScaler,
+    y_scaler: StandardScaler,
+    X_raw: np.ndarray,
+    i: int,
+    j: int,
+    *,
+    grid_size: int = 80,
+    bg_samples: int = 256,
+    qrange: Tuple[float, float] = (0.05, 0.95),
+    device: str = "cpu",
+    y_shift: float = 0.0,
+    y_is_log: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute a 2D PDP surface Z for features i, j.
+    Returns grid_i, grid_j, Z (PDP surface).
+    """
+    X_raw = np.asarray(X_raw, dtype=np.float32)
+    n, _ = X_raw.shape
+
+    gi_lo, gi_hi = _safe_quantile_range(X_raw[:, i], qrange)
+    gj_lo, gj_hi = _safe_quantile_range(X_raw[:, j], qrange)
+    grid_i = np.linspace(gi_lo, gi_hi, grid_size, dtype=np.float32)
+    grid_j = np.linspace(gj_lo, gj_hi, grid_size, dtype=np.float32)
+
+    idx = np.random.choice(n, size=min(bg_samples, n), replace=False)
+    BG = X_raw[idx].copy()
+    B = BG.shape[0]
+
     G = grid_size * grid_size
-    Xg = np.repeat(baseline_x.reshape(1, -1), G, axis=0)
-    Xg[:, i] = ii.ravel()
-    Xg[:, j] = jj.ravel()
+    BG_rep = np.tile(BG, (G, 1))
+    ii, jj = np.meshgrid(grid_i, grid_j, indexing="ij")
+    g_i = np.repeat(ii.ravel(), B)
+    g_j = np.repeat(jj.ravel(), B)
+    BG_rep[:, i] = g_i
+    BG_rep[:, j] = g_j
 
-    if mc_samples and any(isinstance(m, nn.Dropout) for m in model.modules()):
-        y_mean, y_std = predict_numpy(model, x_scaler, y_scaler, Xg, device=device, mc_samples=mc_samples)
-        Z_mean = y_mean.reshape(grid_size, grid_size)
-        Z_std = y_std.reshape(grid_size, grid_size)
-        return grid_i, grid_j, Z_mean, Z_std
-    else:
-        y_pred = predict_numpy(model, x_scaler, y_scaler, Xg, device=device)
-        Z = y_pred.reshape(grid_size, grid_size)
-        return grid_i, grid_j, Z
+    y_pred = predict_numpy(
+        model,
+        x_scaler,
+        y_scaler,
+        BG_rep,
+        device=device,
+        y_shift=y_shift,
+        y_is_log=y_is_log,
+    )
+    Z = y_pred.reshape(grid_size, grid_size, B).mean(axis=2)
+    return grid_i, grid_j, Z
 
-# --------------------------
-# HDF5 loader
-# --------------------------
-def load_from_h5(path, x_key="X", y_key="y"):
-    """Load features X and target y from an HDF5 file.
-       x_key can be a string (single dataset) or a list/tuple of dataset names."""
-    def _list_datasets(f):
-        keys = []
-        f.visititems(lambda name, obj: keys.append(name) if isinstance(obj, h5py.Dataset) else None)
-        return keys
 
-    def _resolve_key(f, name, all_ds):
-        # If it's an exact dataset, accept it
-        if name in f and isinstance(f[name], h5py.Dataset):
-            return name
-        # If it's a group, try to find a dataset inside it
-        if name in f and isinstance(f[name], h5py.Group):
-            grp = f[name]
-            ds_in_group = []
-            grp.visititems(lambda n, o: ds_in_group.append(f"{name}/{n}") if isinstance(o, h5py.Dataset) else None)
-            # Prefer a dataset with the same basename
-            same_basename = [ds for ds in ds_in_group if ds.split("/")[-1] == name]
-            if len(same_basename) == 1:
-                return same_basename[0]
-            if len(ds_in_group) == 1:
-                return ds_in_group[0]
-            raise KeyError(f"'{name}' is a group, not a dataset. Datasets inside: {ds_in_group}")
-        # Match by basename anywhere in the file
-        candidates = [k for k in all_ds if k.endswith("/" + name) or k == name]
-        if len(candidates) == 1:
-            return candidates[0]
-        if len(candidates) > 1:
-            raise KeyError(f"Ambiguous dataset base name '{name}'. Matches: {candidates}")
-        raise KeyError(f"Could not find dataset '{name}'. Available datasets: {all_ds}")
+def density_2d(X_raw: np.ndarray, i: int, j: int, grid_i: np.ndarray, grid_j: np.ndarray, bins: int = 100):
+    xi = np.clip(X_raw[:, i], grid_i.min(), grid_i.max())
+    xj = np.clip(X_raw[:, j], grid_j.min(), grid_j.max())
+    H, _, _ = np.histogram2d(
+        xi,
+        xj,
+        bins=bins,
+        range=[[grid_i.min(), grid_i.max()], [grid_j.min(), grid_j.max()]],
+    )
+    H = H.T / (H.max() + 1e-9)
+    extent = (grid_i.min(), grid_i.max(), grid_j.min(), grid_j.max())
+    return H, extent
 
-    def _safe_read_dataset(f, key, name):
-        """Try multiple methods to read a dataset."""
-        ds = f[key]
-        print(f"  Reading '{name}' from '{key}' | shape={ds.shape} | dtype={ds.dtype}")
-        
-        # Try direct slicing first
-        try:
-            data = ds[:]
-            print(f"  ✓ Direct read successful")
-            return data
-        except Exception as e1:
-            print(f"  ✗ Direct read failed: {e1}")
-            
-            # Try reading in chunks
-            try:
-                print(f"  Attempting chunked read...")
-                chunk_size = 100000
-                chunks = []
-                for i in range(0, ds.shape[0], chunk_size):
-                    end = min(i + chunk_size, ds.shape[0])
-                    chunks.append(ds[i:end])
-                data = np.concatenate(chunks)
-                print(f"  ✓ Chunked read successful")
-                return data
-            except Exception as e2:
-                print(f"  ✗ Chunked read failed: {e2}")
-                
-                # Try forcing load into memory
-                try:
-                    print(f"  Attempting forced memory load...")
-                    data = np.array(ds)
-                    print(f"  ✓ Forced memory load successful")
-                    return data
-                except Exception as e3:
-                    raise RuntimeError(f"All read methods failed for '{key}': Direct={e1}, Chunked={e2}, Forced={e3}")
-
-    with h5py.File(path, "r") as f:
-        all_ds = _list_datasets(f)
-
-        # Build X
-        print("\nLoading features...")
-        if isinstance(x_key, (list, tuple)):
-            cols = []
-            for name in x_key:
-                k = _resolve_key(f, name, all_ds)
-                try:
-                    arr = _safe_read_dataset(f, k, name)
-                    arr = np.asarray(arr, dtype=np.float32).reshape(-1)
-                except Exception as e:
-                    raise RuntimeError(f"Failed to read dataset '{k}' for feature '{name}': {e}")
-                cols.append(arr)
-            lengths = {len(c) for c in cols}
-            if len(lengths) != 1:
-                raise ValueError(f"Feature arrays have different lengths: {lengths}")
-            X = np.column_stack(cols).astype(np.float32)
-        else:
-            kx = _resolve_key(f, x_key, all_ds)
-            try:
-                X = _safe_read_dataset(f, kx, x_key)
-                X = np.asarray(X, dtype=np.float32)
-            except Exception as e:
-                raise RuntimeError(f"Failed to read dataset '{kx}' for X: {e}")
-            if X.ndim == 1:
-                X = X.reshape(-1, 1)
-
-        # Build y
-        print(f"\nLoading target '{y_key}'...")
-        ky = _resolve_key(f, y_key, all_ds)
-        try:
-            y = _safe_read_dataset(f, ky, y_key)
-            y = np.asarray(y, dtype=np.float32).reshape(-1)
-        except Exception as e:
-            raise RuntimeError(f"Failed to read dataset '{ky}' for y: {e}")
-        
-        print(f"\n✓ Successfully loaded all data")
-
-    return X, y
 
 # --------------------------
-# HDF5 utilities
+# Overfitting diagnostics plot
 # --------------------------
-def inspect_h5_structure(path, max_items=50):
-    """Print the structure of an HDF5 file to help debug loading issues."""
-    print(f"\n{'='*60}")
-    print(f"Inspecting HDF5 file: {path}")
-    print(f"{'='*60}")
-    
-    with h5py.File(path, "r") as f:
-        def print_structure(name, obj, indent=0):
-            prefix = "  " * indent
-            if isinstance(obj, h5py.Group):
-                print(f"{prefix}📁 Group: {name}/")
-            elif isinstance(obj, h5py.Dataset):
-                shape = obj.shape
-                dtype = obj.dtype
-                print(f"{prefix}📄 Dataset: {name} | shape={shape} | dtype={dtype}")
-        
-        print("\nFile structure:")
-        f.visititems(lambda n, o: print_structure(n, o, n.count('/')))
-        
-        print("\n" + "="*60)
-        print("All dataset paths (use these for x_key/y_key):")
-        print("="*60)
-        datasets = []
-        f.visititems(lambda n, o: datasets.append(n) if isinstance(o, h5py.Dataset) else None)
-        for ds in datasets[:max_items]:
-            print(f"  • {ds}")
-        if len(datasets) > max_items:
-            print(f"  ... and {len(datasets) - max_items} more")
-        print()
+def plot_overfitting_diagnostics(diagnostics: dict, target_name: str = "target", save_path: str | Path = "overfitting_diagnostics.png") -> None:
+    """
+    Plot learning curves, overfitting gap, LR schedule, and residuals for train/val/test.
+    """
+    hist = diagnostics["history"]
+    train = diagnostics["train"]
+    val = diagnostics["val"]
+    test = diagnostics["test"]
 
-# --------------------------
-# K-Fold Cross Validation
-# --------------------------
-def kfold_cross_validation(X, y, n_splits=5, hidden=(256,256,128), dropout=0.05, 
-                          lr=1e-3, weight_decay=1e-4, batch_size=4096, 
-                          max_epochs=200, patience=20, device=None):
-    """Perform k-fold cross-validation and return metrics + loss histories."""
-    if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
-    fold_results = []
-    all_histories = []
-    
-    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X), 1):
-        print(f"\n=== Fold {fold_idx}/{n_splits} ===")
-        
-        # Split data
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
-        
-        # Fit scalers on training data only
-        x_scaler = StandardScaler().fit(X_train)
-        y_scaler = StandardScaler().fit(y_train.reshape(-1, 1))
-        
-        X_train_scaled = x_scaler.transform(X_train)
-        X_val_scaled = x_scaler.transform(X_val)
-        y_train_scaled = y_scaler.transform(y_train.reshape(-1, 1)).ravel()
-        y_val_scaled = y_scaler.transform(y_val.reshape(-1, 1)).ravel()
-        
-        # Create dataloaders
-        dl_train = DataLoader(ArrayDataset(X_train_scaled, y_train_scaled), 
-                             batch_size=batch_size, shuffle=True, drop_last=False)
-        dl_val = DataLoader(ArrayDataset(X_val_scaled, y_val_scaled), 
-                           batch_size=batch_size, shuffle=False)
-        
-        # Initialize model
-        model = MLPRegressor(n_in=X.shape[1], hidden=hidden, dropout=dropout).to(device)
-        opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-        loss_fn = nn.MSELoss()
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', patience=5, factor=0.5)
-        
-        # Training loop with history tracking
-        train_losses = []
-        val_losses = []
-        best_val = float('inf')
-        best_state = None
-        patience_left = patience
-        
-        for epoch in range(1, max_epochs+1):
-            # Train
-            model.train()
-            running = 0.0
-            n = 0
-            for xb, yb in dl_train:
-                xb, yb = xb.to(device), yb.to(device)
-                opt.zero_grad(set_to_none=True)
-                pred = model(xb)
-                loss = loss_fn(pred, yb)
-                loss.backward()
-                opt.step()
-                running += loss.item() * xb.size(0)
-                n += xb.size(0)
-            train_loss = running / n
-            train_losses.append(train_loss)
-            
-            # Validate
-            model.eval()
-            running = 0.0
-            n = 0
-            with torch.no_grad():
-                for xb, yb in dl_val:
-                    xb, yb = xb.to(device), yb.to(device)
-                    pred = model(xb)
-                    loss = loss_fn(pred, yb)
-                    running += loss.item() * xb.size(0)
-                    n += xb.size(0)
-            val_loss = running / n
-            val_losses.append(val_loss)
-            scheduler.step(val_loss)
-            
-            # Early stopping
-            if val_loss < best_val - 1e-6:
-                best_val = val_loss
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                patience_left = patience
-            else:
-                patience_left -= 1
-                if patience_left <= 0:
-                    print(f"Early stopping at epoch {epoch}")
-                    break
-        
-        # Load best model
-        if best_state is not None:
-            model.load_state_dict(best_state)
-        model.eval()
-        
-        # Evaluate on validation set
-        y_true_list, y_pred_list = [], []
-        with torch.no_grad():
-            for xb, yb in dl_val:
-                xb = xb.to(device)
-                y_pred_list.append(model(xb).cpu().numpy().ravel())
-                y_true_list.append(yb.numpy().ravel())
-        
-        y_true_scaled = np.concatenate(y_true_list)
-        y_pred_scaled = np.concatenate(y_pred_list)
-        
-        # Inverse transform to original scale
-        y_true = y_scaler.inverse_transform(y_true_scaled.reshape(-1,1)).ravel()
-        y_pred = y_scaler.inverse_transform(y_pred_scaled.reshape(-1,1)).ravel()
-        
-        # Calculate metrics
-        err = y_true - y_pred
-        mae = float(np.mean(np.abs(err)))
-        rmse = float(np.sqrt(np.mean(err**2)))
-        y_std = float(np.std(y_true, ddof=0))
-        r2 = 1.0 - (rmse**2) / (y_std**2 + 1e-12)
-        nrmse = rmse / (y_std + 1e-12)
-        mape = float(np.mean(np.abs(err) / np.maximum(np.abs(y_true), 1e-12)))
-        
-        fold_results.append({
-            'fold': fold_idx,
-            'r2': r2,
-            'mae': mae,
-            'rmse': rmse,
-            'nrmse': nrmse,
-            'mape': mape
-        })
-        
-        all_histories.append({
-            'fold': fold_idx,
-            'train_losses': train_losses,
-            'val_losses': val_losses
-        })
-        
-        print(f"Fold {fold_idx} - R²: {r2:.4f} | MAE: {mae:.4g} | RMSE: {rmse:.4g} | NRMSE: {nrmse:.4g} | MAPE: {mape:.4g}")
-    
-    return fold_results, all_histories
+    epochs = hist["epoch"]
+    train_loss = np.array(hist["train_loss"])
+    val_loss = np.array(hist["val_loss"])
+    lr = np.array(hist["lr"])
+    best_epoch = diagnostics.get("best_epoch", epochs[np.argmin(val_loss)] if len(val_loss) else 0)
 
-def plot_kfold_results(fold_results, all_histories, save_path="kfold_results.png"):
-    """Plot k-fold cross-validation results."""
-    n_folds = len(fold_results)
-    
     fig = plt.figure(figsize=(15, 10))
-    gs = fig.add_gridspec(3, 2, hspace=0.3, wspace=0.3)
-    
-    # Plot 1: Loss curves for each fold
-    ax1 = fig.add_subplot(gs[0, :])
-    for hist in all_histories:
-        fold = hist['fold']
-        epochs = range(1, len(hist['train_losses']) + 1)
-        ax1.plot(epochs, hist['train_losses'], alpha=0.6, label=f'Fold {fold} Train')
-        ax1.plot(epochs, hist['val_losses'], alpha=0.6, linestyle='--', label=f'Fold {fold} Val')
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Loss (MSE)')
-    ax1.set_title('Training and Validation Loss Curves - All Folds')
-    ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
-    ax1.grid(True, alpha=0.3)
-    ax1.set_yscale('log')
-    
-    # Plot 2: Average loss curves
-    ax2 = fig.add_subplot(gs[1, 0])
-    max_epochs = max(len(h['train_losses']) for h in all_histories)
-    avg_train = np.zeros(max_epochs)
-    avg_val = np.zeros(max_epochs)
-    counts = np.zeros(max_epochs)
-    
-    for hist in all_histories:
-        n_ep = len(hist['train_losses'])
-        avg_train[:n_ep] += hist['train_losses']
-        avg_val[:n_ep] += hist['val_losses']
-        counts[:n_ep] += 1
-    
-    avg_train /= np.maximum(counts, 1)
-    avg_val /= np.maximum(counts, 1)
-    
-    epochs = range(1, max_epochs + 1)
-    ax2.plot(epochs, avg_train, 'b-', linewidth=2, label='Avg Train Loss')
-    ax2.plot(epochs, avg_val, 'r--', linewidth=2, label='Avg Val Loss')
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('Loss (MSE)')
-    ax2.set_title('Average Loss Curves Across Folds')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    ax2.set_yscale('log')
-    
-    # Plot 3: Metrics comparison
-    ax3 = fig.add_subplot(gs[1, 1])
-    metrics_names = ['r2', 'mae', 'rmse', 'nrmse', 'mape']
-    x_pos = np.arange(len(metrics_names))
-    
-    means = [np.mean([f[m] for f in fold_results]) for m in metrics_names]
-    stds = [np.std([f[m] for f in fold_results]) for m in metrics_names]
-    
-    bars = ax3.bar(x_pos, means, yerr=stds, capsize=5, alpha=0.7)
-    ax3.set_xticks(x_pos)
-    ax3.set_xticklabels(metrics_names)
-    ax3.set_ylabel('Value')
-    ax3.set_title('Mean Metrics Across Folds (±std)')
-    ax3.grid(True, alpha=0.3, axis='y')
-    
-    # Add value labels on bars
-    for bar, mean, std in zip(bars, means, stds):
-        height = bar.get_height()
-        ax3.text(bar.get_x() + bar.get_width()/2., height,
-                f'{mean:.3f}\n±{std:.3f}',
-                ha='center', va='bottom', fontsize=8)
-    
-    # Plot 4: Metrics by fold
-    ax4 = fig.add_subplot(gs[2, :])
-    folds = [f['fold'] for f in fold_results]
-    for metric in ['r2', 'mae', 'rmse']:
-        values = [f[metric] for f in fold_results]
-        ax4.plot(folds, values, marker='o', label=metric.upper())
-    ax4.set_xlabel('Fold')
-    ax4.set_ylabel('Metric Value')
-    ax4.set_title('Metrics by Fold')
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
-    ax4.set_xticks(folds)
-    
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    print(f"Saved k-fold results plot: {save_path}")
-    
-    # Print summary statistics
-    print("\n=== Cross-Validation Summary ===")
-    for metric in metrics_names:
-        values = [f[metric] for f in fold_results]
-        print(f"{metric.upper():8s}: {np.mean(values):.4f} ± {np.std(values):.4f}")
+    gs = fig.add_gridspec(3, 3)
+
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax1.plot(epochs, train_loss, label="Train Loss")
+    ax1.plot(epochs, val_loss, label="Val Loss")
+    ax1.set_yscale("log")
+    ax1.axvline(best_epoch, color="r", linestyle="--", label="Best Epoch")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss (MSE, scaled)")
+    ax1.set_title("Learning Curves")
+    ax1.legend()
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    gap = val_loss - train_loss
+    ax2.plot(epochs, gap, color="maroon")
+    ax2.axhline(0, color="k", linestyle="--")
+    ax2.axvline(best_epoch, color="r", linestyle="--")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Val Loss - Train Loss")
+    ax2.set_title(f"Overfitting Gap (final: {gap[-1]:.6f}, {gap[-1]/max(train_loss[-1],1e-12)*100:.1f}%)")
+
+    ax3 = fig.add_subplot(gs[0, 2])
+    ax3.plot(epochs, lr, color="green")
+    ax3.set_xlabel("Epoch")
+    ax3.set_ylabel("Learning Rate")
+    ax3.set_title("Learning Rate Schedule")
+
+    def scatter_true_pred(ax, split_data, name):
+        y_true = split_data["y_true"]
+        y_pred = split_data["y_pred"]
+        r2 = split_data["r2"]
+        mae = split_data["mae"]
+        ax.scatter(y_true, y_pred, s=3, alpha=0.3, edgecolors="none")
+        lo = np.min([y_true.min(), y_pred.min()])
+        hi = np.max([y_true.max(), y_pred.max()])
+        ax.plot([lo, hi], [lo, hi], "r--", label="Perfect Pred")
+        ax.set_xlabel(f"True {target_name}")
+        ax.set_ylabel(f"Predicted {target_name}")
+        ax.set_title(f"{name}: R²={r2:.4f}, MAE={mae:.5f}")
+        ax.legend()
+
+    ax4 = fig.add_subplot(gs[1, 0]); scatter_true_pred(ax4, train, "TRAIN")
+    ax5 = fig.add_subplot(gs[1, 1]); scatter_true_pred(ax5, val, "VAL")
+    ax6 = fig.add_subplot(gs[1, 2]); scatter_true_pred(ax6, test, "TEST")
+
+    def residual_plot(ax, split_data, name):
+        y_true = split_data["y_true"]
+        y_pred = split_data["y_pred"]
+        resid = y_pred - y_true
+        rmse = split_data["rmse"]
+        ax.scatter(y_pred, resid, s=3, alpha=0.3, edgecolors="none")
+        ax.axhline(0, color="k", linestyle="--")
+        ax.axhline(rmse, color="orange", linestyle="--", label="±RMSE")
+        ax.axhline(-rmse, color="orange", linestyle="--")
+        ax.set_xlabel(f"Predicted {target_name}")
+        ax.set_ylabel("Residuals")
+        ax.set_title(f"{name} Residuals (RMSE={rmse:.4f})")
+        ax.legend()
+
+    ax7 = fig.add_subplot(gs[2, 0]); residual_plot(ax7, train, "TRAIN")
+    ax8 = fig.add_subplot(gs[2, 1]); residual_plot(ax8, val, "VAL")
+    ax9 = fig.add_subplot(gs[2, 2]); residual_plot(ax9, test, "TEST")
+
+    plt.tight_layout()
+    save_path = Path(save_path)
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"Saved overfitting diagnostics figure to: {save_path}")
+    plt.close(fig)
+
 
 # --------------------------
-# Example usage
+# Convenience wrapper
 # --------------------------
+def train_from_df(
+    df: pd.DataFrame,
+    target: str,
+    feature_cols: Iterable[str] | None = None,
+    *,
+    output_dir: str | Path | None = None,
+    save_prefix: str | None = None,
+    verbose: bool = True,
+    plot_diagnostics: bool = False,
+    **train_kwargs,
+):
+    """
+    Clean the DataFrame, train the MLP, optionally save artifacts and diagnostics.
+    """
+    X, y, features = clean_dataframe(df, target, feature_cols=feature_cols, verbose=verbose)
+    model, x_scaler, y_scaler, r2, mae, rmse, nrmse, mape, device, diagnostics, y_shift, y_is_log = train_model(
+        X,
+        y,
+        **train_kwargs,
+    )
+
+    out_dir = Path(output_dir) if output_dir is not None else None
+    prefix = save_prefix or f"mlp_{target}"
+
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        model_path = out_dir / f"{prefix}.pt"
+        scalers_path = out_dir / f"{prefix}_scalers.pkl"
+        diagnostics_path = out_dir / f"{prefix}_diagnostics.pkl"
+        torch.save(model.state_dict(), model_path)
+        with open(scalers_path, "wb") as f:
+            pickle.dump({"x": x_scaler, "y": y_scaler, "y_shift": y_shift, "y_is_log": y_is_log}, f)
+        with open(diagnostics_path, "wb") as f:
+            pickle.dump(diagnostics, f)
+        if verbose:
+            print(f"Saved artifacts to {out_dir}:")
+            print(f"  - {model_path.name}")
+            print(f"  - {scalers_path.name}")
+            print(f"  - {diagnostics_path.name}")
+
+    if plot_diagnostics and out_dir is not None:
+        diag_path = out_dir / f"{prefix}_overfitting.png"
+        plot_overfitting_diagnostics(diagnostics, target_name=target, save_path=diag_path)
+
+    return model, x_scaler, y_scaler, diagnostics, device, features, X, y_shift, y_is_log
+
 
 if __name__ == "__main__":
-    # ---- Load your data here ----
-    H5_PATH = "C:\\Users\\gabriele.iob\\Desktop\\dd_startup\\outputs\\20251113_002935_parametric_T_seeded\\ddstartup_20251113_002935_parametric_T_seeded.h5"
-    
-    inspect_h5_structure(H5_PATH)
-    
-    FEATURES = ["parameter_fields/V_plasma_values",
-                "parameter_fields/T_i_values",
-                "parameter_fields/n_tot_values", 
-                "parameter_fields/tau_p_T_values", 
-                "parameter_fields/P_aux_values",
-                "parameter_fields/P_aux_DT_eq_values",
-                "parameter_fields/TBR_DT_values",
-                "parameter_fields/TBR_DDn_values",
-               ]
-    TARGET = "t_startup"  # "unrealized_profits" "t_startup"
-    X, y = load_from_h5(H5_PATH, x_key=FEATURES, y_key=TARGET)
-    print(f"Loaded data from {H5_PATH}: X.shape={X.shape}, y.shape={y.shape}")
-
-    # ---- Perform K-Fold Cross Validation ----
-    print("\n" + "="*60)
-    print("Starting 5-Fold Cross Validation")
-    print("="*60)
-
-    hidden = (32, 12)
-    dropout = 0.15
-    lr = 1e-3
-    weight_decay = 1e-3
-    batch_size = 64
-    max_epochs = 40
-    patience = 20
-    
-    fold_results, all_histories = kfold_cross_validation(
-        X, y, n_splits=5, 
-        hidden=hidden, dropout=dropout,
-        lr=lr, weight_decay=weight_decay,
-        batch_size=batch_size, max_epochs=max_epochs, patience=patience
-    )
-    
-    # Plot results
-    plot_kfold_results(fold_results, all_histories, save_path="kfold_validation_results.png")
-    
-    # ---- Train final model on full dataset ----
-    print("\n" + "="*60)
-    print("Training final model on full dataset")
-    print("="*60)
-
-    # ---- Train model ----
-    model, xsc, ysc, r2, mae, rmse, nrmse, mape, device = train_model(
-        X, y, hidden=hidden, dropout=dropout,
-        lr=lr, weight_decay=weight_decay,
-        batch_size=batch_size, max_epochs=max_epochs, patience=patience
-    )
-    print(f"Test R^2: {r2:.4f} | MAE: {mae:.4g} | RMSE: {rmse:.4g} | NRMSE: {nrmse:.4g} | MAPE: {mape:.4g}")
-
-    # ---- Save artifacts ----
-    with open("scalers.pkl", "wb") as f:
-        pickle.dump({"x": xsc, "y": ysc}, f)
-    torch.save(model.state_dict(), f"mlp_{X.shape[1]}d.pt")
-    print(f"Saved: mlp_{X.shape[1]}d.pt, scalers.pkl")
-
-    # ---- Choose the pair of features to vary ----
-    i = FEATURES.index("V_plasma")
-    j = FEATURES.index("cost_of_electricity")
-
-    # Optional explicit ranges for features by name; if not set, uses quantiles
-    EXPLICIT_RANGES = {
-        # "V_plasma": (lo_value, hi_value),
-        # "cost_of_electricity": (lo_value, hi_value),
-    }
-    range_i = feature_range(X, i, FEATURES[i], explicit=EXPLICIT_RANGES, qrange=(0.05, 0.95))
-    range_j = feature_range(X, j, FEATURES[j], explicit=EXPLICIT_RANGES, qrange=(0.05, 0.95))
-
-    # ---- Build baseline (fixed) vector for other inputs ----
-    x_base = baseline_from_data(X, strategy="median")
-
-    # ---- Evaluate model on the 2D grid (no PDP averaging) ----
-    grid_size = 80
-    MC_SAMPLES = 0  # e.g., 50 for MC dropout averaging
-    out = grid_output_two_features(
-        model, xsc, ysc, x_base, i, j, range_i, range_j,
-        grid_size=grid_size, device=device, mc_samples=MC_SAMPLES
-    )
-
-    fig, ax = plt.subplots(figsize=(6,5))
-    if MC_SAMPLES > 0 and len(out) == 4:
-        grid_i, grid_j, Z_mean, Z_std = out
-        ci, cj = np.meshgrid(grid_i, grid_j, indexing='ij')
-        cs = ax.contourf(ci, cj, Z_mean, levels=40, alpha=0.95)
-        fig.colorbar(cs, ax=ax, label=f"{TARGET} (mean)")
-        # Optional: visualize uncertainty
-        ax.contour(ci, cj, Z_std, levels=6, colors='k', linewidths=0.5)
-    else:
-        grid_i, grid_j, Z = out
-        ci, cj = np.meshgrid(grid_i, grid_j, indexing='ij')
-        cs = ax.contourf(ci, cj, Z, levels=40, alpha=0.95)
-        fig.colorbar(cs, ax=ax, label=TARGET)
-    ax.set_xlabel(FEATURES[i])
-    ax.set_ylabel(FEATURES[j])
-    plt.tight_layout()
-    out_path = f"model_output_{FEATURES[i]}_{FEATURES[j]}.png"
-    plt.savefig(out_path, dpi=150)
-    print(f"Saved: {out_path}")
+    # Minimal example on synthetic data
+    rng = np.random.default_rng(0)
+    X_demo = rng.normal(size=(5000, 5))
+    y_demo = np.exp(X_demo[:, 0] - 0.5 * X_demo[:, 1]) + rng.normal(scale=0.1, size=5000)
+    df_demo = pd.DataFrame(X_demo, columns=[f"x{i}" for i in range(5)])
+    df_demo["target"] = y_demo
+    train_from_df(df_demo, target="target", output_dir="mlp_demo_outputs", save_prefix="demo", verbose=True, plot_diagnostics=True)
