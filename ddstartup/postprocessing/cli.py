@@ -57,6 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Parallel workers for CPU-bound steps (overrides YAML/HDF5)")
     p.add_argument("--batch-size", type=int,
                    help="Batch size for ML/SHAP where supported (overrides YAML/HDF5)")
+    # Comparison across multiple runs
+    p.add_argument("--compare-files", nargs="+", help="Run-level comparison: H5 files/folders for cross-run plots.")
+    p.add_argument("--compare-targets", nargs="+", help="Run-level comparison: target variables to compare.")
+    p.add_argument("--compare-out", type=str, help="Output directory for comparison artifacts.")
+    p.add_argument("--compare-no-titles", action="store_true", help="Run-level comparison: omit plot titles.")
     return p
 
 
@@ -92,24 +97,32 @@ def main() -> None:
     print(f"\n📊 Plot types: {', '.join(plot_types)}")
     if DEBUG: print(f"📊 Plot types to generate: {plot_types}")
     shap_interpolate, pdf_smooth, ml_pairwise_settings, strip_settings, show_titles, font_scale, surface3d_settings = collect_plot_settings(config, args, targets, plot_types)
+
+    # Comparison config (cross-run)
+    compare_cfg = (config.get("compare", {}) or {}).copy()
+    if args.compare_files:
+        compare_cfg["files"] = args.compare_files
+    if args.compare_targets:
+        compare_cfg["targets"] = args.compare_targets
+    if args.compare_out:
+        compare_cfg["out"] = args.compare_out
+    if args.compare_no_titles:
+        compare_cfg["show_titles"] = False
     
     # Step 5: Output directory
     out_spec = config.get("output", "default")
     setting = out_spec if isinstance(out_spec, str) else (out_spec or {}).get("directory", "default")
 
+    # Base output directory (resolved if custom; per-file adjustment below)
     if setting == "default":
-        # Prefer folder discovered during file resolution
-        output_dir = config.get("_latest_folder")
-        if output_dir is None:
-            outputs_root = root / "outputs"
-            latest, _ = latest_output_folder(outputs_root)
-            output_dir = latest if latest is not None else outputs_root
-        note = " (latest folder)" if output_dir != (root / "outputs") else ""
-        if DEBUG: print(f"\n💾 Output directory: {output_dir}{note}")
+        outputs_root = root / "outputs"
+        latest, _ = latest_output_folder(outputs_root)
+        base_output_dir = latest if latest is not None else outputs_root
+        if DEBUG: print(f"\n💾 Output directory base: {base_output_dir} (default/latest)")
     else:
-        output_dir = (root / setting).resolve() if not Path(setting).is_absolute() else Path(setting)
-        if DEBUG: print(f"\n💾 Output directory: {output_dir} (custom)")
-    output_dir.mkdir(parents=True, exist_ok=True)
+        base_output_dir = (root / setting).resolve() if not Path(setting).is_absolute() else Path(setting)
+        if DEBUG: print(f"\n💾 Output directory base: {base_output_dir} (custom)")
+    base_output_dir.mkdir(parents=True, exist_ok=True)
 
     
 
@@ -153,6 +166,10 @@ def main() -> None:
         per_file_ml.setdefault("batch_size", batch_size)
 
         
+        # Per-file output: default → sibling folder of the H5; custom → shared base
+        file_output_dir = path.parent if setting == "default" else base_output_dir
+        file_output_dir.mkdir(parents=True, exist_ok=True)
+
         generate_plots_for_file(
             path,
             targets=targets,
@@ -161,7 +178,7 @@ def main() -> None:
             passthrough_vars=passthrough_vars,
             additional_meta=additional_meta,
             plot_types=plot_types,
-            output_dir=output_dir,
+            output_dir=file_output_dir,
             shap_interpolate=shap_interpolate,
             pdf_smooth=pdf_smooth,
             ml_pairwise_settings=ml_pairwise_settings,
@@ -178,3 +195,27 @@ def main() -> None:
     print(f"\n{'='*80}")
     print("✅ POSTPROCESSING COMPLETE")
     print(f"{'='*80}\n")
+
+    # Optional cross-run comparison
+    if compare_cfg.get("files") and compare_cfg.get("targets"):
+        from ddstartup.postprocessing.compare_results import compare_runs
+
+        comp_files = compare_cfg.get("files")
+        comp_targets = compare_cfg.get("targets")
+        comp_inputs = compare_cfg.get("inputs")
+        comp_out = compare_cfg.get("out") or (output_dir / "compare_runs")
+        comp_out = (root / comp_out).resolve() if not Path(comp_out).is_absolute() else Path(comp_out)
+        comp_show_titles = compare_cfg.get("show_titles", True)
+
+        print(f"\n{'='*80}")
+        print("🔄 RUN-LEVEL COMPARISON")
+        print(f"{'='*80}\n")
+        compare_runs(
+            files=comp_files,
+            targets=comp_targets,
+            inputs=comp_inputs,
+            output_dir=Path(comp_out),
+            show_titles=comp_show_titles,
+            root=root,
+        )
+        print(f"\nComparison outputs saved to: {comp_out}")

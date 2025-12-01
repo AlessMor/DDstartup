@@ -1,16 +1,14 @@
 # ddstartup/postprocessing/postprocess_functions.py
 from __future__ import annotations
-from itertools import chain
 
 import sys, re, ast, json, inspect, gc
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Set
-import importlib, inspect, gc
+import importlib
 
 import numpy as np
 import pandas as pd
 import h5py
-from tqdm import tqdm
 from contextlib import contextmanager
 
 # Optional compression plugins (skip if missing)
@@ -18,7 +16,6 @@ try:
     import hdf5plugin  # noqa: F401
 except ImportError:
     hdf5plugin = None
-
 
 # -----------------------------------------------------------------------------
 # Project registry (schema + units)
@@ -28,7 +25,7 @@ from ddstartup.utils.io_functions import resolve_file_path, resolve_h5_inputs, s
 
 
 # -----------------------------------------------------------------------------
-# Small config/CLI plumbing
+# Small config/CLI helper
 # -----------------------------------------------------------------------------
 
 def load_config_from_args(args, root: Path) -> Dict[str, Any]:
@@ -296,7 +293,10 @@ def load_h5_to_df(
     downcast_float32: bool = False,
     verbose: bool = True,
     keep: str = "slim",
-    success_only: bool = False,         # << NEW
+    success_only: bool = False,
+    plot_types: List[str] | None = None,
+    strip_settings: Dict[str, Any] | None = None,
+    surface3d_settings: Dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """
     Read a minimal, plot-ready DataFrame:
@@ -307,17 +307,20 @@ def load_h5_to_df(
       - 'sol_success' if present
     Optionally keep only those columns ('slim'), default behavior for low memory.
     """
+    # Normalize inputs
     additional_map   = additional_map   or {}
     passthrough_vars = set(passthrough_vars or [])
-    filters_exprs  = filters_exprs  or []
-    targets        = list(targets or [])
+    filters_exprs    = filters_exprs    or []
+    targets          = list(targets or [])
+    plot_types       = set(plot_types or [])
+    strip_settings   = strip_settings or {}
+    surface3d_settings = surface3d_settings or {}
 
-    # ---- Discover which H5 columns exist
+    # Discover which H5 columns exist
     with h5py.File(h5_path, "r") as f:
         file_keys = {k for k in f.keys() if isinstance(f[k], h5py.Dataset) and f[k].ndim >= 1}
 
-    # ---- Inputs from schema: those tagged as input/flexible
-    # be tolerant to different schema field names: role/kind/tag/source/category
+    # Inputs from schema: those tagged as input/flexible
     def _schema_tag(meta: dict) -> str:
         if not isinstance(meta, dict):
             return ""
@@ -338,7 +341,7 @@ def load_h5_to_df(
         if name in file_keys and _schema_tag(meta) == "output"
     ]
 
-    # ---- Dependencies
+    # Dependency helpers
     def _vars_in(exprs: List[str]) -> set[str]:
         if not exprs:
             return set()
@@ -350,23 +353,10 @@ def load_h5_to_df(
             return {x for x in v.n if x not in {"True","False","None"} and x not in _ALLOWED_FUNCS}
         return set().union(*(_ast_vars(e) for e in exprs))
 
-    def _gather_base_deps(name: str, seen: set[str] | None = None) -> set[str]:
-        """Recursively collect non-computed dependencies for an additional variable."""
-        seen = seen or set()
-        if name in seen or name not in additional_map:
-            return set()
-        seen.add(name)
-        deps = _vars_in([additional_map[name]])
-        base: set[str] = set()
-        for d in deps:
-            if d in additional_map:
-                base |= _gather_base_deps(d, seen)
-            else:
-                base.add(d)
-        return base
+    filter_deps = _vars_in(filters_exprs)
+    all_needed_additional: set[str] = set(additional_map.keys())
 
     def _gather_additional_chain(name: str, seen: set[str] | None = None) -> set[str]:
-        """Return all additional variables needed (recursively) for ``name`` including itself."""
         seen = seen or set()
         if name in seen or name not in additional_map:
             return set()
@@ -378,13 +368,17 @@ def load_h5_to_df(
                 acc |= _gather_additional_chain(d, seen)
         return acc
 
-    filter_deps = _vars_in(filters_exprs)
-    additional_targets = {t for t in targets if t in additional_map}
-    additional_in_filters = {name for name in additional_map if name in filter_deps}
-    # we want all additional variables displayed, so collect every defined one (plus dependencies)
-    all_needed_additional: set[str] = set(additional_map.keys())
+    def _gather_base_deps(name: str, seen: set[str] | None = None) -> set[str]:
+        seen = seen or set()
+        if name in seen or name not in additional_map:
+            return set()
+        seen.add(name)
+        deps = _vars_in([additional_map[name]])
+        base: set[str] = set()
+        for d in deps:
+            base |= _gather_base_deps(d, seen) if d in additional_map else {d}
+        return base
 
-    # include any chained additional dependencies
     for name in list(all_needed_additional):
         all_needed_additional |= _gather_additional_chain(name)
 
@@ -392,16 +386,40 @@ def load_h5_to_df(
     for name in all_needed_additional:
         additional_base_deps |= _gather_base_deps(name)
 
-    # ---- Column wish-list
-    wanted = set(schema_inputs) | set(targets) | additional_base_deps | filter_deps | set(additional_map.keys()) | passthrough_vars | {"sol_success"}
-    read_cols = sorted(wanted & file_keys)
+    # Plot-specific columns (e.g., strip metrics, surface3d axes)
+    extra_cols: set[str] = set()
+    if "strip" in plot_types:
+        ys = strip_settings.get("y_metrics", [])
+        if isinstance(ys, (str, bytes)):
+            ys = [ys]
+        extra_cols |= {y for y in ys if y}
+        sort_by = strip_settings.get("sort_by")
+        if sort_by:
+            extra_cols.add(sort_by)
+    if "surface3d" in plot_types:
+        axes = surface3d_settings.get("axes")
+        if isinstance(axes, str):
+            axes = [axes]
+        extra_cols |= {a for a in (axes or []) if a}
 
+    # Column wish-list (keep vectors intact for future plots)
+    wanted = (
+        set(schema_inputs)
+        | set(targets)
+        | additional_base_deps
+        | filter_deps
+        | set(additional_map.keys())
+        | passthrough_vars
+        | extra_cols
+        | {"sol_success"}
+    )
+    read_cols = sorted(wanted & file_keys)
     if verbose:
         print(f"   Columns selected to read: {len(read_cols)} "
               f"(inputs={len(schema_inputs)}, targets={len(set(targets))}, "
               f"deps={len((additional_base_deps|filter_deps) & file_keys)})")
 
-    # ---- Helpers for additional + filters (chunk-local)
+    # Helpers for additional + filters (chunk-local)
     def _col_to_2d(s: pd.Series) -> np.ndarray:
         if s.dtype == object:
             arr = np.array([v[-1] if isinstance(v, (list, np.ndarray)) and len(v) > 0 else np.nan for v in s])
@@ -446,12 +464,23 @@ def load_h5_to_df(
         _add_unique(ordered_cols, remaining)
         return ordered_cols
 
-    # ---- Precompute dependency graph for additional variables with expressions
-    need_additional = all_needed_additional
-    dep_graph = {name: _vars_in([additional_map[name]]) for name in need_additional}
-
+    # Precompute per-run helpers
+    compiled_filters = [
+        {
+            "expr": expr,
+            "code": compile(expr, "<filter>", "eval"),
+            "deps": _vars_in([expr]),
+            "applied": False,
+            "missing": False,
+            "nonfinite": False,
+        }
+        for expr in filters_exprs
+    ]
+    compiled_additional = {name: (expr, compile(expr, f"<add:{name}>", "eval")) for name, expr in additional_map.items()}
+    dep_graph = {name: _vars_in([expr]) for name, expr in additional_map.items()}
     parts: list[pd.DataFrame] = []
     inner_dims_all: dict[str, int] = {}
+    cached_order: list[str] | None = None
 
     for df_chunk in stream_h5_to_df(
         h5_path,
@@ -465,18 +494,25 @@ def load_h5_to_df(
 
         inner = dict(df_chunk.attrs.get("_inner_dims", {}))
 
-        # ---- Computed columns, chunk-local
-        if need_additional:
+        # Light downcast on numeric floats
+        if downcast_float32:
+            for col in df_chunk.columns:
+                s = df_chunk[col]
+                if pd.api.types.is_float_dtype(s):
+                    df_chunk[col] = s.astype(np.float32, copy=False)
+
+        # Computed columns (chunk-local)
+        if compiled_additional:
             env = _env_from_df(df_chunk)
-            remaining = set(need_additional)
+            remaining = set(compiled_additional.keys())
             skipped: dict[str, list[str]] = {}
             while remaining:
                 progress = False
                 for cname in list(remaining):
                     deps = dep_graph.get(cname, set())
                     if all((d in env) for d in deps):
-                        expr = additional_map[cname]
-                        out = eval(expr, {"__builtins__": {}}, env)
+                        expr, code = compiled_additional[cname]
+                        out = eval(code, {"__builtins__": {}}, env)
                         a = np.asarray(out)
                         if a.ndim == 1 or (a.ndim == 2 and a.shape[1] == 1):
                             df_chunk[cname] = a if a.ndim == 1 else a[:, 0]
@@ -492,45 +528,92 @@ def load_h5_to_df(
                         missing = sorted(dep_graph.get(c, set()) - set(env.keys()))
                         skipped[c] = missing
                         remaining.remove(c)
-                    if skipped:
+                    if verbose and skipped:
                         print(f"   ⚠️  Skipping additional variables with missing dependencies: {skipped}")
                     break
-            if filters_exprs:
+            if compiled_filters:
                 env = _env_from_df(df_chunk)
         else:
-            env = _env_from_df(df_chunk) if filters_exprs else {}
+            env = _env_from_df(df_chunk) if compiled_filters else {}
 
-        # ---- Filters per chunk
-        if filters_exprs:
+        # Filters per chunk
+        if compiled_filters:
             mask = np.ones(len(df_chunk), dtype=bool)
-            for expr in filters_exprs:
-                val = np.asarray(eval(expr, {"__builtins__": {}}, env))
+            for f in compiled_filters:
+                expr, code, deps = f["expr"], f["code"], f["deps"]
+                missing = [d for d in deps if d not in env]
+                if missing:
+                    f["missing"] = True
+                    continue
+                dep_finite = []
+                for d in deps:
+                    arr = env.get(d)
+                    if arr is None:
+                        dep_finite.append(False)
+                        continue
+                    a = np.asarray(arr)
+                    if a.size == 0:
+                        dep_finite.append(False)
+                        continue
+                    if a.dtype == object:
+                        flat = []
+                        for v in a.ravel():
+                            vv = np.asarray(v)
+                            if vv.size:
+                                flat.append(vv.ravel())
+                        a = np.concatenate(flat) if flat else np.array([])
+                        if a.size == 0:
+                            dep_finite.append(False)
+                            continue
+                    else:
+                        a = a.ravel()
+                    a = pd.to_numeric(a, errors="coerce")
+                    dep_finite.append(np.isfinite(a).any())
+                if not any(dep_finite):
+                    f["nonfinite"] = True
+                    continue
+                val = np.asarray(eval(code, {"__builtins__": {}}, env))
+                num = pd.to_numeric(val.ravel(), errors="coerce")
+                finite = num[np.isfinite(num)]
+                if num.size == 0 or finite.size == 0:
+                    f["nonfinite"] = True
+                    continue
                 mask &= _reduce_mask(val)
+                f["applied"] = True
             if not mask.all():
                 df_chunk = df_chunk.loc[mask].reset_index(drop=True)
             if df_chunk.empty:
                 continue
-
-        # ---- Keep only needed columns (chunk-local)
-        if keep == "slim":
-            ordered_cols = _order_columns(df_chunk)
-            df_chunk = df_chunk[ordered_cols].copy()
-            # prune inner dims to kept columns
-            inner = {k: v for k, v in inner.items() if k in df_chunk.columns}
 
         if success_only and "sol_success" in df_chunk.columns:
             df_chunk = df_chunk.loc[df_chunk["sol_success"].astype(bool)].reset_index(drop=True)
             if df_chunk.empty:
                 continue
 
+        # Keep only needed columns (chunk-local)
+        if keep == "slim":
+            if cached_order is None:
+                cached_order = _order_columns(df_chunk)
+            ordered_cols = [c for c in cached_order if c in df_chunk.columns]
+            df_chunk = df_chunk.loc[:, ordered_cols]
+            inner = {k: v for k, v in inner.items() if k in df_chunk.columns}
+
         df_chunk.attrs["_inner_dims"] = inner
-        inner_dims_all.update(inner)
+        for k, v in inner.items():
+            inner_dims_all.setdefault(k, v)
         parts.append(df_chunk)
 
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     df.attrs["_inner_dims"] = inner_dims_all
     if verbose and not df.empty:
         print_columns_overview(df, title="Columns kept")
+        for f in compiled_filters:
+            if f["applied"]:
+                continue
+            if f["missing"]:
+                print(f"   ⚠️  Filter '{f['expr']}' skipped (missing dependency columns)")
+            elif f["nonfinite"]:
+                print(f"   ⚠️  Filter '{f['expr']}' skipped (all dependency values non-finite)")
     return df
 
 # -----------------------------------------------------------------------------
@@ -547,23 +630,38 @@ def _fmt_scalar(x) -> str:
     if isinstance(x, (np.integer, int)): return str(int(x))
     return str(x)
 
-def _preview_cell(v) -> str:
-    a = np.asarray(v)
-    if a.ndim == 0: return _fmt_scalar(a.item())
-    if a.ndim == 1:
-        m = min(3, a.size)
-        head = ", ".join(_fmt_scalar(float(a[i])) for i in range(m))
-        return f"[{head}{', …' if a.size>m else ''}]"
-    return f"arr{a.shape}"
-
 def print_columns_overview(df: pd.DataFrame, *, title: str) -> None:
     rows = len(df)
     inner = (df.attrs or {}).get("_inner_dims", {})
-    print()
-    print(f"{title:>18}   {'Rows':<8} {'Inner':<5} {'Stats (min/avg/max)':<32} {'preview'}")
+
+    def _dtype_label(col: pd.Series, inn: int) -> str:
+        if inn == 1 and col.dtype != object:
+            return f"scalar<{col.dtype}>"
+        sample_dtype = None
+        for v in col:
+            if v is None:
+                continue
+            arr = np.asarray(v)
+            if arr.size == 0:
+                continue
+            sample_dtype = str(arr.dtype)
+            break
+        return f"vector<{sample_dtype or col.dtype}>"
+
+    def _trim(text: str, limit: int = 48) -> str:
+        if len(text) <= limit:
+            return text
+        return text[: limit - 1] + "…"
+
+    table_rows: list[dict[str, str]] = []
     for c in df.columns:
         inn = int(inner.get(c, 1))
         col = df[c]
+        dtype = _dtype_label(col, inn)
+        missing = rows - int(col.notna().sum()) if rows else 0
+        missing_pct = (missing / rows * 100) if rows else 0.0
+        missing_str = f"{missing}" if not rows else f"{missing} ({missing_pct:4.1f}%)"
+
         # Scalar stats
         if inn == 1 and col.dtype != object:
             vals = pd.to_numeric(col, errors="coerce").to_numpy()
@@ -591,7 +689,50 @@ def print_columns_overview(df: pd.DataFrame, *, title: str) -> None:
             sec0 = second_vals[0] if rows else np.nan
             last0 = last_vals[0] if rows else np.nan
             preview = f"[..., {_fmt_scalar(sec0)}, {_fmt_scalar(last0)}]"
-        print(f"{c:>18} {rows:<8d} {inn:<5d} {stats:<32} {preview}")
+
+        table_rows.append(
+            {
+                "column": c,
+                "type": dtype,
+                "inner": str(inn),
+                "missing": missing_str,
+                "stats": stats,
+                "preview": _trim(str(preview)),
+            }
+        )
+
+    headers = {
+        "column": "Column",
+        "type": "Type",
+        "inner": "Inner",
+        "missing": "Missing",
+        "stats": "Stats (min/avg/max)",
+        "preview": "Preview",
+    }
+    order = ["column", "type", "inner", "missing", "stats", "preview"]
+
+    widths = {k: len(v) for k, v in headers.items()}
+    for row in table_rows:
+        for k, v in row.items():
+            widths[k] = max(widths[k], len(v))
+
+    def _fmt_row(row: dict[str, str], header: bool = False) -> str:
+        align_left = {"column", "type", "stats", "preview"}
+        parts = []
+        for key in order:
+            val = headers[key] if header else row[key]
+            if key in align_left:
+                parts.append(f"{val:<{widths[key]}}")
+            else:
+                parts.append(f"{val:>{widths[key]}}")
+        return "  ".join(parts)
+
+    print()
+    print(f"{title} (rows={rows})")
+    print(_fmt_row({}, header=True))
+    print("  ".join("-" * widths[key] for key in order))
+    for row in table_rows:
+        print(_fmt_row(row))
 
 
 # -----------------------------------------------------------------------------
@@ -783,6 +924,9 @@ def generate_plots_for_file(
         chunk_size=chunk_size,
         downcast_float32=downcast_float32,
         verbose=True,
+        plot_types=plot_types,
+        strip_settings=strip_settings,
+        surface3d_settings=surface3d_settings,
     )
     if df.empty:
         print("   ⚠️  No data after filtering. Skipping file.")
@@ -791,9 +935,16 @@ def generate_plots_for_file(
     # Keep ALL rows (after config filters) to include failures for the "5th quartile"
     df_all = df.copy()
 
-    # Dedupe targets preserving order
+    # Dedupe targets preserving order, keep only those present in this file
     seen = set()
     all_targets = [t for t in targets if not (t in seen or seen.add(t))]
+    available_targets = [t for t in all_targets if t in df.columns]
+    missing_targets = [t for t in all_targets if t not in df.columns]
+    if missing_targets:
+        print(f"   ⚠️  Skipping missing targets for this file: {', '.join(missing_targets)}")
+    if not available_targets:
+        print("   ⚠️  No requested targets available in this file. Skipping.")
+        return
 
     # Dispatcher
     def _call(mod_path: str, fn_name: str, **kwargs):
@@ -826,10 +977,7 @@ def generate_plots_for_file(
     inner_dims = (df.attrs or {}).get("_inner_dims", {})
 
     with plot_style_context(show_titles=show_titles, font_scale=font_scale):
-        for target in all_targets:
-            if target not in df.columns:
-                print(f"   ⚠️  Target '{target}' not present. Skipping.")
-                continue
+        for target in available_targets:
 
             # scalar-only targets
             if int(inner_dims.get(target, 1)) != 1:
