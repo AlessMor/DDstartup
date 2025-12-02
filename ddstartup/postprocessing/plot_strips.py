@@ -465,8 +465,12 @@ def generate_strip_plot(
         filters = strip_settings.get("filters")
     if unit_conversions is None:
         unit_conversions = strip_settings.get("unit_conversions")
+    # Allow config to override the default; fall back to True only if neither provided
+    cfg_optimal = strip_settings.get("optimal_point")
+    if cfg_optimal is not None:
+        optimal_point = cfg_optimal
     if optimal_point is None:
-        optimal_point = strip_settings.get("optimal_point", True)
+        optimal_point = True
     if frac is None:
         frac = strip_settings.get("frac", 0.12)
     show_titles = strip_settings.get("show_titles", show_titles)
@@ -491,8 +495,10 @@ def generate_strip_plot(
     if unit_conversions is None:
         unit_conversions = {}
     
-    # Load all required metrics (y_metrics + sort metric)
-    all_metrics = list(set(y_metrics + [x_sort_by]))
+    # Load all required metrics (y_metrics + sort metric) preserving order
+    all_metrics = list(y_metrics)
+    if x_sort_by not in all_metrics:
+        all_metrics.append(x_sort_by)
     
     print(f"\n📊 Generating strip plot...")
     if h5_file is not None:
@@ -525,6 +531,11 @@ def generate_strip_plot(
             print(f"   ⚠️  Missing metrics in DataFrame for strip plot: {missing}. Skipping.")
             return None
         df = df[all_metrics].copy()
+        # Sort rows for consistency with HDF5 code path
+        if x_sort_by not in df.columns:
+            print(f"   ⚠️  Warning: Cannot sort by '{x_sort_by}' (not in data), using first metric instead")
+            x_sort_by = df.columns[0]
+        df = df.sort_values(x_sort_by).reset_index(drop=True)
     else:
         if h5_file is None:
             print("   ⚠️  No data source provided for strip plot. Skipping.")

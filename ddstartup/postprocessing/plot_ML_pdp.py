@@ -24,9 +24,97 @@ from ddstartup.postprocessing.fit_ML_method import (
     clean_dataframe,
     density_2d,
     pairwise_pdp_grid,
+    predict_numpy,
     plot_overfitting_diagnostics,
     train_model,
 )
+
+
+def compute_1d_pdp(
+    model,
+    x_scaler,
+    y_scaler,
+    X_raw: np.ndarray,
+    feature_idx: int,
+    *,
+    grid_size: int = 100,
+    bg_samples: int = 500,
+    qrange=(0.05, 0.95),
+    device: str = "cpu",
+    y_shift: float = 0.0,
+    y_is_log: bool = True,
+):
+    """
+    Compute a 1D PDP curve and std envelope for a single feature.
+    """
+    X_raw = np.asarray(X_raw, dtype=np.float32)
+    n = len(X_raw)
+    lo, hi = np.quantile(X_raw[:, feature_idx], qrange)
+    grid = np.linspace(lo, hi, grid_size, dtype=np.float32)
+
+    idx = np.random.default_rng(0).choice(n, size=min(bg_samples, n), replace=False)
+    BG = X_raw[idx].copy()
+
+    BG_rep = np.tile(BG, (grid_size, 1))
+    BG_rep[:, feature_idx] = np.repeat(grid, BG.shape[0])
+
+    preds = predict_numpy(
+        model,
+        x_scaler,
+        y_scaler,
+        BG_rep,
+        device=device,
+        y_shift=y_shift,
+        y_is_log=y_is_log,
+    ).reshape(grid_size, BG.shape[0])
+
+    pdp = preds.mean(axis=1)
+    pdp_std = preds.std(axis=1)
+    return grid, pdp, pdp_std
+
+
+def compute_ice_curves(
+    model,
+    x_scaler,
+    y_scaler,
+    X_raw: np.ndarray,
+    feature_idx: int,
+    *,
+    grid_size: int = 50,
+    n_samples: int = 200,
+    qrange=(0.05, 0.95),
+    device: str = "cpu",
+    y_shift: float = 0.0,
+    y_is_log: bool = True,
+):
+    """
+    Compute ICE curves for a subset of samples for a single feature.
+    """
+    X_raw = np.asarray(X_raw, dtype=np.float32)
+    n_samples = min(int(n_samples), len(X_raw))
+
+    lo, hi = np.quantile(X_raw[:, feature_idx], qrange)
+    grid = np.linspace(lo, hi, grid_size, dtype=np.float32)
+
+    rng = np.random.default_rng(0)
+    idx = rng.choice(len(X_raw), size=n_samples, replace=False)
+    X_sample = X_raw[idx].copy()
+
+    ice = np.zeros((n_samples, grid_size), dtype=np.float32)
+    for g_idx, g_val in enumerate(grid):
+        X_temp = X_sample.copy()
+        X_temp[:, feature_idx] = g_val
+        ice[:, g_idx] = predict_numpy(
+            model,
+            x_scaler,
+            y_scaler,
+            X_temp,
+            device=device,
+            y_shift=y_shift,
+            y_is_log=y_is_log,
+        )
+
+    return grid, ice
 
 
 def generate_ml_pairwise_plots(
@@ -203,3 +291,78 @@ def generate_ml_pairwise_plots(
     if len(pairs) > 1:
         print(f"      ... and {len(pairs) - 1} more pairwise plots")
     print("   ML PDP plots complete")
+
+    # Additional 1D PDP and ICE plots (verbose-only to avoid heavy output)
+    if verbose and cfg.get("generate_1d_pdp", True):
+        g1d = int(cfg.get("pdp1d_grid_size", 100))
+        bg1d = int(cfg.get("pdp1d_bg_samples", 500))
+        print(f"   Generating 1D PDPs for {len(usable)} features (grid={g1d}, bg={bg1d})...")
+        for fi, feat in enumerate(usable):
+            xi = registry.get_param_label(feat) if registry is not None else feat
+            try:
+                grid, pdp_vals, pdp_std = compute_1d_pdp(
+                    model,
+                    x_scaler,
+                    y_scaler,
+                    X,
+                    fi,
+                    grid_size=g1d,
+                    bg_samples=bg1d,
+                    qrange=qrange,
+                    device=device,
+                    y_shift=y_shift,
+                    y_is_log=y_is_log,
+                )
+                fig, ax = plt.subplots(figsize=(7.5, 5.0))
+                ax.plot(grid, pdp_vals, color="tab:blue", linewidth=2)
+                ax.fill_between(grid, pdp_vals - pdp_std, pdp_vals + pdp_std, color="tab:blue", alpha=0.2, linewidth=0)
+                ax.set_xlabel(xi, fontsize=11)
+                ax.set_ylabel(f"{target_label} [{target_unit}]" if target_unit else target_label, fontsize=11)
+                if show_titles:
+                    ax.set_title(f"1D PDP: {target_label} vs {xi}", fontsize=12, fontweight="bold")
+                plt.tight_layout()
+                fname = f"{prefix}_{feat}_pdp1d.png"
+                plt.savefig(out_dir / fname, dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                if verbose and fi == 0:
+                    print(f"      Saved: {fname}")
+            except Exception as e:
+                print(f"      Error plotting 1D PDP for {feat}: {e}")
+
+    if verbose and cfg.get("generate_ice", True):
+        ice_grid = int(cfg.get("ice_grid_size", 50))
+        ice_samples = int(cfg.get("ice_n_samples", 200))
+        print(f"   Generating ICE plots (grid={ice_grid}, samples={ice_samples})...")
+        for fi, feat in enumerate(usable):
+            xi = registry.get_param_label(feat) if registry is not None else feat
+            try:
+                grid, ice = compute_ice_curves(
+                    model,
+                    x_scaler,
+                    y_scaler,
+                    X,
+                    fi,
+                    grid_size=ice_grid,
+                    n_samples=ice_samples,
+                    qrange=qrange,
+                    device=device,
+                    y_shift=y_shift,
+                    y_is_log=y_is_log,
+                )
+                mean_curve = ice.mean(axis=0)
+                fig, ax = plt.subplots(figsize=(7.5, 5.0))
+                ax.plot(grid, ice.T, color="gray", alpha=0.15, linewidth=1)
+                ax.plot(grid, mean_curve, color="tab:orange", linewidth=2, label="Mean ICE")
+                ax.set_xlabel(xi, fontsize=11)
+                ax.set_ylabel(f"{target_label} [{target_unit}]" if target_unit else target_label, fontsize=11)
+                if show_titles:
+                    ax.set_title(f"ICE: {target_label} vs {xi}", fontsize=12, fontweight="bold")
+                ax.legend()
+                plt.tight_layout()
+                fname = f"{prefix}_{feat}_ice.png"
+                plt.savefig(out_dir / fname, dpi=150, bbox_inches="tight")
+                plt.close(fig)
+                if verbose and fi == 0:
+                    print(f"      Saved: {fname}")
+            except Exception as e:
+                print(f"      Error plotting ICE for {feat}: {e}")
