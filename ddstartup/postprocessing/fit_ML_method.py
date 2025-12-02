@@ -72,9 +72,13 @@ def clean_dataframe(
     *,
     min_rows: int = 200,
     verbose: bool = True,
-) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    use_log_target: bool = True,
+) -> Tuple[np.ndarray, np.ndarray, List[str], bool]:
     """
     Select usable numeric columns, drop rows with NaN/Inf, and return X, y arrays.
+    
+    If use_log_target=True, applies log1p(y) to target and filters out non-positive values.
+    Returns (X, y, feature_names, y_is_log).
     """
     if target not in df.columns:
         raise ValueError(f"Target '{target}' not found in DataFrame columns.")
@@ -126,7 +130,30 @@ def clean_dataframe(
 
     X = M[usable].values.astype(np.float32)
     y = M[target].values.astype(np.float64)
-    return X, y, usable
+    
+    # Apply log1p transformation if requested
+    y_is_log = False
+    if use_log_target:
+        # Filter out non-positive values (can't take log)
+        positive_mask = y > 0
+        n_non_positive = (~positive_mask).sum()
+        if n_non_positive > 0:
+            if verbose:
+                print(f"  Filtering {n_non_positive:,} non-positive values for log transform")
+            X = X[positive_mask]
+            y = y[positive_mask]
+        
+        if len(y) >= min_rows:
+            y = np.log1p(y)  # log(1 + y), handles small values well
+            y_is_log = True
+            if verbose:
+                print(f"  Applied log1p transform to target")
+                print(f"  Target range after transform: [{y.min():.3f}, {y.max():.3f}]")
+        else:
+            if verbose:
+                print(f"  Skipping log transform: only {len(y)} rows remaining")
+    
+    return X, y, usable, y_is_log
 
 
 # --------------------------
@@ -146,27 +173,22 @@ def train_model(
     num_workers: int = 4,
     pin_memory: bool = True,
     use_augmentation: bool = True,
+    y_is_log: bool = False,
 ) -> Tuple[nn.Module, StandardScaler, StandardScaler, float, float, float, float, float, str, dict, float, bool]:
     """
-    Train an MLP regressor with log-target + shift, early stopping, and diagnostics.
+    Train an MLP regressor with early stopping and diagnostics.
     Returns (model, x_scaler, y_scaler, r2, mae, rmse, nrmse, mape, device, diagnostics, y_shift, y_is_log).
+    
+    If y_is_log=True, assumes y has already been log1p-transformed and will
+    inverse-transform predictions using expm1() for metrics.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     X = np.asarray(X, dtype=np.float32)
     y = np.asarray(y, dtype=np.float64)
 
-    y_shift = 0.0
-    y_min = float(np.min(y))
-    if y_min <= 0:
-        y_shift = abs(y_min) + 1.0
-        print(f"Applying positive shift to target: {y_shift:.4e}")
-        y_shifted = y + y_shift
-    else:
-        y_shifted = y
+    y_shift = 0.0  # No shift needed (log1p handles zeros)
 
-    y_log = np.log(y_shifted)
-
-    X_tr_raw, X_tmp_raw, y_tr_raw, y_tmp_raw = train_test_split(X, y_log, test_size=0.30, random_state=42)
+    X_tr_raw, X_tmp_raw, y_tr_raw, y_tmp_raw = train_test_split(X, y, test_size=0.30, random_state=42)
     X_va_raw, X_te_raw, y_va_raw, y_te_raw = train_test_split(X_tmp_raw, y_tmp_raw, test_size=0.50, random_state=42)
 
     x_scaler = StandardScaler().fit(X_tr_raw)
@@ -202,9 +224,9 @@ def train_model(
     model = MLPRegressor(n_in=X.shape[1], hidden=hidden, dropout=dropout).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.3, patience=3, verbose=False)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.3, patience=3)
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
+    scaler = torch.amp.GradScaler(device, enabled=(device == "cuda"))
     use_amp = device == "cuda"
 
     history = {"epoch": [], "train_loss": [], "val_loss": [], "lr": []}
@@ -222,7 +244,7 @@ def train_model(
             yb = yb.to(device, non_blocking=True)
             opt.zero_grad(set_to_none=True)
             if use_amp:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast(device):
                     pred = model(xb)
                     loss = loss_fn(pred, yb)
                 scaler.scale(loss).backward()
@@ -248,7 +270,7 @@ def train_model(
                 xb = xb.to(device, non_blocking=True)
                 yb = yb.to(device, non_blocking=True)
                 if use_amp:
-                    with torch.cuda.amp.autocast():
+                    with torch.amp.autocast(device):
                         pred = model(xb)
                         loss = loss_fn(pred, yb)
                 else:
@@ -295,13 +317,15 @@ def train_model(
                 trues.append(yb.cpu().numpy())
         preds = np.concatenate(preds, axis=0).reshape(-1, 1)
         trues = np.concatenate(trues, axis=0).reshape(-1, 1)
-        y_true_log = y_scaler.inverse_transform(trues).ravel()
-        y_pred_log = y_scaler.inverse_transform(preds).ravel()
-        y_true = np.exp(y_true_log)
-        y_pred = np.exp(y_pred_log)
-        if y_shift != 0:
-            y_true -= y_shift
-            y_pred -= y_shift
+        y_true_scaled = y_scaler.inverse_transform(trues).ravel()
+        y_pred_scaled = y_scaler.inverse_transform(preds).ravel()
+        # If log1p was applied, inverse with expm1 to get original scale
+        if y_is_log:
+            y_true = np.expm1(y_true_scaled)
+            y_pred = np.expm1(y_pred_scaled)
+        else:
+            y_true = y_true_scaled
+            y_pred = y_pred_scaled
         err = y_true - y_pred
         mse = float(np.mean(err ** 2))
         rmse = math.sqrt(mse)
@@ -348,7 +372,7 @@ def train_model(
         device,
         diagnostics,
         y_shift,
-        True,  # y_is_log
+        y_is_log,  # Pass through whether log1p was applied
     )
 
 
@@ -363,7 +387,7 @@ def predict_numpy(
     *,
     device: str = "cpu",
     y_shift: float = 0.0,
-    y_is_log: bool = True,
+    y_is_log: bool = False,
 ) -> np.ndarray:
     """
     Predict using the trained model with inverse transform handling.
@@ -373,10 +397,7 @@ def predict_numpy(
     with torch.no_grad():
         yhat = model(xb).cpu().numpy()
     y_pred = y_scaler.inverse_transform(yhat).ravel()
-    if y_is_log:
-        y_pred = np.exp(y_pred)
-        if y_shift != 0:
-            y_pred = y_pred - y_shift
+    # y_is_log kept for backward compatibility but no longer used
     return y_pred
 
 
@@ -564,10 +585,11 @@ def train_from_df(
     """
     Clean the DataFrame, train the MLP, optionally save artifacts and diagnostics.
     """
-    X, y, features = clean_dataframe(df, target, feature_cols=feature_cols, verbose=verbose)
+    X, y, features, y_is_log = clean_dataframe(df, target, feature_cols=feature_cols, verbose=verbose)
     model, x_scaler, y_scaler, r2, mae, rmse, nrmse, mape, device, diagnostics, y_shift, y_is_log = train_model(
         X,
         y,
+        y_is_log=y_is_log,
         **train_kwargs,
     )
 

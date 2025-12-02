@@ -50,3 +50,7 @@ traitlets==5.14.3
 typing_extensions==4.14.1
 wcwidth==0.2.13
 zipp==3.23.0
+
+# Optional: for efficient large-scale plotting (used by strip plots with >50k points)
+datashader>=0.16
+colorcet>=3.0

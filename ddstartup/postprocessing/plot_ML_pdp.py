@@ -72,7 +72,7 @@ def generate_ml_pairwise_plots(
 
     # Clean DataFrame -> X, y
     try:
-        X, y, usable = clean_dataframe(df, target, feature_cols=inputs, min_rows=min_rows, verbose=verbose)
+        X, y, usable, y_is_log = clean_dataframe(df, target, feature_cols=inputs, min_rows=min_rows, verbose=verbose)
     except Exception as e:
         print(f"   Error during ML PDP cleaning: {e}")
         return
@@ -114,6 +114,7 @@ def generate_ml_pairwise_plots(
             max_epochs=max_epochs,
             patience=patience,
             use_augmentation=use_augmentation,
+            y_is_log=y_is_log,
         )
     except Exception as e:
         print(f"   Error training ML PDP model: {e}")

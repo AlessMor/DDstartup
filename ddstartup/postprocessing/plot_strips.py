@@ -109,10 +109,20 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 from statsmodels.nonparametric.smoothers_lowess import lowess
+from tqdm import tqdm
 
 # Import hdf5plugin for LZ4 compression support
 try:
     import hdf5plugin
+except ImportError:
+    pass
+
+# Check if datashader is available
+HAS_DATASHADER = False
+try:
+    import datashader as ds
+    import datashader.transfer_functions as tf
+    HAS_DATASHADER = True
 except ImportError:
     pass
 
@@ -244,6 +254,92 @@ def load_and_prepare_data(h5_file, metrics, filters, sort_by, registry):
     return df_sorted
 
 
+def plot_with_datashader(ax, x, y, color, width=1200, height=400, verbose=False):
+    """
+    Plot scatter using datashader for efficient rendering of large datasets.
+    Falls back to matplotlib if datashader is not available.
+    
+    Args:
+        ax: Matplotlib axis
+        x: X coordinates
+        y: Y values
+        color: Color for the plot (used for matplotlib fallback)
+        width: Canvas width in pixels
+        height: Canvas height in pixels
+        verbose: Print progress info
+        
+    Returns:
+        True if datashader was used, False if matplotlib fallback
+    """
+    if not HAS_DATASHADER:
+        return False
+    
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    
+    # Remove NaNs/Infs
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    
+    if len(x) == 0:
+        return True
+    
+    x_min, x_max = float(np.nanmin(x)), float(np.nanmax(x))
+    y_min, y_max = float(np.nanmin(y)), float(np.nanmax(y))
+    
+    # Pad ranges slightly
+    x_pad = (x_max - x_min) * 0.02 if x_max > x_min else 1.0
+    y_pad = (y_max - y_min) * 0.02 if y_max > y_min else 1.0
+    x_min, x_max = x_min - x_pad, x_max + x_pad
+    y_min, y_max = y_min - y_pad, y_max + y_pad
+    
+    if verbose:
+        print(f"      Datashader: rendering {len(x):,} points to {width}x{height} canvas...")
+    
+    cvs = ds.Canvas(plot_width=width, plot_height=height,
+                    x_range=(x_min, x_max), y_range=(y_min, y_max))
+    agg = cvs.points(pd.DataFrame({'x': x, 'y': y}), 'x', 'y')
+    
+    # Use color-based shading
+    img = tf.shade(agg, cmap=[color, color], how='log')
+    
+    ax.imshow(img.to_pil(), origin='lower',
+              extent=(x_min, x_max, y_min, y_max), aspect='auto', alpha=0.6)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    
+    return True
+
+
+def plot_scatter_rasterized(ax, x, y, color, alpha=0.4, s=1, verbose=False):
+    """
+    Plot scatter with rasterization for efficient rendering.
+    Uses small markers and rasterizes the PathCollection.
+    
+    Args:
+        ax: Matplotlib axis
+        x: X coordinates
+        y: Y values
+        color: Color for markers
+        alpha: Transparency
+        s: Marker size
+        verbose: Print progress info
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+    
+    if len(x) == 0:
+        return
+    
+    if verbose:
+        print(f"      Matplotlib rasterized: plotting {len(x):,} points...")
+    
+    sc = ax.scatter(x, y, c=color, s=s, alpha=alpha, linewidths=0, rasterized=True)
+    # Ensure all collections are rasterized
+    for coll in ax.collections:
+        coll.set_rasterized(True)
+
+
 def add_trend_and_band(ax, x, y, color, label, frac=0.12, window_size=None, alpha_data=0.4, alpha_band=0.15):
     """
     Add LOWESS trend line and uncertainty band to axis.
@@ -314,6 +410,8 @@ def generate_strip_plot(
     frac=0.12,
     df=None,
     strip_settings=None,
+    use_datashader=True,
+    verbose=False,
     **_,
 ):
     """
@@ -372,6 +470,8 @@ def generate_strip_plot(
     if frac is None:
         frac = strip_settings.get("frac", 0.12)
     show_titles = strip_settings.get("show_titles", show_titles)
+    use_datashader = strip_settings.get("use_datashader", use_datashader)
+    verbose = strip_settings.get("verbose", verbose)
 
     # Validate inputs
     if not y_metrics or len(y_metrics) == 0:
@@ -446,53 +546,121 @@ def generate_strip_plot(
     
     x = np.arange(len(df))
     
-    # Color scheme
-    colors = ['tab:red', 'tab:blue', 'tab:green']
+    # Color scheme (hex colors for datashader compatibility)
+    colors = ['#d62728', '#1f77b4', '#2ca02c']  # red, blue, green
     axes = [ax1]
     
-    # Plot first metric on left y-axis
-    metric1 = y_metrics[0]
-    y1 = df[metric1].values
-    color1 = colors[0]
+    # Determine if we should use datashader (for large datasets)
+    n_points = len(df)
+    datashader_threshold = 50000  # Use datashader for datasets larger than this
+    should_use_datashader = use_datashader and HAS_DATASHADER and n_points > datashader_threshold
     
-    line1_raw, line1_trend = add_trend_and_band(ax1, x, y1, color1, get_label(metric1, unit_conversions, registry))
+    if verbose:
+        print(f"   Dataset size: {n_points:,} points")
+        if should_use_datashader:
+            print(f"   Using datashader for efficient rendering")
+        elif use_datashader and not HAS_DATASHADER:
+            print(f"   Datashader not available, using matplotlib (install with: pip install datashader)")
+        else:
+            print(f"   Using matplotlib for rendering")
     
-    # Get y-axis label
-    ylabel1 = get_axis_label(metric1, unit_conversions, registry)
-    ax1.set_ylabel(ylabel1, color=color1, fontsize=12)
-    ax1.tick_params(axis='y', labelcolor=color1)
-    ax1.grid(True, alpha=0.3)
+    # Store trend lines for legend
+    all_lines = []
+    all_labels = []
     
-    # Plot second metric on right y-axis (if provided)
-    if len(y_metrics) >= 2:
-        ax2 = ax1.twinx()
-        axes.append(ax2)
-        
-        metric2 = y_metrics[1]
-        y2 = df[metric2].values
-        color2 = colors[1]
-        
-        line2_raw, line2_trend = add_trend_and_band(ax2, x, y2, color2, get_label(metric2, unit_conversions, registry))
-        
-        ylabel2 = get_axis_label(metric2, unit_conversions, registry)
-        ax2.set_ylabel(ylabel2, color=color2, fontsize=12)
-        ax2.tick_params(axis='y', labelcolor=color2)
+    # Progress bar for metrics
+    metrics_iter = tqdm(enumerate(y_metrics), total=len(y_metrics), 
+                        desc="   Plotting metrics", disable=not verbose)
     
-    # Plot third metric on second right y-axis (if provided)
-    if len(y_metrics) >= 3:
-        ax3 = ax1.twinx()
-        ax3.spines['right'].set_position(('outward', 60))
-        axes.append(ax3)
+    for idx, metric in metrics_iter:
+        color = colors[idx]
+        y_vals = df[metric].values
         
-        metric3 = y_metrics[2]
-        y3 = df[metric3].values
-        color3 = colors[2]
+        if idx == 0:
+            ax = ax1
+        elif idx == 1:
+            ax2 = ax1.twinx()
+            axes.append(ax2)
+            ax = ax2
+        else:  # idx == 2
+            ax3 = ax1.twinx()
+            ax3.spines['right'].set_position(('outward', 60))
+            axes.append(ax3)
+            ax = ax3
         
-        line3_raw, line3_trend = add_trend_and_band(ax3, x, y3, color3, get_label(metric3, unit_conversions, registry))
+        # Plot raw data (datashader or matplotlib)
+        if should_use_datashader:
+            plot_with_datashader(ax, x, y_vals, color, verbose=verbose)
+            # For datashader, we only add trend line (no raw line in legend)
+            line_raw = []
+        else:
+            # Use rasterized matplotlib for medium datasets
+            if n_points > 10000:
+                plot_scatter_rasterized(ax, x, y_vals, color, verbose=verbose)
+                line_raw = []
+            else:
+                # Standard matplotlib for small datasets
+                line_raw = ax.plot(x, y_vals, color=color, linewidth=1, 
+                                   label=get_label(metric, unit_conversions, registry), 
+                                   alpha=0.4, zorder=1)
         
-        ylabel3 = get_axis_label(metric3, unit_conversions, registry)
-        ax3.set_ylabel(ylabel3, color=color3, fontsize=12)
-        ax3.tick_params(axis='y', labelcolor=color3)
+        # Always add LOWESS trend line (downsample for performance)
+        if verbose:
+            print(f"      Computing LOWESS trend for {metric}...")
+        
+        # LOWESS is O(n²) - must downsample for large datasets
+        max_lowess_points = 10000
+        if len(x) > max_lowess_points:
+            # Uniform sampling to preserve distribution
+            step = len(x) // max_lowess_points
+            idx_sample = np.arange(0, len(x), step)
+            x_sample = x[idx_sample]
+            y_sample = y_vals[idx_sample]
+            if verbose:
+                print(f"      Downsampled {len(x):,} -> {len(x_sample):,} points for LOWESS")
+        else:
+            x_sample = x
+            y_sample = y_vals
+        
+        try:
+            trend_sample = lowess(y_sample, x_sample, frac=frac, it=1, return_sorted=False)
+            # Interpolate back to full x range
+            if len(x) > max_lowess_points:
+                trend = np.interp(x, x_sample, trend_sample)
+            else:
+                trend = trend_sample
+        except Exception as e:
+            if verbose:
+                print(f"      ⚠️  LOWESS failed: {e}, using moving average")
+            window = max(5, len(x) // 50)
+            trend = pd.Series(y_vals).rolling(window, center=True, min_periods=1).mean().values
+        
+        line_trend = ax.plot(x, trend, color=color, linewidth=2.5, 
+                             label=f'{get_label(metric, unit_conversions, registry)} (trend)', zorder=3)
+        
+        # Add uncertainty band
+        window_size = max(25, len(x) // 20)
+        residuals = pd.Series(y_vals - trend, index=pd.Index(x, name="x")).sort_index()
+        min_periods = max(10, window_size // 3)
+        
+        lo_offset = residuals.rolling(window_size, min_periods=min_periods).quantile(0.10)
+        hi_offset = residuals.rolling(window_size, min_periods=min_periods).quantile(0.90)
+        
+        lo = trend + lo_offset.values
+        hi = trend + hi_offset.values
+        ax.fill_between(x, lo, hi, color=color, alpha=0.15, linewidth=0, zorder=2)
+        
+        # Set y-axis label
+        ylabel = get_axis_label(metric, unit_conversions, registry)
+        ax.set_ylabel(ylabel, color=color, fontsize=12)
+        ax.tick_params(axis='y', labelcolor=color)
+        
+        if idx == 0:
+            ax.grid(True, alpha=0.3)
+        
+        # Collect for legend
+        all_lines.extend(line_raw + line_trend)
+        all_labels.extend([l.get_label() for l in line_raw + line_trend])
     
     # Set x-axis label
     xlabel = f'Simulation Index (sorted by {get_label(x_sort_by, unit_conversions, registry)})'
@@ -536,24 +704,11 @@ def generate_strip_plot(
             print(f"      {label}: {val:.3e}")
     
     # Combine legends
-    lines = []
-    labels = []
-    
-    if len(y_metrics) >= 1:
-        lines.extend(line1_raw + line1_trend)
-        labels.extend([l.get_label() for l in line1_raw + line1_trend])
-    if len(y_metrics) >= 2:
-        lines.extend(line2_raw + line2_trend)
-        labels.extend([l.get_label() for l in line2_raw + line2_trend])
-    if len(y_metrics) >= 3:
-        lines.extend(line3_raw + line3_trend)
-        labels.extend([l.get_label() for l in line3_raw + line3_trend])
-    
     if optimal_point and len(y_metrics) >= 2:
-        lines.append(star)
-        labels.append('Optimal Point')
+        all_lines.append(star)
+        all_labels.append('Optimal Point')
     
-    ax1.legend(lines, labels, loc='upper left', fontsize=9, framealpha=0.9)
+    ax1.legend(all_lines, all_labels, loc='upper left', fontsize=9, framealpha=0.9)
     
     plt.tight_layout()
     

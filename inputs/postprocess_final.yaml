@@ -20,7 +20,7 @@
 
 files: 
 - 'test_parametric_T_seeded'  # Folder name (relative to outputs/)
-# - 'test_parametric_lump'  # Default: process files in the latest folder
+- 'test_parametric_lump'  # Default: process files in the latest folder
 
 # Alternative examples:
 # files: "20251008_081422_parametric_T_seeded"  # Specific folder
@@ -44,14 +44,14 @@ additional_variables:
     expr: TBE*V_plasma*100 # BE CAREFUL! THIS IS DEFINED FOR AN OLDER VERSION OF THE CODE
     unit: "%"            # optional override
     symbol: "TBE"
-  # c_T:
-  #   expr: unrealized_profits / I_target
-  #   unit: "$/kg"
-  #   symbol: r"$c_T$"
-  # Tdot_tot_eff:
-  #   expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
-  #   unit: "1/s"
-  #   symbol: r"$\dot{T}_{tot}$"
+  c_T:
+    expr: unrealized_profits / I_target
+    unit: "$/kg"
+    symbol: r"$c_T$"
+  Tdot_tot_eff:
+    expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
+    unit: "1/s"
+    symbol: r"$\dot{T}_{tot}$"
 
 # ============================================================================
 # TARGET VARIABLES
@@ -61,7 +61,7 @@ additional_variables:
 #   - t_startup: Time to reach DT operation
 #   - unrealized_profits: Economic cost of DD startup
 target_variables:
-  # - c_T
+  - c_T
   - K_el
   - unrealized_profits
 
@@ -98,7 +98,7 @@ plots:
   # ==========================================================================
   # 3D SURFACE SETTINGS
   # ==========================================================================
-  surface3d: false         # Interactive 3D surface (3 inputs as axes, target as color)
+  surface3d: true         # Interactive 3D surface (3 inputs as axes, target as color)
   surface3d_settings:
     axes: [TBE_percent, P_DT_eq, V_plasma]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
     grid_size: 24          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
@@ -133,7 +133,7 @@ plots:
   # ==========================================================================
   # PROBABILITY DENSITY FUNCTION (PDF) SETTINGS
   # ==========================================================================
-  pdf: false              # Probability density function plots
+  pdf: true              # Probability density function plots
   
   pdf_settings:
     n_bins: 10000        # Number of histogram bins (when smooth=false)
@@ -179,26 +179,33 @@ plots:
                          # - 'all': Plots all possible pairs (can be many plots!)
                          # - Custom list: [[0,1], [2,4]] for specific parameter index pairs
     grid_size: 70        # Resolution of PDP grid (70x70 = 4900 points per plot)
-    max_train_samples: 1000000  # Maximum samples to use for ML model training
-    hidden: [256, 256, 128]    # MLP hidden layer sizes
+    max_train_samples: 10000000000  # Maximum samples to use for ML model training
+    hidden: [128, 64, 32]    # MLP hidden layer sizes            # Smaller network (was [128, 64, 32])
+    # dropout: 0.5                 # Explicit dropout (code default is 0.5)
+    # weight_decay: 1e-4           # L2 regularization to prevent overfitting
+    # patience: 20   
     verbose: true       # Print detailed training progress
                          # Set to true for debugging or monitoring training
 
   # ==========================================================================
   # STRIP PLOT SETTINGS
   # ==========================================================================
-  strip: false            # Strip plots with trends (comparing multiple metrics)
+  strip: true            # Strip plots with trends (comparing multiple metrics)
   
   strip_settings:
     # Strip plots compare multiple metrics with trend lines and uncertainty bands
     # Metrics to plot on y-axes (1-3 metrics). Can use computed metrics like "P_DT_eq - P_aux"
     y_metrics: 
-      - unrealized_profits
+      - K_el
       - t_startup
-      - P_DT_eq
     
     # Metric to sort simulations by (must be in data or in y_metrics)
     sort_by: t_startup
+    
+    # Performance settings
+    use_datashader: true  # Use datashader for fast rendering of large datasets (>50k points)
+                          # Falls back to matplotlib if datashader not installed
+    verbose: true         # Show progress bar and detailed output
     
     # Unit conversions for better readability
     # Format: metric_name: {factor: conversion_factor, unit: 'unit_string'}
@@ -217,7 +224,7 @@ plots:
         unit: 'MW'
     
     # Whether to mark optimal point (minimizing all metrics)
-    optimal_point: true
+    optimal_point: false
     
     # LOWESS smoothing fraction (0.05-0.25, default: 0.12)
     frac: 0.12
@@ -234,7 +241,7 @@ compare:
     - "outputs/test_parametric_T_seeded"
     - "outputs/test_parametric_lump"
   targets:
-    - K_el
+    - unrealized_profits
     - t_startup
   out: "outputs/compare_tests"
   show_titles: false
@@ -269,4 +276,4 @@ output:
 
 runtime:
   downcast_float32: true
-  chunk_size: 10000
+  # chunk_size: 10000
