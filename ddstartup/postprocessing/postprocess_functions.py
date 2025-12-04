@@ -291,6 +291,7 @@ def load_h5_to_df(
     passthrough_vars: Set[str] | None = None,
     chunk_size: int | None = None,
     downcast_float32: bool = False,
+    vectors_to_scalar: bool = True,     # Extract last value from vectors to save memory
     verbose: bool = True,
     keep: str = "slim",
     success_only: bool = False,
@@ -305,7 +306,9 @@ def load_h5_to_df(
       - Variables needed to compute *requested* additional targets
       - Variables referenced by filters
       - 'sol_success' if present
-    Optionally keep only those columns ('slim'), default behavior for low memory.
+    
+    If vectors_to_scalar=True (default), vector columns are reduced to their last value.
+    This drastically reduces memory usage for large datasets with time-series data.
     """
     # Normalize inputs
     additional_map   = additional_map   or {}
@@ -487,6 +490,7 @@ def load_h5_to_df(
         columns=read_cols,
         chunk_size=chunk_size,
         downcast_float32=downcast_float32,
+        vectors_to_scalar=vectors_to_scalar,
         verbose=verbose,
     ):
         if df_chunk.empty:

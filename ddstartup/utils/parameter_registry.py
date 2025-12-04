@@ -279,7 +279,44 @@ PARAMETER_SCHEMA = {
         'unit': 'string',
         'symbol': 'Error',
         'description': 'Error message if computation failed'
-    }
+    },
+    
+    # COMPUTED/DERIVED PARAMETERS (for postprocessing)
+    'K_el': {
+        'role': 'output',
+        'analysis_types': ['lump', 'T_seeded'],
+        'unit': '$/W',
+        'symbol': r'$K_{\mathrm{el}}$',
+        'description': 'Specific capital cost per electric watt'
+    },
+    'c_T': {
+        'role': 'output',
+        'analysis_types': ['lump', 'T_seeded'],
+        'unit': '$',
+        'symbol': r'$c_T$',
+        'description': 'Total cost of tritium during startup'
+    },
+    'Tdot_tot_eff': {
+        'role': 'output',
+        'analysis_types': ['T_seeded'],
+        'unit': 'kg/s',
+        'symbol': r'$\dot{T}_{\mathrm{tot,eff}}$',
+        'description': 'Effective total tritium production rate'
+    },
+    'TBE_percent': {
+        'role': 'output',
+        'analysis_types': ['T_seeded'],
+        'unit': '%',
+        'symbol': r'$\mathrm{TBE}_{\%}$',
+        'description': 'Tritium breeding efficiency in percent'
+    },
+    'P_aux_eq': {
+        'role': 'output',
+        'analysis_types': ['lump', 'T_seeded'],
+        'unit': 'W',
+        'symbol': r'$P_{\mathrm{aux,eq}}$',
+        'description': 'Auxiliary power at equilibrium'
+    },
 }
 
 
@@ -373,8 +410,27 @@ class ParameterRegistry:
         return self.get_unit(param_name)
     
     def get_symbol(self, param_name: str) -> str:
-        """Get LaTeX symbol for a parameter."""
-        return self.parameters.get(param_name, {}).get('symbol', param_name)
+        """
+        Get LaTeX symbol for a parameter.
+        
+        For parameters in the registry, returns the defined symbol.
+        For unknown parameters, auto-formats the name with LaTeX subscripts.
+        """
+        if param_name in self.parameters:
+            return self.parameters[param_name].get('symbol', param_name)
+        
+        # Auto-format unknown parameters: convert underscores to subscripts
+        # e.g., 'K_el' -> '$K_{\mathrm{el}}$', 'new_param' -> '$\mathrm{new\_param}$'
+        if '_' in param_name:
+            parts = param_name.split('_', 1)
+            if len(parts) == 2:
+                base, subscript = parts
+                # Escape underscores in subscript for multi-part subscripts
+                subscript_escaped = subscript.replace('_', r'\_')
+                return rf'${base}_{{\mathrm{{{subscript_escaped}}}}}$'
+        
+        # No underscore - just wrap in mathrm
+        return rf'$\mathrm{{{param_name}}}$'
     
     def get_units_dict(self, analysis_type: Optional[str] = None) -> Dict[str, str]:
         """Get dictionary mapping parameter names to units."""

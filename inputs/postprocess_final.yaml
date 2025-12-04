@@ -64,6 +64,7 @@ target_variables:
   - c_T
   - K_el
   - unrealized_profits
+  - t_startup
 
 # ============================================================================
 # FILTERS
@@ -73,8 +74,8 @@ target_variables:
 filters:
 - K_el < 5
 - K_el > 0
-# - c_T < 2e9
-# - c_T > 0
+- c_T < 2e9
+- c_T > 0
 
 # ============================================================================
 # PLOT CONFIGURATION
@@ -100,16 +101,17 @@ plots:
   # ==========================================================================
   surface3d: true         # Interactive 3D surface (3 inputs as axes, target as color)
   surface3d_settings:
-    axes: [TBE_percent, P_DT_eq, V_plasma]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
-    grid_size: 24          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
-    max_interp: 20000      # Sample cap for interpolation (prevents OOM on very large datasets)
+    axes: [Tdot_tot_eff, price_of_electricity, eta_th]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
+    grid_size: 60          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
+    max_interp: 25000      # Sample cap for interpolation (prevents OOM on very large datasets)
     interpolate_method: linear   # 'linear' (default) or 'nearest' for sparse data
     surface_count: 4       # Number of isosurfaces through the volume (1-10)
-    surface_opacity: 0.5   # 0-1 opacity for the interpolated volume
+    surface_opacity: 0.4   # 0-1 opacity for the interpolated volume (lower = see through layers)
     colorscale: Viridis    # Any Plotly colorscale name
-    clip_quantile: 0.995   # Clip target to reduce color blow-up from outliers (None to disable)
-    max_scatter: 4000      # Sample cap for real points overlay (0 or null = all points)
-    point_size: 4          # Marker size for the real points
+    clip_quantile: 0.99    # Clip target to reduce color blow-up from outliers (None to disable)
+    max_scatter: 2000      # Sample cap for real points overlay (0 or null = all points)
+    point_size: 3          # Marker size for the real points (smaller = less clutter)
+    show_scatter: false     # Show scattered data points on top of isosurfaces
     show_point_colorscale: false  # Show separate colorbar for the scatter points
   # ==========================================================================
   # KDE QUARTILE PLOT SETTINGS

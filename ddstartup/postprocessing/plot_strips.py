@@ -249,7 +249,7 @@ def load_and_prepare_data(h5_file, metrics, filters, sort_by, registry):
         print(f"   ⚠️  Warning: Cannot sort by '{sort_by}' (not in data), using first metric instead")
         sort_by = df_filtered.columns[0]
     
-    df_sorted = df_filtered.sort_values(sort_by).reset_index(drop=True)
+    df_sorted = df_filtered.sort_values(sort_by, ascending=True).reset_index(drop=True)
     
     return df_sorted
 
@@ -531,11 +531,24 @@ def generate_strip_plot(
             print(f"   ⚠️  Missing metrics in DataFrame for strip plot: {missing}. Skipping.")
             return None
         df = df[all_metrics].copy()
-        # Sort rows for consistency with HDF5 code path
+        
+        # Filter out NaN/Inf values in all metrics before sorting
+        valid_mask = np.ones(len(df), dtype=bool)
+        for col in all_metrics:
+            col_vals = pd.to_numeric(df[col], errors='coerce').values
+            valid_mask &= np.isfinite(col_vals)
+        
+        n_before = len(df)
+        df = df.loc[valid_mask].reset_index(drop=True)
+        n_removed = n_before - len(df)
+        if n_removed > 0 and verbose:
+            print(f"   Removed {n_removed:,} rows with NaN/Inf values")
+        
+        # Sort rows by x_sort_by for proper strip plot ordering
         if x_sort_by not in df.columns:
             print(f"   ⚠️  Warning: Cannot sort by '{x_sort_by}' (not in data), using first metric instead")
             x_sort_by = df.columns[0]
-        df = df.sort_values(x_sort_by).reset_index(drop=True)
+        df = df.sort_values(x_sort_by, ascending=True).reset_index(drop=True)
     else:
         if h5_file is None:
             print("   ⚠️  No data source provided for strip plot. Skipping.")
@@ -546,11 +559,33 @@ def generate_strip_plot(
         print("   ❌ No data remaining after filtering!")
         return None
     
+    if verbose:
+        # Verify sorting is correct
+        sort_col = df[x_sort_by].values
+        is_sorted = np.all(sort_col[:-1] <= sort_col[1:])
+        print(f"   Data sorted by {x_sort_by}: range [{df[x_sort_by].iloc[0]:.3e}, {df[x_sort_by].iloc[-1]:.3e}]")
+        print(f"   Sorting verification: {'✓ correctly sorted' if is_sorted else '✗ NOT SORTED!'}")
+        if not is_sorted:
+            # Find where sorting breaks
+            breaks = np.where(sort_col[:-1] > sort_col[1:])[0]
+            print(f"   ⚠️  Sorting breaks at indices: {breaks[:5]}...")  # Show first 5
+    
     # Apply unit conversions
     for metric in y_metrics:
         if metric in unit_conversions:
             conversion = unit_conversions[metric]
             df[metric] = df[metric] * conversion['factor']
+    
+    # CRITICAL: Re-sort after unit conversion to ensure proper order
+    # (unit conversion preserves order, but let's be safe)
+    df = df.sort_values(x_sort_by, ascending=True).reset_index(drop=True)
+    
+    # Final verification: if sort_by is in y_metrics, check it's monotonic
+    if verbose and x_sort_by in df.columns:
+        sort_vals = df[x_sort_by].values
+        is_monotonic = np.all(np.diff(sort_vals) >= 0)
+        print(f"   After sorting, {x_sort_by}: first={sort_vals[0]:.4f}, last={sort_vals[-1]:.4f}")
+        print(f"   Monotonicity check: {'✓ PASS' if is_monotonic else '✗ FAIL - data not properly sorted!'}")
     
     # Create figure
     fig, ax1 = plt.subplots(figsize=figsize)

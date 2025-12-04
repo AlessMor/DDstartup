@@ -516,10 +516,14 @@ def stream_h5_to_df(
     columns: List[str] | None = None,   # which datasets to read (default: all present)
     chunk_size: int | None = None,
     downcast_float32: bool = False,
+    vectors_to_scalar: bool = False,    # If True, extract only last value from vector columns (saves memory)
     verbose: bool = True,
 ):
     """
-    Generator that streams an HDF5 file into DataFrame chunks, preserving 1D vectors as per-row ndarrays.
+    Generator that streams an HDF5 file into DataFrame chunks.
+    
+    If vectors_to_scalar=True, vector columns are reduced to their last value (scalar).
+    This drastically reduces memory usage for large datasets.
     """
     def _to2d(a: np.ndarray) -> np.ndarray:
         if a.ndim == 1:
@@ -528,7 +532,7 @@ def stream_h5_to_df(
             return a
         return a.reshape(a.shape[0], int(np.prod(a.shape[1:], dtype=int)))
 
-    def _append_col(builder: dict, name: str, a2d: np.ndarray, downcast_f32: bool) -> int:
+    def _append_col(builder: dict, name: str, a2d: np.ndarray, downcast_f32: bool, vec_to_scalar: bool) -> int:
         # If 1D vector, preserve as object column (each row is a 1D array)
         if a2d.ndim == 1:
             builder[name] = [np.array([v]) if not isinstance(v, (np.ndarray, list)) else np.array(v) for v in a2d]
@@ -542,10 +546,18 @@ def stream_h5_to_df(
             return 1
         # If 2D and shape[1] > 1, treat as vector
         if a2d.ndim == 2 and a2d.shape[1] > 1:
-            if downcast_f32 and np.issubdtype(a2d.dtype, np.floating):
-                a2d = a2d.astype(np.float32, copy=False)
-            builder[name] = [a2d[i].copy() for i in range(a2d.shape[0])]
-            return int(a2d.shape[1])
+            if vec_to_scalar:
+                # Memory optimization: only keep last value
+                col = a2d[:, -1]
+                if downcast_f32 and np.issubdtype(col.dtype, np.floating):
+                    col = col.astype(np.float32, copy=False)
+                builder[name] = col
+                return 1  # Treated as scalar
+            else:
+                if downcast_f32 and np.issubdtype(a2d.dtype, np.floating):
+                    a2d = a2d.astype(np.float32, copy=False)
+                builder[name] = [a2d[i].copy() for i in range(a2d.shape[0])]
+                return int(a2d.shape[1])
 
     with h5py.File(h5_path, "r") as f:
         # Which datasets to read
@@ -562,6 +574,8 @@ def stream_h5_to_df(
             vec  = sum(1 for k in read_names if f[k].ndim > 1)
             print(f"   Loading data (core), chunk_size={chunk_rows} ...")
             print(f"   Loading chunks of {chunk_rows:,} rows; will read {scal} scalar and {vec} vector datasets.")
+            if vectors_to_scalar and vec > 0:
+                print(f"   ⚡ Memory optimization: extracting last value from {vec} vector columns")
 
         for start in tqdm(range(0, n, chunk_rows), desc="   Loading chunks", unit="chunk"):
             end = min(start + chunk_rows, n)
@@ -575,7 +589,7 @@ def stream_h5_to_df(
                 # Copy avoidance: read directly into buffer
                 ds.read_direct(buf, source_sel=np.s_[start:end], dest_sel=np.s_[: end - start])
                 a2d = _to2d(np.asarray(buf))
-                inn = _append_col(coldict, name, a2d, downcast_float32)
+                inn = _append_col(coldict, name, a2d, downcast_float32, vectors_to_scalar)
                 inner_dims.setdefault(name, inn)
 
             df_chunk = pd.DataFrame(coldict)
@@ -589,11 +603,14 @@ def h5_to_df_core(
     columns: List[str] | None = None,   # which datasets to read (default: all present)
     chunk_size: int | None = 500_000,
     downcast_float32: bool = False,
+    vectors_to_scalar: bool = False,    # If True, extract only last value from vector columns
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
-    Stream an HDF5 file to a DataFrame, preserving 1D vectors as per-row ndarrays.
-    No computed variables, no filters. Pure I/O.
+    Stream an HDF5 file to a DataFrame.
+    
+    If vectors_to_scalar=True, vector columns are reduced to their last value (scalar).
+    This drastically reduces memory usage for large datasets.
     """
     parts: list[pd.DataFrame] = []
     inner_dims: dict[str, int] = {}
@@ -603,6 +620,7 @@ def h5_to_df_core(
         columns=columns,
         chunk_size=chunk_size,
         downcast_float32=downcast_float32,
+        vectors_to_scalar=vectors_to_scalar,
         verbose=verbose,
     ):
         inner_dims.update(df_chunk.attrs.get("_inner_dims", {}))

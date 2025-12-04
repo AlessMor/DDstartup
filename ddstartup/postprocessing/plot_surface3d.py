@@ -144,6 +144,8 @@ def generate_surface3d_plot(
     show_point_scale = bool(settings.get("show_point_colorscale", False))
 
     fig = go.Figure()
+    
+    # Add isosurface (interpolated volume)
     fig.add_trace(
         go.Isosurface(
             x=grid_points[:, 0],
@@ -156,46 +158,67 @@ def generate_surface3d_plot(
             colorscale=colorscale,
             opacity=surface_opacity,
             caps=dict(x_show=False, y_show=False, z_show=False),
-            colorbar=dict(title=t_label),
+            colorbar=dict(title=t_label, len=0.75, thickness=15),
             hovertemplate="<b>Interpolated</b><br>%{x:.3g}, %{y:.3g}, %{z:.3g}<br>"
             + f"{target}: %{{value:.3g}}<extra></extra>",
             name="Interpolated volume",
+            showlegend=True,
         )
     )
 
-    fig.add_trace(
-        go.Scatter3d(
-            x=scatter_df[axes[0]],
-            y=scatter_df[axes[1]],
-            z=scatter_df[axes[2]],
-            mode="markers",
-            marker=dict(
-                size=point_size,
-                color=scatter_df[target],
-                colorscale=colorscale,
-                opacity=0.9,
-                showscale=show_point_scale,
-                colorbar=dict(title=f"{t_label} (points)") if show_point_scale else None,
-            ),
-            name="Samples",
-            hovertemplate=f"{axes[0]}=%{{x:.3g}}<br>{axes[1]}=%{{y:.3g}}<br>{axes[2]}=%{{z:.3g}}<br"
-            + f"{target}=%{{marker.color:.3g}}<extra></extra>",
+    # Add scatter points (real data) - smaller and more transparent for less clutter
+    show_scatter = bool(settings.get("show_scatter", True))
+    if show_scatter and len(scatter_df) > 0:
+        fig.add_trace(
+            go.Scatter3d(
+                x=scatter_df[axes[0]],
+                y=scatter_df[axes[1]],
+                z=scatter_df[axes[2]],
+                mode="markers",
+                marker=dict(
+                    size=point_size,
+                    color=scatter_df[target],
+                    colorscale=colorscale,
+                    opacity=0.6,
+                    showscale=show_point_scale,
+                    colorbar=dict(title=f"{t_label} (points)", x=1.15) if show_point_scale else None,
+                    line=dict(width=0),  # No outline for cleaner look
+                ),
+                name="Data samples",
+                hovertemplate=f"{axes[0]}=%{{x:.3g}}<br>{axes[1]}=%{{y:.3g}}<br>{axes[2]}=%{{z:.3g}}<br>"
+                + f"{target}=%{{marker.color:.3g}}<extra></extra>",
+                showlegend=True,
+            )
         )
-    )
 
     title = None
     if show_titles:
         title = settings.get("title") or f"{t_label} over {axis_labels[0]}, {axis_labels[1]}, {axis_labels[2]}"
 
+    # Camera settings for better initial view
+    camera = dict(
+        eye=dict(x=1.5, y=1.5, z=1.2),  # Slightly elevated diagonal view
+        up=dict(x=0, y=0, z=1),
+    )
+
     fig.update_layout(
-        title=title,
+        title=dict(text=title, x=0.5, xanchor='center') if title else None,
         scene=dict(
-            xaxis_title=axis_labels[0],
-            yaxis_title=axis_labels[1],
-            zaxis_title=axis_labels[2],
+            xaxis=dict(title=axis_labels[0], showbackground=True, backgroundcolor='rgba(230,230,230,0.3)'),
+            yaxis=dict(title=axis_labels[1], showbackground=True, backgroundcolor='rgba(230,230,230,0.3)'),
+            zaxis=dict(title=axis_labels[2], showbackground=True, backgroundcolor='rgba(230,230,230,0.3)'),
+            camera=camera,
+            aspectmode='cube',  # Equal aspect ratio for cleaner look
         ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.5, xanchor="center"),
-        margin=dict(l=0, r=0, t=60 if title else 10, b=10),
+        legend=dict(
+            orientation="h", 
+            yanchor="bottom", 
+            y=1.02, 
+            x=0.5, 
+            xanchor="center",
+            bgcolor='rgba(255,255,255,0.8)',
+        ),
+        margin=dict(l=0, r=0, t=80 if title else 20, b=10),
     )
 
     outdir = Path(output_dir if output_dir is not None else (outputs_dir if outputs_dir is not None else "."))
