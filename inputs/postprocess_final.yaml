@@ -34,11 +34,12 @@ files:
 # ============================================================================
 # Additional variables to compute or passthrough from existing metrics for analysis and plotting.
 # These can be used as target variables or in plots.
+# Note: For LaTeX symbols, just use the string directly (no Python r"..." syntax needed in YAML)
 additional_variables:
   K_el:
     expr: unrealized_profits / (capacity_factor*(eta_th*P_DT_eq - P_aux_DT_eq))
     unit: "$/W"            # optional override
-    symbol: r"$K_{el}$"         # optional override
+    symbol: "$K_{el}$"     # LaTeX symbol for plots
 
   TBE_percent:
     expr: TBE*V_plasma*100 # BE CAREFUL! THIS IS DEFINED FOR AN OLDER VERSION OF THE CODE
@@ -47,11 +48,11 @@ additional_variables:
   c_T:
     expr: unrealized_profits / I_target
     unit: "$/kg"
-    symbol: r"$c_T$"
+    symbol: "$c_T$"
   Tdot_tot_eff:
     expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
     unit: "1/s"
-    symbol: r"$\dot{T}_{tot}$"
+    symbol: "$\\dot{T}_{tot}$"
 
 # ============================================================================
 # TARGET VARIABLES
@@ -95,13 +96,14 @@ plots:
   importance: false       # Effect-size importance matrix (Cohen's d)
   kmeans: false           # KMeans clustering analysis
   contour: false          # 2D pairwise contour plots
+  
   quartprob: true        # Quartile probability plots
   # ==========================================================================
   # 3D SURFACE SETTINGS
   # ==========================================================================
   surface3d: true         # Interactive 3D surface (3 inputs as axes, target as color)
   surface3d_settings:
-    axes: [Tdot_tot_eff, price_of_electricity, eta_th]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
+    axes: [Tdot_tot_eff, price_of_electricity, tau_p_T]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
     grid_size: 60          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
     max_interp: 25000      # Sample cap for interpolation (prevents OOM on very large datasets)
     interpolate_method: linear   # 'linear' (default) or 'nearest' for sparse data
@@ -199,13 +201,13 @@ plots:
     # Metrics to plot on y-axes (1-3 metrics). Can use computed metrics like "P_DT_eq - P_aux"
     y_metrics: 
       - K_el
-      - t_startup
+      - P_DT_eq
     
     # Metric to sort simulations by (must be in data or in y_metrics)
     sort_by: t_startup
     
     # Performance settings
-    use_datashader: true  # Use datashader for fast rendering of large datasets (>50k points)
+    use_datashader: false  # Use datashader for fast rendering of large datasets (>50k points)
                           # Falls back to matplotlib if datashader not installed
     verbose: true         # Show progress bar and detailed output
     

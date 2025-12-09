@@ -197,10 +197,9 @@ def kde_quartile_plot(
             else:
                 sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(label), color=color_map[label])
 
-        # Titles with label + unit
+        # Titles with label (get_param_label already includes unit)
         p_label = getattr(registry, "get_param_label", lambda n, **k: n)(param)
-        p_unit = getattr(registry, "get_param_unit", lambda n, **k: None)(param)
-        ax.set_title(p_label if not p_unit else f"{p_label} [{p_unit}]", fontsize=10)
+        ax.set_title(p_label, fontsize=10)
         ax.set_xlabel("")
         ax.set_ylabel("Density")
         ax.tick_params(labelsize=8)
@@ -209,10 +208,9 @@ def kde_quartile_plot(
     for j in range(n_inputs, len(axes)):
         axes[j].set_visible(False)
 
-    # Figure title
-    t_label = getattr(registry, "get_param_label", lambda n, **k: n)(target)
-    t_unit = target_unit or getattr(registry, "get_param_unit", lambda n, **k: None)(target) or ""
-    sup_title = f"KDE of Inputs by {t_label if not t_unit else f'{t_label} [{t_unit}]'} quartile"
+    # Figure title - use symbol for cleaner title, not full label with unit
+    t_symbol = getattr(registry, "get_symbol", lambda n: n)(target)
+    sup_title = f"KDE of Inputs by {t_symbol} quartile"
     if file_type:
         sup_title += f" for {file_type}"
     if show_titles:

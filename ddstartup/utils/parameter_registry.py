@@ -527,7 +527,7 @@ class ParameterRegistry:
         return result
     
     def get_param_label(self, param_name: str, unit: Optional[str] = None, 
-                       use_symbol: bool = True) -> str:
+                       use_symbol: bool = True, renderer: str = 'matplotlib') -> str:
         """
         Get formatted parameter label for plotting.
         
@@ -535,6 +535,7 @@ class ParameterRegistry:
             param_name: Parameter name (e.g., 'V_plasma', 't_startup')
             unit: Unit string (e.g., 'm³', 'keV', 's'). If None, uses default unit.
             use_symbol: If True, use LaTeX symbol; if False, use parameter name
+            renderer: 'matplotlib' for PNG plots, 'plotly' for HTML plots, 'plain' for no formatting
         
         Returns:
             Formatted label for use in plots
@@ -545,20 +546,100 @@ class ParameterRegistry:
             
             >>> reg.get_param_label('T_i', use_symbol=False)
             'T_i [keV]'
+            
+            >>> reg.get_param_label('K_el', renderer='plotly')
+            'K<sub>el</sub> [$/W]'
         """
-        if use_symbol:
-            label = self.get_symbol(param_name)
-        else:
-            label = param_name
-        
         # Use provided unit or default from schema
         if unit is None:
             unit = self.get_unit(param_name)
         
-        if unit and unit not in ['boolean', 'string', 'dimensionless']:
-            label = f"{label} [{unit}]"
+        if renderer == 'plain':
+            # Plain text - no formatting
+            label = param_name
+            if unit and unit not in ['boolean', 'string', 'dimensionless']:
+                label = f"{label} [{unit}]"
+            return label
         
-        return label
+        elif renderer == 'plotly':
+            # Plotly/HTML - use HTML subscripts instead of LaTeX
+            label = self._get_html_symbol(param_name) if use_symbol else param_name
+            if unit and unit not in ['boolean', 'string', 'dimensionless']:
+                label = f"{label} [{unit}]"
+            return label
+        
+        else:  # matplotlib (default)
+            if use_symbol:
+                label = self.get_symbol(param_name)
+            else:
+                label = param_name
+            
+            if unit and unit not in ['boolean', 'string', 'dimensionless']:
+                # Escape $ in units to avoid matplotlib mathtext conflicts
+                unit_escaped = unit.replace('$', r'\$')
+                label = f"{label} [{unit_escaped}]"
+            
+            return label
+    
+    def _get_html_symbol(self, param_name: str) -> str:
+        """
+        Get HTML-formatted symbol for Plotly/HTML rendering.
+        
+        Converts LaTeX-style symbols to HTML subscripts/superscripts.
+        """
+        # First get the LaTeX symbol
+        latex_symbol = self.get_symbol(param_name)
+        
+        # Convert LaTeX to HTML
+        return self._latex_to_html(latex_symbol)
+    
+    def _latex_to_html(self, latex_str: str) -> str:
+        """
+        Convert LaTeX math notation to HTML for Plotly labels.
+        
+        Examples:
+            '$K_{\\mathrm{el}}$' -> 'K<sub>el</sub>'
+            '$V_{\\mathrm{plasma}}$' -> 'V<sub>plasma</sub>'
+            '$\\tau_{p,T}$' -> 'τ<sub>p,T</sub>'
+        """
+        import re
+        
+        s = latex_str
+        
+        # Remove outer $ signs
+        s = re.sub(r'^\$|\$$', '', s)
+        
+        # Greek letters - do this FIRST before other processing
+        # Use actual backslash matching (not raw string for the replacement)
+        greek_map = {
+            '\\tau': 'τ', '\\eta': 'η', '\\alpha': 'α', '\\beta': 'β',
+            '\\gamma': 'γ', '\\delta': 'δ', '\\epsilon': 'ε', '\\lambda': 'λ',
+            '\\mu': 'μ', '\\nu': 'ν', '\\pi': 'π', '\\rho': 'ρ',
+            '\\sigma': 'σ', '\\phi': 'φ', '\\omega': 'ω', '\\Delta': 'Δ',
+            '\\Sigma': 'Σ', '\\Omega': 'Ω', '\\Gamma': 'Γ', '\\Lambda': 'Λ',
+            '\\Phi': 'Φ', '\\Psi': 'Ψ', '\\Theta': 'Θ', '\\Xi': 'Ξ',
+            '\\zeta': 'ζ', '\\xi': 'ξ', '\\psi': 'ψ', '\\theta': 'θ',
+            '\\kappa': 'κ', '\\chi': 'χ',
+        }
+        for latex, html in greek_map.items():
+            s = s.replace(latex, html)
+        
+        # Handle \mathrm{...} - just extract content
+        s = re.sub(r'\\mathrm\{([^}]*)\}', r'\1', s)
+        
+        # Handle subscripts: _{...} -> <sub>...</sub>
+        s = re.sub(r'_\{([^}]*)\}', r'<sub>\1</sub>', s)
+        s = re.sub(r'_([a-zA-Z0-9])', r'<sub>\1</sub>', s)
+        
+        # Handle superscripts: ^{...} -> <sup>...</sup>
+        s = re.sub(r'\^\{([^}]*)\}', r'<sup>\1</sup>', s)
+        s = re.sub(r'\^([a-zA-Z0-9])', r'<sup>\1</sup>', s)
+        
+        # Remove remaining backslashes and escaped underscores
+        s = s.replace('\\_', '_')
+        s = re.sub(r'\\([a-zA-Z]+)', r'\1', s)  # Remove remaining \commands
+        
+        return s
 
 
 # ============================================================================

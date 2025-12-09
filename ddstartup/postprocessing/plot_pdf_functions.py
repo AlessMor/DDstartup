@@ -151,12 +151,10 @@ def generate_pdf_plot(
                     plt.plot(bin_centers[mask], counts[mask], drawstyle='steps-mid', label=f"{label}")
                     has_data = True
     
-    # Get unit and symbol for variable
-    unit = registry.get_unit(var)
+    # Format axis labels using registry
+    xlabel = registry.get_param_label(var)
     symbol = registry.get_symbol(var)
     
-    # Format labels with symbols
-    xlabel = f"{symbol} [{unit}]" if unit else symbol
     plt.xlabel(xlabel)
     plt.ylabel('Probability Density')
     

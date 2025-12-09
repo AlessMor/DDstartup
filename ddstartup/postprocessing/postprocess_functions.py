@@ -168,21 +168,6 @@ def _runtime_from_h5(files: List[Path]) -> Dict[str, int]:
         if vals: out[k] = Counter(vals).most_common(1)[0][0]
     return out
 
-def apply_h5_runtime_defaults(config: Dict[str, Any], files: List[Path]) -> Dict[str, int]:
-    rt = config.setdefault("runtime", {})
-    meta = _runtime_from_h5(files)
-    for k in ("chunk_size","n_jobs","batch_size"):
-        if rt.get(k) in (None, 0) and k in meta: rt[k] = meta[k]
-    rt.setdefault("chunk_size", None)  # allow auto/heuristic
-    rt.setdefault("n_jobs", 1)
-    rt.setdefault("batch_size", 100_000)
-    rt.setdefault("downcast_float32", False)
-    def _fmt(v):
-        return "auto" if v in (None, 0) else v
-    print("\n🧰 Runtime: " + ", ".join(f"{k}={_fmt(rt[k])}" for k in ("chunk_size","n_jobs","batch_size","downcast_float32")))
-    return rt
-
-
 # -----------------------------------------------------------------------------
 # Filters + additional parsing (compact)
 # -----------------------------------------------------------------------------
@@ -207,12 +192,104 @@ def _ast_vars(expr: str) -> set[str]:
     return {x for x in v.n if x not in {"True","False","None"} and x not in _ALLOWED_FUNCS}
 
 
+def _clean_yaml_symbol(symbol: str | None) -> str | None:
+    """
+    Clean a symbol string that may have been incorrectly written as r"..." in YAML.
+    
+    YAML doesn't support Python raw strings, so `symbol: r"$K_{el}$"` in YAML
+    becomes the literal string 'r"$K_{el}$"' when parsed. This function strips
+    the `r"` prefix and `"` suffix to get the intended LaTeX string.
+    
+    Examples:
+        'r"$K_{el}$"'     -> '$K_{el}$'
+        'r"$\\dot{T}$"'   -> '$\\dot{T}$'  
+        '$K_{el}$'        -> '$K_{el}$'  (no change if already clean)
+        'TBE'             -> 'TBE'        (no change for plain text)
+    """
+    if symbol is None:
+        return None
+    s = str(symbol).strip()
+    # Check for r"..." pattern (raw string literal in YAML)
+    if s.startswith('r"') and s.endswith('"'):
+        return s[2:-1]
+    # Check for "..." pattern (quoted string)
+    if s.startswith('"') and s.endswith('"') and len(s) >= 2:
+        return s[1:-1]
+    # Check for r'...' pattern (alternate raw string)
+    if s.startswith("r'") and s.endswith("'"):
+        return s[2:-1]
+    # Check for '...' pattern (single-quoted)
+    if s.startswith("'") and s.endswith("'") and len(s) >= 2:
+        return s[1:-1]
+    return s
+
+
 def parse_filters_and_additional(config: Dict[str, Any]) -> Tuple[List[str], Dict[str, str], Dict[str, Dict[str, str]], Set[str]]:
     """
-    Parse filters and additional variables from config.
-    Returns (filters_exprs, additional_map, additional_meta, passthrough_vars).
-      - additional_map: name -> expression (will be evaluated)
-      - passthrough_vars: names to load directly from H5 (expr blank or same name)
+    Parse and validate filter expressions and additional computed variables from config.
+    
+    This function extracts filtering criteria and additional variable definitions from
+    the postprocessing configuration, normalizes expressions, validates symbols against
+    the parameter schema, and registers new variables for plotting.
+    
+    Workflow:
+    1. Parse filter expressions from config.filters
+       - Normalize boolean operators (and/or/not → &/|/~)
+       - Convert ^ to ** for exponentiation
+    2. Parse additional_variables (supports dict or "expr, unit, symbol" format)
+       - Separate passthrough (load directly) from computed (evaluate expression)
+    3. Validate all symbols referenced in filters/expressions against schema
+    4. Register additional variables in PARAMETER_SCHEMA for unified access
+    
+    Config Examples:
+    ---------------
+    # Filters: Boolean expressions to filter rows
+    filters:
+      - "t_startup < 1e6"  # Keep only fast startups
+      - "P_DT_eq > P_aux"  # Net power positive
+    
+    # Additional Variables: New computed columns
+    additional_variables:
+      # Dict format (recommended)
+      net_power:
+        expr: "P_DT_eq - P_aux"
+        unit: "W"
+        symbol: "P_{net}"
+      
+      # Passthrough (load from H5 without computation)
+      runtime_params:
+        expr: ""  # Empty expr means load directly
+        unit: "s"
+        symbol: "t_{run}"
+      
+      # Compact string format: "expression, unit, symbol"
+      efficiency: "P_DT_eq / P_aux, -, η"
+    
+    Args:
+        config: Postprocessing configuration dictionary with optional keys:
+                - 'filters': List of filter expressions (strings)
+                - 'additional_variables': Dict mapping name -> spec
+    
+    Returns:
+        Tuple of:
+        - filters_exprs: List of normalized filter expressions
+        - additional_map: Dict[name, expression] for computed variables
+        - additional_meta: Dict[name, {'unit': str, 'symbol': str}] metadata
+        - passthrough_vars: Set of names to load directly from H5 (no computation)
+    
+    Raises:
+        SystemExit: If unknown symbols are referenced in expressions
+    
+    Side Effects:
+        - Prints filter and additional variable information
+        - Updates PARAMETER_SCHEMA with additional variable definitions
+        - Logs registration/updates of variables
+    
+    Notes:
+        - Boolean operators: 'and'→'&', 'or'→'|', 'not'→'~' (pandas/numpy convention)
+        - Exponentiation: '^' → '**' (Python convention)
+        - YAML raw strings: r"$K_{el}$" → cleaned to "$K_{el}$"
+        - Allowed functions: np.abs, sqrt, log, exp, clip, etc. (see _ALLOWED_FUNCS)
     """
     # 1) Filters
     filters_exprs = [
@@ -231,12 +308,12 @@ def parse_filters_and_additional(config: Dict[str, Any]) -> Tuple[List[str], Dic
         if isinstance(spec, dict):
             expr   = spec.get("expr", "") or ""
             unit   = spec.get("unit")
-            symbol = spec.get("symbol")
+            symbol = _clean_yaml_symbol(spec.get("symbol"))
         else:
             parts  = [p.strip() for p in str(spec).split(",")]
             expr   = parts[0] if parts else ""
             unit   = parts[1] if len(parts) >= 2 and parts[1] else None
-            symbol = parts[2] if len(parts) >= 3 and parts[2] else None
+            symbol = _clean_yaml_symbol(parts[2]) if len(parts) >= 3 and parts[2] else None
 
         expr = expr.strip()
         if not expr or expr == name:
@@ -276,6 +353,30 @@ def parse_filters_and_additional(config: Dict[str, Any]) -> Tuple[List[str], Dic
             u = additional_meta.get(k, {}).get("unit")
             print(f"  {k}" + (f" [{u}]" if u else ""))
 
+    # 5) Register/update additional variables in PARAMETER_SCHEMA so all plotters see them uniformly
+    #    This ensures the YAML-specified symbols/units override any existing defaults
+    for name, meta in additional_meta.items():
+        symbol = meta.get('symbol') or name
+        unit = meta.get('unit') or ''
+        
+        if name not in PARAMETER_SCHEMA:
+            # Create new entry
+            PARAMETER_SCHEMA[name] = {
+                'role': 'computed',
+                'analysis_types': ['lump', 'T_seeded'],
+                'unit': unit,
+                'symbol': symbol,
+                'description': f'Computed: {additional_map.get(name, name)}',
+            }
+            print(f"   📝 Registered '{name}' in PARAMETER_SCHEMA: symbol={symbol}, unit={unit}")
+        else:
+            # Update existing entry with YAML-specified values (if provided)
+            if meta.get('symbol'):
+                PARAMETER_SCHEMA[name]['symbol'] = symbol
+            if meta.get('unit'):
+                PARAMETER_SCHEMA[name]['unit'] = unit
+            print(f"   📝 Updated '{name}' in PARAMETER_SCHEMA: symbol={symbol}, unit={unit}")
+
     return filters_exprs, additional_map, additional_meta, passthrough
 
 
@@ -300,15 +401,89 @@ def load_h5_to_df(
     surface3d_settings: Dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """
-    Read a minimal, plot-ready DataFrame:
-      - All schema inputs/flexible parameters
-      - Requested targets
-      - Variables needed to compute *requested* additional targets
-      - Variables referenced by filters
-      - 'sol_success' if present
+    Load HDF5 simulation data into a memory-efficient, plot-ready DataFrame.
     
-    If vectors_to_scalar=True (default), vector columns are reduced to their last value.
-    This drastically reduces memory usage for large datasets with time-series data.
+    This is the core data loading function for postprocessing. It intelligently loads
+    only the columns needed for requested plots and analyses, applies filters to remove
+    unwanted rows, computes additional derived variables, and optionally reduces vector
+    time-series to scalars for memory efficiency.
+    
+    Key Features:
+    ------------
+    1. Smart Column Selection:
+       - Loads only columns needed: inputs, targets, filter dependencies, computed vars
+       - Automatic dependency tracking: if computing "A = B + C", loads B and C
+       - Plot-specific extras: strip plot metrics, surface3d axes, etc.
+    
+    2. Memory Optimization:
+       - vectors_to_scalar=True: Extract last value from time-series (10-100x memory reduction)
+       - downcast_float32: Convert float64→float32 (2x memory reduction)
+       - Chunked loading: Process large files in batches to avoid OOM
+    
+    3. Data Filtering & Computation:
+       - Apply filter expressions to remove unwanted simulations
+       - Compute additional variables from expressions (e.g., "net_power = P_DT_eq - P_aux")
+       - Handle passthrough variables (load directly without computation)
+    
+    4. Quality Control:
+       - success_only=True: Keep only successful simulations (sol_success==True)
+       - Validates all symbols against PARAMETER_SCHEMA
+       - Handles vector/scalar data uniformly
+    
+    Algorithm:
+    ---------
+    1. Discover available columns in HDF5 file
+    2. Determine minimal column set needed (inputs, targets, dependencies)
+    3. Load data in chunks (configurable chunk_size)
+    4. For each chunk:
+       a. Apply filters (row-wise boolean expressions)
+       b. Compute additional variables (AST evaluation with numpy functions)
+       c. Extract scalars from vectors if requested
+    5. Concatenate filtered chunks into final DataFrame
+    6. Order columns logically (inputs, flexible, outputs, computed, targets)
+    
+    Args:
+        h5_path: Path to HDF5 file with simulation data
+        targets: Target variables to load (typically outputs like t_startup, costs)
+        filters_exprs: Boolean expressions to filter rows (e.g., ["t_startup < 1e6"])
+        additional_map: Dict mapping computed variable names to expressions
+        passthrough_vars: Variables to load directly from H5 (no computation)
+        chunk_size: Rows per chunk (None=auto, larger=faster but more memory)
+        downcast_float32: Convert float64 to float32 for memory savings
+        vectors_to_scalar: Extract last value from time-series arrays (default True)
+                          Set False if you need full time evolution data
+        verbose: Print progress information
+        keep: Data retention mode (ignored, kept for backwards compatibility)
+        success_only: Only keep rows where sol_success==True
+        plot_types: List of plot types to generate (strip, contour, etc.)
+                   Used to determine plot-specific columns needed
+        strip_settings: Strip plot configuration (y_metrics, sort_by)
+        surface3d_settings: 3D surface plot configuration (axes)
+    
+    Returns:
+        DataFrame with columns ordered as: [inputs, flexible, outputs, computed, targets]
+        Each row represents one simulation. Vector columns are reduced to scalars if
+        vectors_to_scalar=True.
+    
+    Example:
+    -------
+    >>> df = load_h5_to_df(
+    ...     h5_path=Path("outputs/run_20250115/results.h5"),
+    ...     targets=["t_startup", "unrealized_profits"],
+    ...     filters_exprs=["t_startup < 1.5e6", "P_DT_eq > 0"],
+    ...     additional_map={"net_power": "P_DT_eq - P_aux"},
+    ...     vectors_to_scalar=True,  # Extract last values
+    ...     success_only=True,  # Only successful runs
+    ... )
+    >>> print(df.columns)  # ['n', 'Paux', 'Zeff', ..., 't_startup', 'net_power']
+    >>> print(df.shape)  # (1243 simulations, 28 columns)
+    
+    Notes:
+    -----
+    - Requires hdf5plugin for LZ4 compression support
+    - Expressions evaluated with numpy ufuncs (see _ALLOWED_FUNCS)
+    - Column ordering ensures inputs come first for better readability
+    - Chunking prevents OOM on large datasets (>1M simulations)
     """
     # Normalize inputs
     additional_map   = additional_map   or {}
@@ -743,17 +918,30 @@ def print_columns_overview(df: pd.DataFrame, *, title: str) -> None:
 # Registry wrapper (keep for plot label/unit compatibility)
 # -----------------------------------------------------------------------------
 class AdditionalAwareRegistry:
+    """Wrapper around ParameterRegistry that overlays additional_variables metadata.
+    
+    This allows YAML-defined additional variables to override registry defaults
+    for symbols and units, ensuring consistent labeling across all plots.
+    """
     def __init__(self, base, additional_meta: dict|None):
         self._base = base; self._meta = additional_meta or {}
+    
     def get_param_label(self, name: str, *a, **k):
+        """Get formatted parameter label, preferring additional_variables symbol if defined."""
         m = self._meta.get(name)
-        if m and m.get("symbol") and not k.get("prefer_base", False): return m["symbol"]
+        if m and m.get("symbol") and not k.get("prefer_base", False): 
+            return m["symbol"]
         return self._base.get_param_label(name, *a, **k) if hasattr(self._base,"get_param_label") else name
-    def get_param_unit(self, name: str, *a, **k):
+    
+    def get_unit(self, name: str, *a, **k):
+        """Get parameter unit, preferring additional_variables unit if defined."""
         m = self._meta.get(name)
-        if m and m.get("unit"): return m["unit"]
-        return self._base.get_param_unit(name, *a, **k) if hasattr(self._base,"get_param_unit") else None
-    def __getattr__(self, attr): return getattr(self._base, attr)
+        if m and m.get("unit"): 
+            return m["unit"]
+        return self._base.get_unit(name, *a, **k) if hasattr(self._base,"get_unit") else None
+    
+    def __getattr__(self, attr): 
+        return getattr(self._base, attr)
 
 
 @contextmanager

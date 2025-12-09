@@ -17,13 +17,6 @@ import itertools, math
 
 from ddstartup.postprocessing.plot_utils_functions import resolve_outdir_and_stem, select_scalar_numeric
 from ddstartup.utils.parameter_registry import get_registry
-from ddstartup.utils.tools import PARAM_UNITS
-
-
-def _scalar_numeric_inputs(df: pd.DataFrame, cols: list[str]) -> list[str]:
-    """Keep scalar numeric columns only (uses shared helper)."""
-    return select_scalar_numeric(df, cols)
-
 
 def _format_scientific(x, pos=None):
     """Format numbers with 2 significant figures in clean scientific notation."""
@@ -95,9 +88,7 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         cp = ax.contourf(X, Y, Z, cmap='viridis')
         
         # Colorbar with custom formatter for clean scientific notation
-        target_symbol = registry.get_symbol(target)
-        target_unit = PARAM_UNITS.get(target)
-        cbar_label = registry.get_param_label(target, target_unit, use_symbol=True)
+        cbar_label = registry.get_param_label(target, use_symbol=True)
         cbar = plt.colorbar(cp, ax=ax, format=FuncFormatter(_format_scientific))
         cbar.set_label(cbar_label, fontsize=10)
         cbar.ax.tick_params(labelsize=8)
@@ -110,8 +101,8 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
             ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
-        x_label = registry.get_param_label(x, PARAM_UNITS.get(x))
-        y_label = registry.get_param_label(y, PARAM_UNITS.get(y))
+        x_label = registry.get_param_label(x)
+        y_label = registry.get_param_label(y)
         ax.set_xlabel(x_label, fontsize=10)
         ax.set_ylabel(y_label, fontsize=10)
         
@@ -126,9 +117,7 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         pivot = df.pivot_table(index=y, columns=x, values=target, aggfunc='mean')
         
         # Heatmap with custom formatter for clean scientific notation
-        target_symbol = registry.get_symbol(target)
-        target_unit = PARAM_UNITS.get(target)
-        cbar_label = registry.get_param_label(target, target_unit, use_symbol=True)
+        cbar_label = registry.get_param_label(target, use_symbol=True)
         sns.heatmap(pivot, cmap='viridis', 
                    cbar_kws={'label': cbar_label, 'format': FuncFormatter(_format_scientific)},
                    fmt='.2g', ax=ax)
@@ -141,8 +130,8 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
             ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
-        x_label = registry.get_param_label(x, PARAM_UNITS.get(x))
-        y_label = registry.get_param_label(y, PARAM_UNITS.get(y))
+        x_label = registry.get_param_label(x)
+        y_label = registry.get_param_label(y)
         ax.set_xlabel(x_label, fontsize=10)
         ax.set_ylabel(y_label, fontsize=10)
         ax.tick_params(labelsize=10)
@@ -161,81 +150,6 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         plt.close()
         return png_name
     return None
-
-
-def plot_pairwise_contours(
-    df,
-    inputs,
-    target,
-    output_dir=None,
-    outputs_dir=None,
-    max_pairs=None,
-    interpolate=True,
-    plot_name=None,
-    plot_name_prefix=None,
-    show_titles=True,
-    **_,
-):
-    """Plot pairwise contour/heatmap subplots for combinations of input parameters.
-
-    - inputs: list of input parameter names
-    - max_pairs: maximum number of pairs to plot (None = all combinations)
-    """
-    outdir, stem = resolve_outdir_and_stem(
-        output_dir=output_dir,
-        outputs_dir=outputs_dir,
-        plot_name_prefix=plot_name_prefix,
-        plot_name=plot_name,
-        default_stem=f'contour_pairwise_{target}',
-    )
-    
-    registry = get_registry()
-
-    inputs = _scalar_numeric_inputs(df, list(inputs or []))
-    # Filter inputs to those present in df
-    inputs_present = [p for p in inputs if p in df.columns]
-    pairs = list(itertools.combinations(inputs_present, 2))
-    if not pairs:
-        raise ValueError('Need at least two input parameters present in data')
-
-    # If max_pairs specified and we have more, sample evenly across all parameters
-    if max_pairs and len(pairs) > max_pairs:
-        # Sample evenly: get pairs that include different parameters
-        import random
-        random.seed(42)  # Reproducible sampling
-        # Shuffle to get diverse parameter combinations
-        random.shuffle(pairs)
-        pairs = pairs[:max_pairs]
-
-    n_pairs = len(pairs)
-    ncols = int(math.ceil(math.sqrt(n_pairs)))
-    nrows = int(math.ceil(n_pairs / ncols))
-    
-    # Larger figure with more spacing
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, 
-                            figsize=(5*ncols, 4*nrows),
-                            constrained_layout=True)
-    axes = np.array(axes).reshape(-1)
-
-    for ax, (x, y) in zip(axes, pairs):
-        try:
-            plot_2d_cell_mean_heatmap(df, x, y, target, outdir, interpolate=interpolate, ax=ax, show_titles=show_titles)
-        except Exception as e:
-            ax.text(0.5, 0.5, f'Error: {e}', ha='center')
-            if show_titles:
-                x_symbol = registry.get_symbol(x)
-                y_symbol = registry.get_symbol(y)
-                ax.set_title(f'{x_symbol} vs {y_symbol}')
-
-    # Hide unused axes
-    for ax in axes[n_pairs:]:
-        ax.set_visible(False)
-
-    png_name = outdir / f'{stem}.png'
-    # constrained_layout=True handles spacing automatically, no need for tight_layout
-    plt.savefig(png_name, dpi=150, bbox_inches='tight')
-    plt.close()
-    return png_name
 
 
 def plot_interactive_pairwise_contours(
@@ -279,8 +193,8 @@ def plot_interactive_pairwise_contours(
         default_stem=f'contour_interactive_{target}',
     )
     
-    # Filter inputs to those present in df
-    inputs_present = _scalar_numeric_inputs(df, list(inputs or []))
+    # Filter inputs to scalar numeric columns present in df
+    inputs_present = select_scalar_numeric(df, list(inputs or []))
     if len(inputs_present) < 2:
         raise ValueError('Need at least two input parameters')
     
@@ -291,6 +205,11 @@ def plot_interactive_pairwise_contours(
     x_param = inputs_present[0]
     y_param = inputs_present[1]
     
+    # Get initial labels for Plotly
+    x_init = registry.get_param_label(x_param, renderer='plotly')
+    y_init = registry.get_param_label(y_param, renderer='plotly')
+    target_lbl = registry.get_param_label(target, renderer='plotly')
+    
     # Create initial heatmap
     pivot = df.pivot_table(index=y_param, columns=x_param, values=target, aggfunc='mean')
     
@@ -299,8 +218,8 @@ def plot_interactive_pairwise_contours(
         x=pivot.columns,
         y=pivot.index,
         colorscale='Viridis',
-        colorbar=dict(title=target),
-        hovertemplate=f'{x_param}: %{{x:.2g}}<br>{y_param}: %{{y:.2g}}<br>{target}: %{{z:.2g}}<extra></extra>'
+        colorbar=dict(title=target_lbl),
+        hovertemplate=f'{x_init}: %{{x:.2g}}<br>{y_init}: %{{y:.2g}}<br>{target_lbl}: %{{z:.2g}}<extra></extra>'
     )
     
     fig.add_trace(heatmap)
@@ -343,30 +262,35 @@ def plot_interactive_pairwise_contours(
                 }
                 combo_list.append((x_p, y_p))
     
-    # Create single dropdown with all combinations
+    # Create single dropdown with all combinations using proper labels
     combo_buttons = []
     for x_p, y_p in combo_list:
         key = f'{x_p}_{y_p}'
+        # Get formatted labels for Plotly
+        x_label = registry.get_param_label(x_p, renderer='plotly')
+        y_label = registry.get_param_label(y_p, renderer='plotly')
+        target_label = registry.get_param_label(target, renderer='plotly')
         button = dict(
-            label=f'{x_p} vs {y_p}',
+            label=f'{x_label} vs {y_label}',
             method='update',
             args=[
                 {'x': [data_dict[key]['x']], 
                  'y': [data_dict[key]['y']], 
                  'z': [data_dict[key]['z']],
-                 'hovertemplate': f'{x_p}: %{{x:.2g}}<br>{y_p}: %{{y:.2g}}<br>{target}: %{{z:.2g}}<extra></extra>'},
-                {'xaxis.title.text': x_p, 
-                 'yaxis.title.text': y_p,
-                 'title.text': f'{target} vs {x_p} and {y_p}'}
+                 'hovertemplate': f'{x_label}: %{{x:.2g}}<br>{y_label}: %{{y:.2g}}<br>{target_label}: %{{z:.2g}}<extra></extra>'},
+                {'xaxis.title.text': x_label, 
+                 'yaxis.title.text': y_label,
+                 'title.text': f'{target_label} vs {x_label} and {y_label}'}
             ]
         )
         combo_buttons.append(button)
     
     # Update layout with single dropdown menu for parameter combinations
+    # Use the initial labels defined earlier (x_init, y_init, target_lbl)
     fig.update_layout(
-    title=f'{target} vs {x_param} and {y_param}<br><sub>Select parameter pair from dropdown</sub>' if show_titles else None,
-        xaxis_title=x_param,
-        yaxis_title=y_param,
+    title=f'{target_lbl} vs {x_init} and {y_init}<br><sub>Select parameter pair from dropdown</sub>' if show_titles else None,
+        xaxis_title=x_init,
+        yaxis_title=y_init,
         width=900,
         height=700,
         updatemenus=[
@@ -394,6 +318,6 @@ def plot_interactive_pairwise_contours(
     
     # Save HTML
     html_name = outdir / f'{stem}.html'
-    fig.write_html(html_name)
+    fig.write_html(html_name, include_mathjax="cdn")
     
     return html_name

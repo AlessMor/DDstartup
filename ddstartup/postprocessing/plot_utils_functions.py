@@ -115,9 +115,3 @@ def quartile_colors(k: int) -> list[str]:
     colorscale = get_discrete_colorscale(k if k > 0 else 1)
     return [colorscale[i * 2][1] for i in range(k)]
 
-
-def param_label_and_unit(registry, name: str, unit_override: str | None = None) -> tuple[str, str]:
-    """Fetch parameter label and unit from registry, applying an optional override."""
-    label = getattr(registry, "get_param_label", lambda n, **k: n)(name)
-    unit = unit_override if unit_override is not None else getattr(registry, "get_param_unit", lambda n, **k: None)(name) or ""
-    return label, unit

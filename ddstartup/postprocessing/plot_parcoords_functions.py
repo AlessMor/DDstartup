@@ -92,10 +92,11 @@ def generate_parcoords_plot(
         
         unique_vals = np.sort(np.unique(values))
         
-        # Use symbol instead of parameter name
-        param_symbol = registry.get_symbol(param)
+        # Use symbol instead of parameter name - use HTML formatting for Plotly
+        param_label = registry.get_param_label(param, renderer='plotly')
+        # Add line break for parallel coords layout
         unit = registry.get_unit(param)
-        label = f"{param_symbol}<br>[{unit}]" if unit else param_symbol
+        label = param_label.replace(' [', '<br>[') if ' [' in param_label else param_label
         
         dim = dict(label=label, values=values, range=[values.min(), values.max()])
         if len(unique_vals) <= 20:
@@ -104,8 +105,8 @@ def generate_parcoords_plot(
     
     # Add target dimension
     values = df_filtered[target]
-    target_symbol = registry.get_symbol(target)
-    target_label = f"{target_symbol}<br>[{target_unit}]"
+    target_label = registry.get_param_label(target, unit=target_unit, renderer='plotly')
+    target_label = target_label.replace(' [', '<br>[') if ' [' in target_label else target_label
     dimensions.append(dict(label=target_label, values=values, range=[values.min(), values.max()]))
     
     # Create figure
@@ -130,7 +131,7 @@ def generate_parcoords_plot(
     ))
     
     fig.update_layout(
-        title=f"Parallel Coordinates Plot - {file_type} ({target_symbol})" if show_titles else None,
+        title=f"Parallel Coordinates Plot - {file_type} ({target_label})" if show_titles else None,
         font=dict(size=12),
         width=1400,
         height=700,
@@ -139,4 +140,4 @@ def generate_parcoords_plot(
         plot_bgcolor='white'
     )
     
-    fig.write_html(str(output_path))
+    fig.write_html(str(output_path), include_mathjax="cdn")

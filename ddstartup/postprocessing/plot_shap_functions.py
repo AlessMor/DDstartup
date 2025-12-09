@@ -154,22 +154,22 @@ def generate_shap_plots(
     ax.set_yticks(range(n_features))
     # show readable labels (symbol if available)
     if registry is not None:
-        ylabels = [f"{registry.get_param_label(n)} (|r|={imps_sorted[i]:.3f})" for i, n in enumerate(feats)]
+        ylabels = [f"{registry.get_symbol(n)} (|r|={imps_sorted[i]:.3f})" for i, n in enumerate(feats)]
     else:
         ylabels = [f"{n} (|r|={imps_sorted[i]:.3f})" for i, n in enumerate(feats)]
     ax.set_yticklabels(ylabels[::-1], fontsize=10)  # reversed because top row has highest y
     ax.set_ylim(-0.8, n_features - 0.2)
 
-    tlabel = registry.get_param_label(target) if registry is not None else target
+    # Use get_param_label with unit for axis label (includes unit properly formatted)
+    tlabel = registry.get_param_label(target, unit=target_unit) if registry is not None else target
+    tsymbol = registry.get_symbol(target) if registry is not None else target
     ax.set_xlabel(f"Impact on {tlabel} (correlation × standardized value)", fontsize=12)
     ax.axvline(0.0, color="#888888", lw=1.0, alpha=0.8)
     ax.grid(axis="x", alpha=0.3, linestyle="--", linewidth=0.5)
 
-    title = f"Feature Importance: {tlabel}"
-    if target_unit:
-        title += f" [{target_unit}]"
+    # Title uses symbol (unit already in tlabel for axis)
     if show_titles:
-        ax.set_title(f"{title}\n({file_type})", fontsize=14, fontweight="bold", pad=16)
+        ax.set_title(f"Feature Importance: {tsymbol}\n({file_type})", fontsize=14, fontweight="bold", pad=16)
 
     sm = cm.ScalarMappable(cmap=cmap, norm=Normalize(vmin=0, vmax=1))
     sm.set_array([])

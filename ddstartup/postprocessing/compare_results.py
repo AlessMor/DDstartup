@@ -159,7 +159,7 @@ def compare_runs(
                 df=df_all,
                 target=target,
                 inputs=inputs_for_qp,
-                target_unit=registry.get_param_unit(target) if registry else None,
+                target_unit=registry.get_unit(target) if registry else None,
                 output_dir=output_dir,
                 plot_name_prefix=f"compare_{target}",
                 registry=registry,

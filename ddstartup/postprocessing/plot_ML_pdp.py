@@ -239,7 +239,10 @@ def generate_ml_pairwise_plots(
     pairs = list(itertools.combinations(range(len(usable)), 2))
     print(f"   Generating {len(pairs)} pairwise PDP plots...")
 
-    target_label = registry.get_param_label(target) if registry is not None else target
+    # Use get_param_label with unit to get properly formatted label (unit already included)
+    target_label = registry.get_param_label(target, unit=target_unit) if registry is not None else target
+    # Also get symbol-only version for titles (without unit)
+    target_symbol = registry.get_symbol(target) if registry is not None else target
     for pidx, (i, j) in enumerate(pairs, 1):
         pi, pj = usable[i], usable[j]
         xi = registry.get_param_label(pi) if registry is not None else pi
@@ -264,10 +267,7 @@ def generate_ml_pairwise_plots(
             fig, ax = plt.subplots(figsize=(7.5, 6.0))
             cs = ax.contourf(II, JJ, Z, levels=40, alpha=0.9, cmap="viridis")
             cbar = fig.colorbar(cs, ax=ax)
-            if target_unit:
-                cbar.set_label(f"{target_label} [{target_unit}]")
-            else:
-                cbar.set_label(target_label)
+            cbar.set_label(target_label)  # Already includes unit
 
             H, extent = density_2d(X, i, j, gi, gj, bins=100)
             ax.imshow(H, extent=extent, origin="lower", alpha=0.25, aspect="auto", cmap="gray")
@@ -275,7 +275,7 @@ def generate_ml_pairwise_plots(
             ax.set_xlabel(xi, fontsize=11)
             ax.set_ylabel(xj, fontsize=11)
             if show_titles:
-                ax.set_title(f"ML PDP: {target_label} ({file_type})", fontsize=12, fontweight="bold")
+                ax.set_title(f"ML PDP: {target_symbol} ({file_type})", fontsize=12, fontweight="bold")
 
             plt.tight_layout()
             fname = f"{prefix}_{pi}x{pj}.png"
@@ -317,9 +317,9 @@ def generate_ml_pairwise_plots(
                 ax.plot(grid, pdp_vals, color="tab:blue", linewidth=2)
                 ax.fill_between(grid, pdp_vals - pdp_std, pdp_vals + pdp_std, color="tab:blue", alpha=0.2, linewidth=0)
                 ax.set_xlabel(xi, fontsize=11)
-                ax.set_ylabel(f"{target_label} [{target_unit}]" if target_unit else target_label, fontsize=11)
+                ax.set_ylabel(target_label, fontsize=11)  # Already includes unit
                 if show_titles:
-                    ax.set_title(f"1D PDP: {target_label} vs {xi}", fontsize=12, fontweight="bold")
+                    ax.set_title(f"1D PDP: {target_symbol} vs {xi}", fontsize=12, fontweight="bold")
                 plt.tight_layout()
                 fname = f"{prefix}_{feat}_pdp1d.png"
                 plt.savefig(out_dir / fname, dpi=150, bbox_inches="tight")
@@ -354,9 +354,9 @@ def generate_ml_pairwise_plots(
                 ax.plot(grid, ice.T, color="gray", alpha=0.15, linewidth=1)
                 ax.plot(grid, mean_curve, color="tab:orange", linewidth=2, label="Mean ICE")
                 ax.set_xlabel(xi, fontsize=11)
-                ax.set_ylabel(f"{target_label} [{target_unit}]" if target_unit else target_label, fontsize=11)
+                ax.set_ylabel(target_label, fontsize=11)  # Already includes unit
                 if show_titles:
-                    ax.set_title(f"ICE: {target_label} vs {xi}", fontsize=12, fontweight="bold")
+                    ax.set_title(f"ICE: {target_symbol} vs {xi}", fontsize=12, fontweight="bold")
                 ax.legend()
                 plt.tight_layout()
                 fname = f"{prefix}_{feat}_ice.png"

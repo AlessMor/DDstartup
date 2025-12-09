@@ -68,14 +68,14 @@ def generate_surface3d_plot(
     axes = axes[:3]
     if len(axes) < 3:
         print("   ⚠️  Need three numeric scalar inputs for surface3d. Skipping.")
-        return
+        return None
 
     # Prep data
     cols = axes + [target]
     data = df[cols].apply(pd.to_numeric, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if data.empty:
         print(f"   ⚠️  No finite data for surface3d ({', '.join(axes)} vs {target}). Skipping.")
-        return
+        return None
 
     data[target] = _clip_quantile(data[target], settings.get("clip_quantile", 0.995))
 
@@ -108,33 +108,61 @@ def generate_surface3d_plot(
 
     pts = interp_df[axes].to_numpy()
     vals = interp_df[target].to_numpy()
-    grid_vals = griddata(pts, vals, grid_points, method=method)
+    
+    # Check for degenerate/coplanar data that would cause Qhull errors
+    # Data needs sufficient variation in all 3 dimensions for triangulation
+    for i, ax in enumerate(axes):
+        ax_range = pts[:, i].max() - pts[:, i].min()
+        if ax_range < 1e-10:
+            print(f"   ⚠️  Axis '{ax}' has near-zero variation ({ax_range:.2e}). Cannot create 3D surface.")
+            return None
+    
+    # Try interpolation with error handling for Qhull precision errors
+    try:
+        grid_vals = griddata(pts, vals, grid_points, method=method)
+    except Exception as e:
+        if "QH" in str(e) or "Qhull" in str(e) or "coplanar" in str(e).lower():
+            print(f"   ⚠️  Qhull precision error: data may be nearly coplanar. Trying nearest-neighbor interpolation...")
+            try:
+                grid_vals = griddata(pts, vals, grid_points, method="nearest")
+            except Exception as e2:
+                print(f"   ⚠️  Interpolation failed: {e2}. Skipping surface3d.")
+                return None
+        else:
+            print(f"   ⚠️  Interpolation error: {e}. Skipping surface3d.")
+            return None
 
     # Fill gaps with nearest-neighbor if needed
     if np.isnan(grid_vals).all() and method != "nearest":
-        grid_vals = griddata(pts, vals, grid_points, method="nearest")
+        try:
+            grid_vals = griddata(pts, vals, grid_points, method="nearest")
+        except Exception:
+            pass
     else:
         miss = np.isnan(grid_vals)
         if miss.any():
-            grid_vals[miss] = griddata(pts, vals, grid_points[miss], method="nearest")
+            try:
+                grid_vals[miss] = griddata(pts, vals, grid_points[miss], method="nearest")
+            except Exception:
+                pass  # Keep NaNs, will be handled by nan_to_num
 
     # Final fallbacks
     if np.isnan(grid_vals).all():
         print("   ⚠️  Interpolation failed (all NaN). Skipping surface3d.")
-        return
+        return None
     grid_vals = np.nan_to_num(grid_vals, nan=np.nanmedian(vals))
 
     vmin = float(np.nanmin(grid_vals))
     vmax = float(np.nanmax(grid_vals))
     if not np.isfinite(vmin) or not np.isfinite(vmax):
         print("   ⚠️  Invalid interpolated values. Skipping surface3d.")
-        return
+        return None
 
-    # Labels
+    # Labels - use renderer='plotly' for HTML-compatible formatting
     def _label(name: str) -> str:
-        return reg.get_param_label(name, use_symbol=True) if reg else name
+        return reg.get_param_label(name, use_symbol=True, renderer='plotly') if reg else name
 
-    t_label = reg.get_param_label(target, unit=target_unit, use_symbol=True) if reg else target
+    t_label = reg.get_param_label(target, unit=target_unit, use_symbol=True, renderer='plotly') if reg else target
     axis_labels = [_label(ax) for ax in axes]
 
     colorscale = settings.get("colorscale", "Viridis")
@@ -225,5 +253,5 @@ def generate_surface3d_plot(
     outdir.mkdir(parents=True, exist_ok=True)
     stem = plot_name_prefix or plot_name or f"surface3d_{target}"
     outfile = outdir / f"{stem}__{target}_surface3d.html"
-    fig.write_html(outfile, include_plotlyjs="cdn")
+    fig.write_html(outfile, include_plotlyjs="cdn", include_mathjax="cdn")
     print(f"   3D surface plot saved: {outfile.name}")

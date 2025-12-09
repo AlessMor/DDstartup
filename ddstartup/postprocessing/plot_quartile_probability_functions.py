@@ -198,7 +198,7 @@ def quartile_probability_plot(
         # get & clean label and unit up front
         raw_label = getattr(registry, "get_param_label", lambda n, **k: n)(param) or ""
         label0    = _clean_symbol_label(raw_label)  # keep $...$ for mathtext
-        unit0     = getattr(registry, "get_param_unit",  lambda n, **k: None)(param) or ""
+        unit0     = getattr(registry, "get_unit",  lambda n, **k: None)(param) or ""
 
         # numeric vectors
         x_all  = pd.to_numeric(df[param], errors="coerce").replace([np.inf, -np.inf], np.nan).to_numpy(dtype=np.float64, copy=False)
@@ -467,7 +467,7 @@ def quartile_probability_plot(
     # figure title: clean mathtext for the target symbol; escape dollars in unit only
     raw_tlabel = getattr(registry, "get_param_label", lambda n, **k: n)(target)
     t_label = _strip_trailing_unit(_clean_symbol_label(raw_tlabel))
-    t_unit  = _escape_dollars(target_unit or getattr(registry, "get_param_unit", lambda n, **k: None)(target) or "")
+    t_unit  = _escape_dollars(target_unit or getattr(registry, "get_unit", lambda n, **k: None)(target) or "")
     title = f"P(quartile | parameter value) wrt {t_label if not t_unit else f'{t_label} [{t_unit}]'}"
     if file_type:
         title += f" • {file_type}"
