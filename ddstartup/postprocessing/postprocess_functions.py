@@ -715,6 +715,13 @@ def load_h5_to_df(
         else:
             env = _env_from_df(df_chunk) if compiled_filters else {}
 
+        # Track failed status BEFORE filtering (for quartile probability plots)
+        # _is_failed marks: solver failures (sol_success==False) + filter violations
+        if "sol_success" in df_chunk.columns:
+            df_chunk["_is_failed"] = ~df_chunk["sol_success"].astype(bool)
+        else:
+            df_chunk["_is_failed"] = False
+        
         # Filters per chunk
         if compiled_filters:
             mask = np.ones(len(df_chunk), dtype=bool)
@@ -757,17 +764,18 @@ def load_h5_to_df(
                 if num.size == 0 or finite.size == 0:
                     f["nonfinite"] = True
                     continue
-                mask &= _reduce_mask(val)
+                filter_mask = _reduce_mask(val)
+                # Mark rows that fail this filter as failed
+                df_chunk.loc[~filter_mask, "_is_failed"] = True
+                mask &= filter_mask
                 f["applied"] = True
-            if not mask.all():
-                df_chunk = df_chunk.loc[mask].reset_index(drop=True)
-            if df_chunk.empty:
-                continue
-
+            # Don't remove filtered rows yet - keep them for quartile probability tracking
+            # They will be filtered in plot functions based on _is_failed flag
+            
+        # Also mark sol_success failures (if not already marked)
         if success_only and "sol_success" in df_chunk.columns:
-            df_chunk = df_chunk.loc[df_chunk["sol_success"].astype(bool)].reset_index(drop=True)
-            if df_chunk.empty:
-                continue
+            # For success_only mode, still keep failed rows but mark them
+            df_chunk.loc[~df_chunk["sol_success"].astype(bool), "_is_failed"] = True
 
         # Keep only needed columns (chunk-local)
         if keep == "slim":
@@ -1051,6 +1059,10 @@ def collect_plot_settings(config: Dict[str, Any], args, targets: List[str], plot
         ys = strip.get("y_metrics", targets[:min(3,len(targets))])
         strip = {**strip, "y_metrics": ys}
         print(f"🔷 Strip plot metrics: {', '.join(ys)}")
+    quartprob = plots.get("quartprob_settings", {})
+    if "quartprob" in plot_types:
+        include_failed = bool(quartprob.get("include_failed", True))
+        print(f"🔷 Quartile probability: {'SHOW' if include_failed else 'HIDE'} FAILED category")
     style_cfg = plots.get("style", {}) or {}
     show_titles = bool(style_cfg.get("show_titles", True))
     font_scale = style_cfg.get("font_scale")
@@ -1060,7 +1072,7 @@ def collect_plot_settings(config: Dict[str, Any], args, targets: List[str], plot
         if isinstance(axes, str):
             axes = [axes]
         print(f"🔷 Surface3D axes: {', '.join(axes[:3])}")
-    return shap_interp, pdf_smooth, ml_pair, strip, show_titles, font_scale, surface3d
+    return shap_interp, pdf_smooth, ml_pair, strip, show_titles, font_scale, surface3d, quartprob
 
 def generate_plots_for_file(
     path: Path,
@@ -1077,6 +1089,7 @@ def generate_plots_for_file(
     ml_pairwise_settings: Dict[str, Any] | None = None,
     strip_settings: Dict[str, Any] | None = None,
     surface3d_settings: Dict[str, Any] | None = None,
+    quartprob_settings: Dict[str, Any] | None = None,
     chunk_size: int | None = None,
     n_jobs: int = 1,
     batch_size: int = 100_000,
@@ -1217,6 +1230,7 @@ def generate_plots_for_file(
             for key, mod, fn in pipeline:
                 if key in plot_types:
                     if key == "quartprob":
+                        include_failed = (quartprob_settings or {}).get("include_failed", True)
                         # pass the FULL df (includes failures) so the plotter can compute FAILED per-bin
                         _call(mod, fn, df=df,           # << full DF here
                             target=target,
@@ -1226,7 +1240,7 @@ def generate_plots_for_file(
                             file_type=file_type,
                             registry=registry,
                             plot_name_prefix=path.stem,
-                            COUNT_FAILED=True, AVG_POINTS=10, PLOT_STYLE="line")
+                            COUNT_FAILED=include_failed, AVG_POINTS=10, PLOT_STYLE="line")
                     else:
                         _call(mod, fn, **common)
 

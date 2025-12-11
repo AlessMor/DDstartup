@@ -99,11 +99,22 @@ plots:
   kmeans: false           # KMeans clustering analysis
   contour: false          # 2D pairwise contour plots
   
+  
+  # ==========================================================================
+  # QUARTILE PROBABILITY PLOT SETTINGS
+  # ==========================================================================
   quartprob: true        # Quartile probability plots
+  
+  quartprob_settings:
+    include_failed: true  # Show FAILED category (solver failures + filtered solutions)
+                          # - true: Plot FAILED probability alongside Q1-Q4
+                          # - false: Only show successful solutions in Q1-Q4
+    failed_color: '#808080'  # Color for FAILED category (default: grey)
+  
   # ==========================================================================
   # 3D SURFACE SETTINGS
   # ==========================================================================
-  surface3d: true         # Interactive 3D surface (3 inputs as axes, target as color)
+  surface3d: false         # Interactive 3D surface (3 inputs as axes, target as color)
   surface3d_settings:
     axes: [Tdot_tot_eff, price_of_electricity, tau_p_T]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
     grid_size: 60          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
@@ -139,7 +150,7 @@ plots:
   # ==========================================================================
   # PROBABILITY DENSITY FUNCTION (PDF) SETTINGS
   # ==========================================================================
-  pdf: true              # Probability density function plots
+  pdf: false              # Probability density function plots
   
   pdf_settings:
     n_bins: 10000        # Number of histogram bins (when smooth=false)
@@ -196,7 +207,7 @@ plots:
   # ==========================================================================
   # STRIP PLOT SETTINGS
   # ==========================================================================
-  strip: true            # Strip plots with trends (comparing multiple metrics)
+  strip: false            # Strip plots with trends (comparing multiple metrics)
   
   strip_settings:
     # Strip plots compare multiple metrics with trend lines and uncertainty bands

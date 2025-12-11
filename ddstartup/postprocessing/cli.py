@@ -96,7 +96,7 @@ def main() -> None:
         plot_types = [k for k in ["kde","parcoords","pdf","importance","kmeans","contour","shap","ml_pairwise","strip","quartprob","surface3d"] if plots_cfg.get(k, False)]
     print(f"\n📊 Plot types: {', '.join(plot_types)}")
     if DEBUG: print(f"📊 Plot types to generate: {plot_types}")
-    shap_interpolate, pdf_smooth, ml_pairwise_settings, strip_settings, show_titles, font_scale, surface3d_settings = collect_plot_settings(config, args, targets, plot_types)
+    shap_interpolate, pdf_smooth, ml_pairwise_settings, strip_settings, show_titles, font_scale, surface3d_settings, quartprob_settings = collect_plot_settings(config, args, targets, plot_types)
 
     # Comparison config (cross-run)
     compare_cfg = (config.get("compare", {}) or {}).copy()
@@ -184,6 +184,7 @@ def main() -> None:
             ml_pairwise_settings=ml_pairwise_settings,
             strip_settings=strip_settings,
             surface3d_settings=surface3d_settings,
+            quartprob_settings=quartprob_settings,
             chunk_size=chunk_size,
             n_jobs=n_jobs,
             batch_size=batch_size,

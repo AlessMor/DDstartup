@@ -102,9 +102,16 @@ def quartile_probability_plot(
     registry = ensure_registry(registry)
 
     # ---------- target quartiles on successes ----------
+    # Use _is_failed column if available (tracks both solver failures + filtered)
+    if "_is_failed" in df.columns:
+        is_failed = df["_is_failed"].astype(bool)
+    else:
+        # Fallback: use sol_success column
+        is_failed = ~df["sol_success"].astype(bool) if "sol_success" in df.columns else pd.Series(False, index=df.index)
+    
     t = pd.to_numeric(df[target], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    sol = df["sol_success"].astype(bool) if "sol_success" in df.columns else pd.Series(True, index=df.index)
-    succ = sol & t.notna()
+    succ = ~is_failed & t.notna()
+    
     if not succ.any():
         print(f"   No successful finite '{target}'. Skipping.")
         return
@@ -144,6 +151,9 @@ def quartile_probability_plot(
 
     # track if FAILED ever actually appears
     any_failed_plotted = False
+    
+    # Failure mask: includes solver failures + filtered solutions
+    fail_mask = is_failed | (~t.notna())
 
     def _fmt(v: float) -> str:
         if not np.isfinite(v) or v == 0:
@@ -188,7 +198,6 @@ def quartile_probability_plot(
     )
     axes = np.atleast_1d(axes).ravel()
 
-    fail_mask = (~sol) | (~t.notna())
     csv_rows = []
     rpow = 9  # rounding precision for discrete grouping (kept for future use)
 
