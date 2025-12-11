@@ -238,8 +238,8 @@ def add_trend_and_band(ax, x, y, color, label, frac=0.12, max_lowess_points=1000
     lo = trend + lo_offset.values
     hi = trend + hi_offset.values
     
-    # Plot uncertainty band
-    ax.fill_between(x, lo, hi, color=color, alpha=alpha_band, linewidth=0, zorder=2)
+    # Plot uncertainty band with low zorder so it renders behind everything including legend
+    ax.fill_between(x, lo, hi, color=color, alpha=alpha_band, linewidth=0, zorder=0.5)
     
     return line_raw, line_trend
 
@@ -284,18 +284,31 @@ def get_axis_label(metric, unit_conversions, registry):
     
     # Get unit
     if metric in unit_conversions:
+        # Explicitly specified conversion
         unit = unit_conversions[metric]['unit']
     else:
         # Check if it's a computed metric
         if '-' in metric and metric.count('-') == 1:
             parts = [p.strip() for p in metric.split('-')]
             if len(parts) == 2:
-                unit1 = registry.get_unit(parts[0])
-                unit2 = registry.get_unit(parts[1])
-                if unit1 == unit2:
-                    unit = unit1
+                # Check if both parts have conversions specified
+                if parts[0] in unit_conversions and parts[1] in unit_conversions:
+                    unit1_conv = unit_conversions[parts[0]]['unit']
+                    unit2_conv = unit_conversions[parts[1]]['unit']
+                    if unit1_conv == unit2_conv:
+                        # Both parts converted to same unit - use converted unit
+                        unit = unit1_conv
+                    else:
+                        # Different converted units - use first
+                        unit = unit1_conv
                 else:
-                    unit = f'{unit1}'  # Use first unit if different
+                    # Fall back to registry units
+                    unit1 = registry.get_unit(parts[0])
+                    unit2 = registry.get_unit(parts[1])
+                    if unit1 == unit2:
+                        unit = unit1
+                    else:
+                        unit = f'{unit1}'  # Use first unit if different
             else:
                 unit = registry.get_unit(metric)
         else:
@@ -452,8 +465,26 @@ def generate_strip_plot(
     # Apply unit conversions to y_metrics
     for metric in y_metrics:
         if metric in unit_conversions:
+            # Explicit conversion specified
             conversion = unit_conversions[metric]
             df_work[metric] = df_work[metric] * conversion['factor']
+        elif '-' in metric and metric.count('-') == 1:
+            # Computed metric (e.g., "P_DT_eq - P_aux")
+            # Check if both parts have conversions with the same unit
+            parts = [p.strip() for p in metric.split('-')]
+            if len(parts) == 2 and parts[0] in unit_conversions and parts[1] in unit_conversions:
+                unit1 = unit_conversions[parts[0]]['unit']
+                unit2 = unit_conversions[parts[1]]['unit']
+                factor1 = unit_conversions[parts[0]]['factor']
+                factor2 = unit_conversions[parts[1]]['factor']
+                
+                # Apply conversions if both parts use the same factor
+                # (e.g., both P_DT_eq and P_aux convert with 1e-6 to MW)
+                if factor1 == factor2:
+                    df_work[metric] = df_work[metric] * factor1
+                    if verbose:
+                        print(f"   Applied conversion to computed metric '{metric}': factor={factor1}, unit={unit1}")
+
     
     # Also apply unit conversion to x_sort_by for X-axis display
     # BUT if x_sort_by is already in y_metrics, it was already converted above
@@ -517,8 +548,8 @@ def generate_strip_plot(
         all_lines.extend(line_raw + line_trend)
         all_labels.extend([l.get_label() for l in line_raw + line_trend])
     
-    # X-axis label using registry for proper formatting
-    xlabel = registry.get_param_label(x_sort_by)
+    # X-axis label with converted unit (if applicable)
+    xlabel = get_axis_label(x_sort_by, unit_conversions, registry)
     ax1.set_xlabel(xlabel, fontsize=12)
     
     # Title
@@ -561,8 +592,11 @@ def generate_strip_plot(
         all_lines.append(star)
         all_labels.append('Optimal Point')
     
-    # Legend
-    ax1.legend(all_lines, all_labels, loc='upper left', fontsize=9, framealpha=0.9)
+    # Legend - create with opaque frame and high zorder to ensure it appears on top
+    legend = ax1.legend(all_lines, all_labels, loc='upper left', fontsize=9, 
+                        framealpha=1.0, fancybox=True, shadow=True, 
+                        edgecolor='black', facecolor='white')
+    legend.set_zorder(100)  # High zorder ensures legend is on top
     
     plt.tight_layout()
     

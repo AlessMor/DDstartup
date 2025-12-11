@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import torch
@@ -268,6 +269,22 @@ def generate_ml_pairwise_plots(
             cs = ax.contourf(II, JJ, Z, levels=40, alpha=0.9, cmap="viridis")
             cbar = fig.colorbar(cs, ax=ax)
             cbar.set_label(target_label)  # Already includes unit
+            
+            # Format colorbar ticks with scientific notation
+            def fmt_sci(x, pos):
+                """Format tick labels in scientific notation."""
+                if abs(x) < 1e-10:  # Treat as zero
+                    return '0'
+                exp = int(np.floor(np.log10(abs(x))))
+                coeff = x / 10**exp
+                # Simplify if coefficient is close to 1
+                if abs(coeff - 1) < 0.05:
+                    return f'$10^{{{exp}}}$'
+                else:
+                    return f'${coeff:.1f}\\times10^{{{exp}}}$'
+            
+            cbar.formatter = mticker.FuncFormatter(fmt_sci)
+            cbar.update_ticks()
 
             H, extent = density_2d(X, i, j, gi, gj, bins=100)
             ax.imshow(H, extent=extent, origin="lower", alpha=0.25, aspect="auto", cmap="gray")

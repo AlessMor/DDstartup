@@ -77,6 +77,8 @@ filters:
 - K_el > 0
 - c_T < 2e9
 - c_T > 0
+- P_DT_eq <= 3e9
+- P_aux_DT_eq <= 100e6
 
 # ============================================================================
 # PLOT CONFIGURATION
@@ -175,7 +177,7 @@ plots:
   # ==========================================================================
   # PAIRWISE CONTOUR PLOT SETTINGS - ENHANCED WITH MACHINE LEARNING
   # ==========================================================================
-  ml_pairwise: true      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
+  ml_pairwise: false      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
   
   ml_pairwise_settings:
     pairs: all          # Pairs to plot: 'auto' (top 5x5), 'all', or list like [[0,1], [2,3]]
