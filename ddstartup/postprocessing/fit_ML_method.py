@@ -72,12 +72,13 @@ def clean_dataframe(
     *,
     min_rows: int = 200,
     verbose: bool = True,
-    use_log_target: bool = True,
+    use_log_target: bool | str = 'auto',
 ) -> Tuple[np.ndarray, np.ndarray, List[str], bool]:
     """
     Select usable numeric columns, drop rows with NaN/Inf, and return X, y arrays.
     
     If use_log_target=True, applies log1p(y) to target and filters out non-positive values.
+    If use_log_target='auto', automatically detects if log transform is beneficial based on range.
     Returns (X, y, feature_names, y_is_log).
     """
     if target not in df.columns:
@@ -131,6 +132,19 @@ def clean_dataframe(
     X = M[usable].values.astype(np.float32)
     y = M[target].values.astype(np.float64)
     
+    # Auto-detect if log transform is beneficial
+    if use_log_target == 'auto':
+        y_positive = y[y > 0]
+        if len(y_positive) > 0:
+            y_range = np.log10(y_positive.max() / max(y_positive.min(), 1e-10))
+            # Use log if target spans > 3 orders of magnitude
+            use_log_target = y_range > 3.0
+            if verbose:
+                print(f"  Target range: {y.min():.3e} to {y.max():.3e} ({y_range:.1f} orders of magnitude)")
+                print(f"  Auto-detected log transform: {use_log_target}")
+        else:
+            use_log_target = False
+    
     # Apply log1p transformation if requested
     y_is_log = False
     if use_log_target:
@@ -152,6 +166,9 @@ def clean_dataframe(
         else:
             if verbose:
                 print(f"  Skipping log transform: only {len(y)} rows remaining")
+    else:
+        if verbose:
+            print(f"  No log transform applied to target")
     
     return X, y, usable, y_is_log
 
@@ -397,7 +414,9 @@ def predict_numpy(
     with torch.no_grad():
         yhat = model(xb).cpu().numpy()
     y_pred = y_scaler.inverse_transform(yhat).ravel()
-    # y_is_log kept for backward compatibility but no longer used
+    # If target was log-transformed, undo log1p with expm1
+    if y_is_log:
+        y_pred = np.expm1(y_pred)  # exp(x) - 1, inverse of log1p
     return y_pred
 
 

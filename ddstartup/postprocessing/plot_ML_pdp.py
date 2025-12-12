@@ -140,18 +140,20 @@ def generate_ml_pairwise_plots(
     grid_size = int(cfg.get("grid_size", 80))
     bg_samples = int(cfg.get("bg_samples", 256))
     hidden = tuple(cfg.get("hidden", (128, 64, 32)))
-    dropout = float(cfg.get("dropout", 0.5))
+    dropout = float(cfg.get("dropout", 0.6))  # Increased from 0.5 to reduce overfitting
     lr = float(cfg.get("lr", 3e-4))
-    weight_decay = float(cfg.get("weight_decay", 1e-2))
+    weight_decay = float(cfg.get("weight_decay", 1e-2))  # L2 regularization
     batch_size = int(cfg.get("batch_size", 16384))
     max_epochs = int(cfg.get("max_epochs", 100))
     patience = int(cfg.get("patience", 10))
     use_augmentation = bool(cfg.get("use_augmentation", True))
+    augment_noise_factor = float(cfg.get("augment_noise_factor", 0.2))  # Reduced from default 0.5
     min_rows_val = cfg.get("min_rows", 200)
     min_rows = int(min_rows_val) if min_rows_val not in (None, 0) else 0
     max_train_val = cfg.get("max_train_samples", 200_000)
     # If set to 0/None, do not subsample
     max_train_samples = None if max_train_val in (None, 0) else int(max_train_val)
+    use_log_target = cfg.get("use_log_target", 'auto')  # 'auto', True, or False
     save_artifacts = bool(cfg.get("save_artifacts", True))
     plot_diag = verbose and bool(cfg.get("plot_diagnostics", True))
     qrange = tuple(cfg.get("qrange", (0.05, 0.95)))
@@ -159,12 +161,20 @@ def generate_ml_pairwise_plots(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    n_input_rows = len(df)
+    if verbose:
+        print(f"   Initial dataset: {n_input_rows:,} rows")
+
     # Clean DataFrame -> X, y
     try:
-        X, y, usable, y_is_log = clean_dataframe(df, target, feature_cols=inputs, min_rows=min_rows, verbose=verbose)
+        X, y, usable, y_is_log = clean_dataframe(df, target, feature_cols=inputs, min_rows=min_rows, verbose=verbose, use_log_target=use_log_target)
     except Exception as e:
         print(f"   Error during ML PDP cleaning: {e}")
         return
+
+    if verbose:
+        retention_pct = (len(X) / max(n_input_rows, 1)) * 100
+        print(f"   After cleaning: {len(X):,} rows ({retention_pct:.1f}% retained)")
 
     if max_train_samples is not None and len(X) > max_train_samples:
         idx = np.random.default_rng(0).choice(len(X), size=max_train_samples, replace=False)
@@ -203,6 +213,7 @@ def generate_ml_pairwise_plots(
             max_epochs=max_epochs,
             patience=patience,
             use_augmentation=use_augmentation,
+            augment_noise_factor=augment_noise_factor,
             y_is_log=y_is_log,
         )
     except Exception as e:
@@ -277,6 +288,16 @@ def generate_ml_pairwise_plots(
                     return '0'
                 exp = int(np.floor(np.log10(abs(x))))
                 coeff = x / 10**exp
+                
+                # Use regular notation for simple cases
+                if exp == 0:  # 10^0 = 1
+                    return f'{x:.1f}'
+                elif exp == 1:  # 10^1 = 10
+                    return f'{x:.0f}'
+                elif exp == -1:  # 10^-1 = 0.1
+                    return f'{x:.2f}'
+                
+                # Scientific notation for larger/smaller exponents
                 # Simplify if coefficient is close to 1
                 if abs(coeff - 1) < 0.05:
                     return f'$10^{{{exp}}}$'

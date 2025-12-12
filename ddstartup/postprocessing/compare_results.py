@@ -359,30 +359,112 @@ def _per_target_summary(df_all: pd.DataFrame, target: str) -> pd.DataFrame:
     return summaries
 
 
+def _fd_nbins(x: np.ndarray, max_bins: int = 512, min_bins: int = 20) -> int:
+    """Freedman-Diaconis rule for number of bins."""
+    x = x[np.isfinite(x)]
+    if x.size < 2:
+        return 1
+    iqr = np.subtract(*np.nanpercentile(x, [75, 25]))
+    if iqr <= 0:
+        return max(1, int(np.clip(np.sqrt(x.size), min_bins, max_bins)))
+    h = 2 * iqr / np.cbrt(x.size)
+    if h <= 0:
+        return max(1, min_bins)
+    nb = int(np.ceil((x.max() - x.min()) / h))
+    return int(np.clip(nb, min_bins, max_bins))
+
+
+def _hist_density_log(values: np.ndarray, nbins: int | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """Compute histogram density with log-spaced bins."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v) & (v > 0)]
+    if v.size < 2:
+        return np.array([]), np.array([])
+    
+    lv = np.log10(v)
+    if nbins is None:
+        nbins = _fd_nbins(lv)
+    
+    lmin, lmax = np.min(lv), np.max(lv)
+    edges = np.logspace(lmin, lmax, nbins + 1)
+    counts, _ = np.histogram(v, bins=edges)
+    widths = np.diff(edges)
+    density = counts.astype(float) / (v.size * widths)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    
+    # Remove empty bins
+    mask = np.isfinite(density) & (density > 0)
+    return centers[mask], density[mask]
+
+
+def _add_lowess_trend_band(
+    ax, x: np.ndarray, y: np.ndarray, color: str, label: str, 
+    frac: float = 0.12, window_size: int | None = None,
+    alpha_data: float = 0.35, alpha_band: float = 0.18
+) -> None:
+    """Add LOWESS trend line and rolling-quantile uncertainty band."""
+    # Plot raw histogram densities
+    ax.plot(x, y, color=color, linewidth=1.0, alpha=alpha_data, zorder=1)
+    
+    # Compute LOWESS trend
+    try:
+        from statsmodels.nonparametric.smoothers_lowess import lowess
+        trend = lowess(y, x, frac=frac, it=1, return_sorted=False)
+    except Exception:
+        # Fallback to rolling mean
+        win = max(5, len(x) // 50)
+        trend = pd.Series(y, index=pd.Index(x)).rolling(win, center=True, min_periods=1).mean().to_numpy()
+    
+    # Plot trend
+    ax.plot(x, trend, color=color, linewidth=2.5, label=label, zorder=3)
+    
+    # Rolling-quantile band
+    if window_size is None:
+        window_size = max(25, len(x) // 20)
+    min_periods = max(10, window_size // 3)
+    
+    residuals = pd.Series(y - trend, index=pd.Index(x))
+    lo_off = residuals.rolling(window_size, min_periods=min_periods).quantile(0.10)
+    hi_off = residuals.rolling(window_size, min_periods=min_periods).quantile(0.90)
+    
+    lo = trend + lo_off.to_numpy()
+    hi = trend + hi_off.to_numpy()
+    
+    ax.fill_between(x, lo, hi, color=color, alpha=alpha_band, linewidth=0, zorder=2)
+
+
 def _plot_pdf(df_all: pd.DataFrame, target: str, registry, outdir: Path, show_titles: bool) -> Path | None:
-    """Plot overlaid PDF for each run."""
-    plt.figure(figsize=(8, 5))
+    """Plot overlaid PDF for each run with LOWESS trend and uncertainty bands."""
+    fig, ax = plt.subplots(figsize=(8, 5))
     plotted = False
-    for run, sub in df_all.groupby("run_id"):
+    colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', ['C0', 'C1', 'C2', 'C3'])
+    
+    for i, (run, sub) in enumerate(df_all.groupby("run_id")):
         vals = pd.to_numeric(sub[target], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
         if vals.empty:
             continue
-        counts, edges = np.histogram(vals, bins="fd", density=True)
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        plt.step(centers, counts, where="mid", label=run, alpha=0.9)
-        plt.fill_between(centers, counts, step="mid", alpha=0.2)
+        
+        centers, density = _hist_density_log(vals.to_numpy())
+        if centers.size == 0:
+            continue
+        
+        color = colors[i % len(colors)]
+        _add_lowess_trend_band(ax, centers, density, color=color, label=str(run), frac=0.12)
         plotted = True
+    
     if not plotted:
         plt.close()
         return None
+    
     tlabel = registry.get_param_label(target) if registry else target
     if show_titles:
-        plt.title(f"PDF of {tlabel} across runs")
-    plt.xlabel(tlabel)
-    plt.ylabel("Probability density")
-    plt.xscale('log')  # Log scale for x-axis
-    plt.legend()
+        ax.set_title(f"PDF of {tlabel} across runs")
+    ax.set_xlabel(tlabel)
+    ax.set_ylabel("Probability density")
+    ax.set_xscale('log')
+    ax.legend()
     plt.tight_layout()
+    
     out = outdir / f"compare_pdf_{target}.png"
     plt.savefig(out, dpi=150)
     plt.close()

@@ -77,8 +77,8 @@ filters:
 - K_el > 0
 - c_T < 2e9
 - c_T > 0
-- P_DT_eq <= 3e9
-- P_aux_DT_eq <= 100e6
+# - P_DT_eq <= 3e9
+# - P_aux_DT_eq <= 100e6
 
 # ============================================================================
 # PLOT CONFIGURATION
@@ -114,7 +114,7 @@ plots:
   # ==========================================================================
   # 3D SURFACE SETTINGS
   # ==========================================================================
-  surface3d: false         # Interactive 3D surface (3 inputs as axes, target as color)
+  surface3d: true         # Interactive 3D surface (3 inputs as axes, target as color)
   surface3d_settings:
     axes: [Tdot_tot_eff, price_of_electricity, tau_p_T]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
     grid_size: 60          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
@@ -188,7 +188,7 @@ plots:
   # ==========================================================================
   # PAIRWISE CONTOUR PLOT SETTINGS - ENHANCED WITH MACHINE LEARNING
   # ==========================================================================
-  ml_pairwise: false      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
+  ml_pairwise: true      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
   
   ml_pairwise_settings:
     pairs: all          # Pairs to plot: 'auto' (top 5x5), 'all', or list like [[0,1], [2,3]]
@@ -196,11 +196,19 @@ plots:
                          # - 'all': Plots all possible pairs (can be many plots!)
                          # - Custom list: [[0,1], [2,4]] for specific parameter index pairs
     grid_size: 70        # Resolution of PDP grid (70x70 = 4900 points per plot)
-    max_train_samples: 10000000000  # Maximum samples to use for ML model training
-    hidden: [128, 64, 32]    # MLP hidden layer sizes            # Smaller network (was [128, 64, 32])
-    # dropout: 0.5                 # Explicit dropout (code default is 0.5)
-    # weight_decay: 1e-4           # L2 regularization to prevent overfitting
-    # patience: 20   
+    max_train_samples: 10000000000  # Maximum samples to use for ML model training (0 or very large = use all)
+    use_log_target: auto # Log transform for target: 'auto' (detect based on range), true (force), false (disable)
+                         # 'auto' applies log if target spans >3 orders of magnitude (recommended)
+                         # Features are always standardized (handles n_tot~1e20, others~1)
+    hidden: [128, 64, 32]    # MLP hidden layer sizes
+    dropout: 0.6         # Dropout rate (0.5-0.7 recommended; higher = less overfitting)
+    weight_decay: 0.01   # L2 regularization (0.01 = moderate; higher = more regularization)
+    use_augmentation: true  # Enable data augmentation with Gaussian noise
+    augment_noise_factor: 0.2  # Noise level for augmentation (fraction of feature std)
+                               # 0 = disable, 0.1-0.3 = light (recommended), 0.5 = default (heavy)
+                               # Adds noisy copies of training data for regularization
+                               # Pros: Better generalization, robustness to input variations
+                               # Cons: 2x memory usage, 2x training time per epoch
     verbose: true       # Print detailed training progress
                          # Set to true for debugging or monitoring training
 
@@ -252,7 +260,7 @@ plots:
 # ============================================================================
 # CROSS-RUN COMPARISON (OPTIONAL)
 # ============================================================================
-compare:
+# compare:
   # List of H5 files or folders to compare (accepts "latest")
   files:
     - "outputs/test_parametric_T_seeded"
@@ -260,7 +268,8 @@ compare:
   targets:
     - unrealized_profits
     - t_startup
-  out: "outputs/compare_tests"
+    - K_el
+  out: "outputs/compare_tests_Kel5"
   show_titles: false
 
 

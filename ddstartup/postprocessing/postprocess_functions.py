@@ -935,11 +935,20 @@ class AdditionalAwareRegistry:
         self._base = base; self._meta = additional_meta or {}
     
     def get_param_label(self, name: str, *a, **k):
-        """Get formatted parameter label, preferring additional_variables symbol if defined."""
+        """Get formatted parameter label, preferring additional_variables symbol/unit if defined."""
         m = self._meta.get(name)
-        if m and m.get("symbol") and not k.get("prefer_base", False): 
-            return m["symbol"]
-        return self._base.get_param_label(name, *a, **k) if hasattr(self._base,"get_param_label") else name
+        # Override unit if defined in additional_meta
+        if m and m.get("unit") and "unit" not in k:
+            k = {**k, "unit": m["unit"]}
+        # Always use base registry's formatting logic to handle LaTeX/escaping properly
+        # But allow overriding the symbol lookup
+        if m and m.get("symbol"):
+            # Store override for get_symbol to pick up
+            self._symbol_override = {name: m["symbol"]}
+        result = self._base.get_param_label(name, *a, **k) if hasattr(self._base,"get_param_label") else name
+        if hasattr(self, '_symbol_override'):
+            delattr(self, '_symbol_override')
+        return result
     
     def get_unit(self, name: str, *a, **k):
         """Get parameter unit, preferring additional_variables unit if defined."""
@@ -947,6 +956,16 @@ class AdditionalAwareRegistry:
         if m and m.get("unit"): 
             return m["unit"]
         return self._base.get_unit(name, *a, **k) if hasattr(self._base,"get_unit") else None
+    
+    def get_symbol(self, name: str, *a, **k):
+        """Get parameter symbol, preferring additional_variables symbol if defined."""
+        # Check for temporary override (set by get_param_label)
+        if hasattr(self, '_symbol_override') and name in self._symbol_override:
+            return self._symbol_override[name]
+        m = self._meta.get(name)
+        if m and m.get("symbol"):
+            return m["symbol"]
+        return self._base.get_symbol(name, *a, **k) if hasattr(self._base,"get_symbol") else name
     
     def __getattr__(self, attr): 
         return getattr(self._base, attr)
@@ -1189,9 +1208,27 @@ def generate_plots_for_file(
                 print(f"   ⚠️  Target '{target}' is vector-valued. Skipping scalar plots.")
                 continue
 
-            # Success-only frame for quartiles: finite target
+            # Success-only frame: finite target
             y = pd.to_numeric(df[target], errors="coerce").replace([np.inf, -np.inf], np.nan)
-            df_t = df.loc[y.notna()]
+            mask_finite = y.notna()
+            
+            # For quartprob: keep track of failed counts per input parameter bin
+            # Instead of keeping full failed rows, pre-compute summary
+            failed_counts_summary = None
+            if "quartprob" in plot_types and "_is_failed" in df.columns:
+                # Compute failed counts for each input parameter before filtering
+                failed_mask = df["_is_failed"].fillna(False) & mask_finite
+                if failed_mask.any():
+                    failed_counts_summary = {}
+                    # Will compute bins later per input in quartprob plotter
+                    failed_counts_summary["_failed_df"] = df.loc[mask_finite & failed_mask, :].copy()
+            
+            # Filter to successful cases only
+            if "_is_failed" in df.columns:
+                df_t = df.loc[mask_finite & ~df["_is_failed"].fillna(False)].copy()
+            else:
+                df_t = df.loc[mask_finite].copy()
+            
             if df_t.empty:
                 print(f"   ⚠️  No finite data for '{target}'. Skipping.")
                 continue
@@ -1207,7 +1244,7 @@ def generate_plots_for_file(
                 tunit = ""
 
             common = dict(
-                df=df_t,
+                df=df_t,  # Single dataframe (may have _is_failed=True rows)
                 df_filtered=df_t,
                 target=target,
                 inputs=inputs,
@@ -1231,8 +1268,8 @@ def generate_plots_for_file(
                 if key in plot_types:
                     if key == "quartprob":
                         include_failed = (quartprob_settings or {}).get("include_failed", True)
-                        # pass the FULL df (includes failures) so the plotter can compute FAILED per-bin
-                        _call(mod, fn, df=df,           # << full DF here
+                        # Pass successful df_t + optional failed_counts_summary (lightweight)
+                        _call(mod, fn, df=df_t,
                             target=target,
                             inputs=inputs,
                             target_unit=tunit,
@@ -1240,6 +1277,7 @@ def generate_plots_for_file(
                             file_type=file_type,
                             registry=registry,
                             plot_name_prefix=path.stem,
+                            failed_counts_summary=failed_counts_summary if include_failed else None,
                             COUNT_FAILED=include_failed, AVG_POINTS=10, PLOT_STYLE="line")
                     else:
                         _call(mod, fn, **common)

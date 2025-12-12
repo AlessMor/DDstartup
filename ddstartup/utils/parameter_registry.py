@@ -254,7 +254,7 @@ PARAMETER_SCHEMA = {
     'unrealized_profits': {
         'role': 'output',
         'analysis_types': ['lump', 'T_seeded'],
-        'unit': 'J',
+        'unit': '$',
         'symbol': 'G',
         'description': 'Unrealized profits during startup',
         'aliases': ['unrealized_gains']

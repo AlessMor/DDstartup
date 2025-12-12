@@ -73,6 +73,7 @@ def quartile_probability_plot(
     plot_name_prefix: str | None = None,
     plot_name: str | None = None,
     registry=None,
+    failed_counts_summary: dict | None = None,  # Lightweight summary of failed rows
     COUNT_FAILED: bool = True,             # add grey series P(FAILED | x)
     PLOT_STYLE: str = "line",              # "line" | "bar"
     min_per_bin: int = 1,
@@ -102,15 +103,9 @@ def quartile_probability_plot(
     registry = ensure_registry(registry)
 
     # ---------- target quartiles on successes ----------
-    # Use _is_failed column if available (tracks both solver failures + filtered)
-    if "_is_failed" in df.columns:
-        is_failed = df["_is_failed"].astype(bool)
-    else:
-        # Fallback: use sol_success column
-        is_failed = ~df["sol_success"].astype(bool) if "sol_success" in df.columns else pd.Series(False, index=df.index)
-    
+    # df now contains only successful cases (no _is_failed=True)
     t = pd.to_numeric(df[target], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    succ = ~is_failed & t.notna()
+    succ = t.notna()
     
     if not succ.any():
         print(f"   No successful finite '{target}'. Skipping.")
@@ -121,7 +116,7 @@ def quartile_probability_plot(
     kq = len(qlabels)
 
     # ---------- select scalar, varying inputs ----------
-    cand = [c for c in list(_inputs or []) if c != "sol_success"]
+    cand = [c for c in list(_inputs or []) if c != "sol_success" and c != "_is_failed"]
     scalar_inputs = select_scalar_numeric(df, cand)
     varying = drop_near_constant(df, scalar_inputs)
     if not varying:
@@ -152,8 +147,8 @@ def quartile_probability_plot(
     # track if FAILED ever actually appears
     any_failed_plotted = False
     
-    # Failure mask: includes solver failures + filtered solutions
-    fail_mask = is_failed | (~t.notna())
+    # Get failed dataframe from summary if available
+    df_failed = failed_counts_summary.get("_failed_df") if failed_counts_summary else None
 
     def _fmt(v: float) -> str:
         if not np.isfinite(v) or v == 0:
@@ -277,8 +272,14 @@ def quartile_probability_plot(
         idx_all[idx_all >= x_pos.size] = x_pos.size - 1
         totals = np.bincount(idx_all, minlength=x_pos.size)
 
-        if COUNT_FAILED:
-            idx_fail = idx_all[fail_mask.values[finite_all]]
+        if COUNT_FAILED and df_failed is not None and param in df_failed.columns:
+            # Get failed values for this parameter from pre-computed summary
+            x_failed = pd.to_numeric(df_failed[param], errors="coerce").values
+            finite_failed = np.isfinite(x_failed)
+            xf = x_failed[finite_failed]
+            idx_fail = np.digitize(xf, edges, right=True) - 1
+            idx_fail[idx_fail < 0] = 0
+            idx_fail[idx_fail >= x_pos.size] = x_pos.size - 1
             fails = np.bincount(idx_fail, minlength=x_pos.size)
         else:
             fails = np.zeros(x_pos.size, dtype=np.int64)
