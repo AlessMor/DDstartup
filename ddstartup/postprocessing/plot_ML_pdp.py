@@ -175,6 +175,8 @@ def generate_ml_pairwise_plots(
     if verbose:
         retention_pct = (len(X) / max(n_input_rows, 1)) * 100
         print(f"   After cleaning: {len(X):,} rows ({retention_pct:.1f}% retained)")
+        # Show target value range after cleaning
+        print(f"   Target '{target}' range after cleaning: [{y.min():.3e}, {y.max():.3e}]")
 
     if max_train_samples is not None and len(X) > max_train_samples:
         idx = np.random.default_rng(0).choice(len(X), size=max_train_samples, replace=False)
@@ -276,28 +278,47 @@ def generate_ml_pairwise_plots(
             )
 
             II, JJ = np.meshgrid(gi, gj, indexing="ij")
+            
+            # Check prediction range for this specific plot
+            z_pred_min, z_pred_max = np.nanmin(Z), np.nanmax(Z)
+            if verbose:
+                print(f"   → {pi} vs {pj}: predictions range [{z_pred_min:.3e}, {z_pred_max:.3e}]")
+                if pidx == 1:  # Show training range once
+                    y_train_min, y_train_max = y.min(), y.max()
+                    print(f"      (Training data range: [{y_train_min:.3e}, {y_train_max:.3e}])")
+            
             fig, ax = plt.subplots(figsize=(7.5, 6.0))
             cs = ax.contourf(II, JJ, Z, levels=40, alpha=0.9, cmap="viridis")
             cbar = fig.colorbar(cs, ax=ax)
             cbar.set_label(target_label)  # Already includes unit
             
             # Format colorbar ticks with scientific notation
+            # Check data range to decide formatting strategy
+            z_min, z_max = np.nanmin(Z), np.nanmax(Z)
+            z_range = abs(z_max - z_min)
+            z_max_abs = max(abs(z_min), abs(z_max))
+            
+            # If data is in a "simple" range [0.1, 100], use plain decimal notation
+            use_plain_decimals = (z_max_abs >= 0.1 and z_max_abs <= 100)
+            
             def fmt_sci(x, pos):
-                """Format tick labels in scientific notation."""
+                """Format tick labels in scientific notation or plain decimals."""
                 if abs(x) < 1e-10:  # Treat as zero
                     return '0'
+                
+                # Use plain decimals for simple ranges
+                if use_plain_decimals:
+                    if abs(x) >= 10:
+                        return f'{x:.0f}'
+                    elif abs(x) >= 1:
+                        return f'{x:.1f}'
+                    else:
+                        return f'{x:.2f}'
+                
+                # Otherwise use scientific notation
                 exp = int(np.floor(np.log10(abs(x))))
                 coeff = x / 10**exp
                 
-                # Use regular notation for simple cases
-                if exp == 0:  # 10^0 = 1
-                    return f'{x:.1f}'
-                elif exp == 1:  # 10^1 = 10
-                    return f'{x:.0f}'
-                elif exp == -1:  # 10^-1 = 0.1
-                    return f'{x:.2f}'
-                
-                # Scientific notation for larger/smaller exponents
                 # Simplify if coefficient is close to 1
                 if abs(coeff - 1) < 0.05:
                     return f'$10^{{{exp}}}$'

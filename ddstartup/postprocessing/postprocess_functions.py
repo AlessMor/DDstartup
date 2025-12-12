@@ -1226,6 +1226,14 @@ def generate_plots_for_file(
             # Filter to successful cases only
             if "_is_failed" in df.columns:
                 df_t = df.loc[mask_finite & ~df["_is_failed"].fillna(False)].copy()
+                n_failed = df["_is_failed"].fillna(False).sum()
+                n_total = len(df)
+                if n_failed > 0:
+                    print(f"   → Target '{target}': {n_total - n_failed}/{n_total} successful rows (filtered {n_failed} failed)")
+                    # Show target value range
+                    if len(df_t) > 0:
+                        target_vals = df_t[target]
+                        print(f"      Range: [{target_vals.min():.3e}, {target_vals.max():.3e}]")
             else:
                 df_t = df.loc[mask_finite].copy()
             

@@ -106,7 +106,7 @@ plots:
   quartprob: true        # Quartile probability plots
   
   quartprob_settings:
-    include_failed: true  # Show FAILED category (solver failures + filtered solutions)
+    include_failed: false  # Show FAILED category (solver failures + filtered solutions)
                           # - true: Plot FAILED probability alongside Q1-Q4
                           # - false: Only show successful solutions in Q1-Q4
     failed_color: '#808080'  # Color for FAILED category (default: grey)

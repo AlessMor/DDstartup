@@ -190,6 +190,7 @@ def train_model(
     num_workers: int = 4,
     pin_memory: bool = True,
     use_augmentation: bool = True,
+    augment_noise_factor: float = 0.2,
     y_is_log: bool = False,
 ) -> Tuple[nn.Module, StandardScaler, StandardScaler, float, float, float, float, float, str, dict, float, bool]:
     """
@@ -220,7 +221,7 @@ def train_model(
     y_te = y_scaler.transform(y_te_raw.reshape(-1, 1)).ravel()
 
     if use_augmentation:
-        X_tr_aug = X_tr + np.random.normal(0, 0.02 * np.std(X_tr, axis=0), X_tr.shape)
+        X_tr_aug = X_tr + np.random.normal(0, augment_noise_factor * np.std(X_tr, axis=0), X_tr.shape)
         y_tr_aug = y_tr.copy()
         X_tr = np.vstack([X_tr, X_tr_aug]).astype(np.float32)
         y_tr = np.concatenate([y_tr, y_tr_aug]).astype(np.float32)
