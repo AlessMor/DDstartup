@@ -49,11 +49,16 @@ additional_variables:
     expr: unrealized_profits / I_target
     unit: "$/kg"
     symbol: "$c_T$"
-  Tdot_tot_eff:
-    expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
-    unit: "1/s"
-    symbol: "$\\dot{T}_{tot}$"
 
+  # Tdot_tot_eff_tseeded:
+  #   expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
+  #   unit: "1/s"
+  #   symbol: "$\\dot{T}_{tot}$"
+
+  Tdot_tot_eff:
+    expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + P_DT/2.8198E-12/(TBE_percent/100) + P_DDp/6.6597E-13 - P_DT/2.8198E-12)
+    unit: "1/s"
+    symbol: "$\\dot{T}_{tot}$" 
 # ============================================================================
 # TARGET VARIABLES
 # ============================================================================

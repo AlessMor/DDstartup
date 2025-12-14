@@ -175,7 +175,7 @@ _ALLOWED_FUNCS = {
     "abs": np.abs, "sqrt": np.sqrt, "log": np.log, "log10": np.log10,
     "exp": np.exp, "clip": np.clip, "isfinite": np.isfinite, "isnan": np.isnan,
     "round": np.round, "minimum": np.minimum, "maximum": np.maximum,
-    "nan_to_num": np.nan_to_num, "pi": np.pi, "e": np.e,
+    "nan_to_num": np.nan_to_num, "where": np.where, "pi": np.pi, "e": np.e,
 }
 
 def normalize_expr(expr: str) -> str:
@@ -607,8 +607,26 @@ def load_h5_to_df(
 
     def _env_from_df(df_) -> dict:
         env = {**_ALLOWED_FUNCS}
+        
+        # If TBE_percent/TBE_eff don't exist (lump case), create them as 1e10
+        # This represents TBE = infinity (100% self-sufficient, no external T needed)
+        if 'TBE_percent' not in df_.columns:
+            df_['TBE_percent'] = 1e10
+        if 'TBE_eff' not in df_.columns:
+            df_['TBE_eff'] = 1e8  # 1e10/100
+        
         for c in df_.columns:
-            env[c] = _col_to_2d(df_[c])
+            col_data = _col_to_2d(df_[c])
+            # For TBE_percent/TBE_eff: Replace NaN and zeros with large value
+            # Physical meaning: TBE = inf means 100% self-sufficient (lump case)
+            # Math: (1/inf - 1) = -1, giving T_inj - T_burnt = 0 - T_burnt = -T_burnt
+            # Use 1e10 instead of inf to avoid NaN propagation
+            if c in ['TBE_eff', 'TBE_percent']:
+                col_data = np.where((np.isnan(col_data)) | (col_data == 0), 1e10, col_data)
+            # Replace NaN with 0 for other TBE-related variables
+            elif c in ['TBE']:
+                col_data = np.nan_to_num(col_data, nan=0.0)
+            env[c] = col_data
         return env
 
     def _reduce_mask(val: np.ndarray) -> np.ndarray:
@@ -691,7 +709,13 @@ def load_h5_to_df(
                     deps = dep_graph.get(cname, set())
                     if all((d in env) for d in deps):
                         expr, code = compiled_additional[cname]
-                        out = eval(code, {"__builtins__": {}}, env)
+                        # Use restricted builtins that allow math but block imports/exec
+                        safe_builtins = {
+                            "__build_class__": __build_class__,
+                            "__name__": __name__,
+                            "__import__": lambda *args, **kwargs: (_ for _ in ()).throw(ImportError("Import not allowed")),
+                        }
+                        out = eval(code, {"__builtins__": safe_builtins}, env)
                         a = np.asarray(out)
                         if a.ndim == 1 or (a.ndim == 2 and a.shape[1] == 1):
                             df_chunk[cname] = a if a.ndim == 1 else a[:, 0]
@@ -758,7 +782,12 @@ def load_h5_to_df(
                 if not any(dep_finite):
                     f["nonfinite"] = True
                     continue
-                val = np.asarray(eval(code, {"__builtins__": {}}, env))
+                safe_builtins = {
+                    "__build_class__": __build_class__,
+                    "__name__": __name__,
+                    "__import__": lambda *args, **kwargs: (_ for _ in ()).throw(ImportError("Import not allowed")),
+                }
+                val = np.asarray(eval(code, {"__builtins__": safe_builtins}, env))
                 num = pd.to_numeric(val.ravel(), errors="coerce")
                 finite = num[np.isfinite(num)]
                 if num.size == 0 or finite.size == 0:
