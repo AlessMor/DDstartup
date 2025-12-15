@@ -74,7 +74,8 @@ def quartile_probability_plot(
     plot_name: str | None = None,
     registry=None,
     failed_counts_summary: dict | None = None,  # Lightweight summary of failed rows
-    COUNT_FAILED: bool = True,             # add grey series P(FAILED | x)
+    include_failed_in_count: bool = True,  # Include failed in denominator for normalization
+    display_failed_in_plot: bool = False,  # Display grey FAILED line/bar
     PLOT_STYLE: str = "line",              # "line" | "bar"
     min_per_bin: int = 1,
     MAX_POINTS: int = 12,                  # target number of x points to display
@@ -267,23 +268,7 @@ def quartile_probability_plot(
             mids = 0.5 * (x_pos[:-1] + x_pos[1:])
             edges = np.concatenate(([-np.inf], mids, [np.inf]))
 
-        idx_all = np.digitize(xa, edges, right=True) - 1
-        idx_all[idx_all < 0] = 0
-        idx_all[idx_all >= x_pos.size] = x_pos.size - 1
-        totals = np.bincount(idx_all, minlength=x_pos.size)
-
-        if COUNT_FAILED and df_failed is not None and param in df_failed.columns:
-            # Get failed values for this parameter from pre-computed summary
-            x_failed = pd.to_numeric(df_failed[param], errors="coerce").values
-            finite_failed = np.isfinite(x_failed)
-            xf = x_failed[finite_failed]
-            idx_fail = np.digitize(xf, edges, right=True) - 1
-            idx_fail[idx_fail < 0] = 0
-            idx_fail[idx_fail >= x_pos.size] = x_pos.size - 1
-            fails = np.bincount(idx_fail, minlength=x_pos.size)
-        else:
-            fails = np.zeros(x_pos.size, dtype=np.int64)
-
+        # Bin successful data by quartile
         finite_succ = np.isfinite(x_succ)
         xs = x_succ[finite_succ]
         qs = qcodes[finite_succ].astype(np.int32, copy=False)
@@ -297,6 +282,21 @@ def quartile_probability_plot(
             if sel.any():
                 np.add.at(counts_q[:, q], idx_s[sel], 1)
 
+        # Bin failed data separately
+        if include_failed_in_count and df_failed is not None and param in df_failed.columns:
+            x_failed = pd.to_numeric(df_failed[param], errors="coerce").values
+            finite_failed = np.isfinite(x_failed)
+            xf = x_failed[finite_failed]
+            idx_fail = np.digitize(xf, edges, right=True) - 1
+            idx_fail[idx_fail < 0] = 0
+            idx_fail[idx_fail >= x_pos.size] = x_pos.size - 1
+            fails = np.bincount(idx_fail, minlength=x_pos.size)
+        else:
+            fails = np.zeros(x_pos.size, dtype=np.int64)
+
+        # Total counts per bin = successful + failed (if counting failed)
+        totals = counts_q.sum(axis=1) + (fails if include_failed_in_count else 0)
+
         keep = totals >= max(1, min_per_bin)
         if not np.any(keep):
             keep = np.ones_like(totals, dtype=bool)
@@ -304,7 +304,7 @@ def quartile_probability_plot(
         x_pos   = x_pos[keep]
         totals  = totals[keep]
         counts_q = counts_q[keep, :]
-        fails   = fails[keep] if COUNT_FAILED else None
+        fails   = fails[keep] if include_failed_in_count else None
 
         # ---------- probabilities (per parameter) ----------
         denom = totals.astype(np.float64)
@@ -312,13 +312,12 @@ def quartile_probability_plot(
         probs_q = np.nan_to_num(counts_q / denom[:, None], nan=0.0)
         prob_failed = (
             np.nan_to_num(fails / denom, nan=0.0)
-            if (COUNT_FAILED and fails is not None)
+            if (include_failed_in_count and fails is not None)
             else None
         )
-        include_failed = COUNT_FAILED and (prob_failed is not None) and np.nanmax(prob_failed) > 0.0
-        if not include_failed:
-            prob_failed = None
-        else:
+        # Only display failed if requested AND there are actual failures to show
+        show_failed = display_failed_in_plot and (prob_failed is not None) and np.nanmax(prob_failed) > 0.0
+        if show_failed:
             any_failed_plotted = True
 
         # Decide plotting positions: direct when few points, normalized otherwise
@@ -345,7 +344,7 @@ def quartile_probability_plot(
                     label=lab,
                 )
                 bottom += probs_q[:, q]
-            if include_failed and prob_failed is not None:
+            if show_failed and prob_failed is not None:
                 ax.bar(
                     xpos,
                     prob_failed,
@@ -371,7 +370,7 @@ def quartile_probability_plot(
                     color=quart_colors[q],
                     label=lab,
                 )
-            if include_failed and prob_failed is not None:
+            if show_failed and prob_failed is not None:
                 ax.plot(
                     x_plot,
                     prob_failed,
@@ -414,8 +413,9 @@ def quartile_probability_plot(
             lbl.set_fontsize(12)
 
         if RESCALE:
+            # Only include prob_failed in rescaling if it's being displayed
             vals = [probs_q]
-            if prob_failed is not None:
+            if show_failed and prob_failed is not None:
                 vals.append(prob_failed)
             vals = np.concatenate([v.ravel() for v in vals if v is not None])
             if vals.size == 0 or not np.isfinite(vals).any():
@@ -466,7 +466,7 @@ def quartile_probability_plot(
             }
             for q, lab in enumerate(qlabels):
                 row[f"prob_{lab}"] = float(probs_q[j, q])
-            if COUNT_FAILED and prob_failed is not None:
+            if include_failed_in_count and prob_failed is not None:
                 row["prob_FAILED"] = float(prob_failed[j])
             csv_rows.append(row)
 

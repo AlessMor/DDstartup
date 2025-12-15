@@ -608,13 +608,6 @@ def load_h5_to_df(
     def _env_from_df(df_) -> dict:
         env = {**_ALLOWED_FUNCS}
         
-        # If TBE_percent/TBE_eff don't exist (lump case), create them as 1e10
-        # This represents TBE = infinity (100% self-sufficient, no external T needed)
-        if 'TBE_percent' not in df_.columns:
-            df_['TBE_percent'] = 1e10
-        if 'TBE_eff' not in df_.columns:
-            df_['TBE_eff'] = 1e8  # 1e10/100
-        
         for c in df_.columns:
             col_data = _col_to_2d(df_[c])
             # For TBE_percent/TBE_eff: Replace NaN and zeros with large value
@@ -627,6 +620,17 @@ def load_h5_to_df(
             elif c in ['TBE']:
                 col_data = np.nan_to_num(col_data, nan=0.0)
             env[c] = col_data
+        
+        # If TBE_percent/TBE_eff don't exist in columns, add them to env as arrays of 1e10
+        # This handles the lump case where TBE doesn't exist
+        if 'TBE_percent' not in env:
+            # Create array with same length as dataframe (not from env which has functions)
+            n_rows = len(df_)
+            env['TBE_percent'] = np.full((n_rows, 1), 1e10, dtype=np.float64)
+        if 'TBE_eff' not in env:
+            n_rows = len(df_)
+            env['TBE_eff'] = np.full((n_rows, 1), 1e8, dtype=np.float64)
+            
         return env
 
     def _reduce_mask(val: np.ndarray) -> np.ndarray:
@@ -697,6 +701,18 @@ def load_h5_to_df(
                 s = df_chunk[col]
                 if pd.api.types.is_float_dtype(s):
                     df_chunk[col] = s.astype(np.float32, copy=False)
+
+        # Fix TBE_percent/TBE_eff/TBE in dataframe BEFORE computing additional variables
+        # Physical meaning: TBE = inf means 100% self-sufficient (lump case)
+        for tbe_col in ['TBE_percent', 'TBE_eff', 'TBE']:
+            if tbe_col in df_chunk.columns:
+                col_data = pd.to_numeric(df_chunk[tbe_col], errors='coerce')
+                if tbe_col in ['TBE_percent', 'TBE_eff']:
+                    # Replace zeros and NaN with large value (represents infinity)
+                    df_chunk[tbe_col] = np.where((np.isnan(col_data)) | (col_data == 0), 1e10, col_data)
+                elif tbe_col == 'TBE':
+                    # For TBE itself, replace NaN with 0 (missing means no breeding)
+                    df_chunk[tbe_col] = np.nan_to_num(col_data, nan=0.0)
 
         # Computed columns (chunk-local)
         if compiled_additional:
@@ -1109,8 +1125,10 @@ def collect_plot_settings(config: Dict[str, Any], args, targets: List[str], plot
         print(f"🔷 Strip plot metrics: {', '.join(ys)}")
     quartprob = plots.get("quartprob_settings", {})
     if "quartprob" in plot_types:
-        include_failed = bool(quartprob.get("include_failed", True))
-        print(f"🔷 Quartile probability: {'SHOW' if include_failed else 'HIDE'} FAILED category")
+        include_failed_in_count = bool(quartprob.get("include_failed_in_count", True))
+        display_failed_in_plot = bool(quartprob.get("display_failed_in_plot", False))
+        print(f"🔷 Quartile probability: {'COUNT' if include_failed_in_count else 'IGNORE'} failed in denominator, "
+              f"{'DISPLAY' if display_failed_in_plot else 'HIDE'} grey line")
     style_cfg = plots.get("style", {}) or {}
     show_titles = bool(style_cfg.get("show_titles", True))
     font_scale = style_cfg.get("font_scale")
@@ -1255,6 +1273,8 @@ def generate_plots_for_file(
             # Filter to successful cases only
             if "_is_failed" in df.columns:
                 df_t = df.loc[mask_finite & ~df["_is_failed"].fillna(False)].copy()
+                # Keep unfiltered data for ML training (includes NaN, Inf, failed cases)
+                df_full = df.loc[mask_finite].copy()
                 n_failed = df["_is_failed"].fillna(False).sum()
                 n_total = len(df)
                 if n_failed > 0:
@@ -1265,6 +1285,7 @@ def generate_plots_for_file(
                         print(f"      Range: [{target_vals.min():.3e}, {target_vals.max():.3e}]")
             else:
                 df_t = df.loc[mask_finite].copy()
+                df_full = df_t.copy()
             
             if df_t.empty:
                 print(f"   ⚠️  No finite data for '{target}'. Skipping.")
@@ -1281,8 +1302,29 @@ def generate_plots_for_file(
                 tunit = ""
 
             common = dict(
-                df=df_t,  # Single dataframe (may have _is_failed=True rows)
+                df=df_t,  # Filtered dataframe for most plots
                 df_filtered=df_t,
+                target=target,
+                inputs=inputs,
+                target_unit=tunit,
+                output_dir=output_dir,
+                file_type=file_type,
+                registry=registry,
+                n_jobs=n_jobs,
+                batch_size=batch_size,
+                pdf_smooth=pdf_smooth,
+                shap_interpolate=shap_interpolate,
+                ml_pairwise_settings=ml_pairwise_settings or {},
+                strip_settings=strip_settings or {},
+                surface3d_settings=surface3d_settings or {},
+                plot_name_prefix=path.stem,
+                show_titles=show_titles,
+            )
+
+            # ML pairwise uses FULL unfiltered data for training
+            common_ml = dict(
+                df=df_full,  # Full dataset including failures, NaN, Inf for unbiased training
+                df_filtered=df_full,
                 target=target,
                 inputs=inputs,
                 target_unit=tunit,
@@ -1304,7 +1346,8 @@ def generate_plots_for_file(
             for key, mod, fn in pipeline:
                 if key in plot_types:
                     if key == "quartprob":
-                        include_failed = (quartprob_settings or {}).get("include_failed", True)
+                        include_failed_in_count = (quartprob_settings or {}).get("include_failed_in_count", True)
+                        display_failed_in_plot = (quartprob_settings or {}).get("display_failed_in_plot", False)
                         # Pass successful df_t + optional failed_counts_summary (lightweight)
                         _call(mod, fn, df=df_t,
                             target=target,
@@ -1314,8 +1357,13 @@ def generate_plots_for_file(
                             file_type=file_type,
                             registry=registry,
                             plot_name_prefix=path.stem,
-                            failed_counts_summary=failed_counts_summary if include_failed else None,
-                            COUNT_FAILED=include_failed, AVG_POINTS=10, PLOT_STYLE="line")
+                            failed_counts_summary=failed_counts_summary if include_failed_in_count else None,
+                            include_failed_in_count=include_failed_in_count,
+                            display_failed_in_plot=display_failed_in_plot,
+                            AVG_POINTS=10, PLOT_STYLE="line")
+                    elif key == "ml_pairwise":
+                        # ML training uses FULL unfiltered dataset
+                        _call(mod, fn, **common_ml)
                     else:
                         _call(mod, fn, **common)
 

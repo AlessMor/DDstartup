@@ -50,13 +50,8 @@ additional_variables:
     unit: "$/kg"
     symbol: "$c_T$"
 
-  # Tdot_tot_eff_tseeded:
-  #   expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + (TBE_percent/100 - 1) * P_DT/2.8198E-12)
-  #   unit: "1/s"
-  #   symbol: "$\\dot{T}_{tot}$"
-
   Tdot_tot_eff:
-    expr: capacity_factor * (TBR_DDn * P_DDn/5.5435E-13 + TBR_DT * P_DT/2.8198E-12 + P_DT/2.8198E-12/(TBE_percent/100) + P_DDp/6.6597E-13 - P_DT/2.8198E-12)
+    expr: capacity_factor * (TBR_DDn * P_DDn/5.239119771E-13 + TBR_DT * P_DT/2.819832048E-12 + P_DT/2.819832048E-12/(TBE_percent/100) + P_DDp/6.456774519E-13 - P_DT/2.819832048E-12)
     unit: "1/s"
     symbol: "$\\dot{T}_{tot}$" 
 # ============================================================================
@@ -111,24 +106,26 @@ plots:
   quartprob: true        # Quartile probability plots
   
   quartprob_settings:
-    include_failed: false  # Show FAILED category (solver failures + filtered solutions)
-                          # - true: Plot FAILED probability alongside Q1-Q4
-                          # - false: Only show successful solutions in Q1-Q4
-    failed_color: '#808080'  # Color for FAILED category (default: grey)
+    include_failed_in_count: true   # Count failed cases in denominator for probability normalization
+                                     # - true: P(Q1|x) + P(Q2|x) + P(Q3|x) + P(Q4|x) + P(FAILED|x) = 1.0
+                                     # - false: Only count successful cases, P(Q1|x) + ... + P(Q4|x) = 1.0
+    display_failed_in_plot: false   # Display grey FAILED line/bar in plot
+                                     # - true: Show FAILED probability (grey line/bar)
+                                     # - false: Hide FAILED from visualization (but still counts if include_failed_in_count=true)
   
   # ==========================================================================
   # 3D SURFACE SETTINGS
   # ==========================================================================
   surface3d: true         # Interactive 3D surface (3 inputs as axes, target as color)
   surface3d_settings:
-    axes: [Tdot_tot_eff, price_of_electricity, tau_p_T]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
+    axes: [Tdot_tot_eff, I_target, V_plasma]  # Three inputs -> x/y/z axes (auto-picks first 3 numeric if missing)
     grid_size: 60          # Points per axis for interpolation grid (6-60). Larger = smoother & heavier.
-    max_interp: 25000      # Sample cap for interpolation (prevents OOM on very large datasets)
+    max_interp: 500000      # Sample cap for interpolation (prevents OOM on very large datasets)
     interpolate_method: linear   # 'linear' (default) or 'nearest' for sparse data
-    surface_count: 4       # Number of isosurfaces through the volume (1-10)
+    surface_count: 1       # Number of isosurfaces through the volume (1-10)
     surface_opacity: 0.4   # 0-1 opacity for the interpolated volume (lower = see through layers)
     colorscale: Viridis    # Any Plotly colorscale name
-    clip_quantile: 0.99    # Clip target to reduce color blow-up from outliers (None to disable)
+    clip_quantile: none    # Clip target to reduce color blow-up from outliers (None to disable)
     max_scatter: 2000      # Sample cap for real points overlay (0 or null = all points)
     point_size: 3          # Marker size for the real points (smaller = less clutter)
     show_scatter: false     # Show scattered data points on top of isosurfaces
@@ -220,7 +217,7 @@ plots:
   # ==========================================================================
   # STRIP PLOT SETTINGS
   # ==========================================================================
-  strip: false            # Strip plots with trends (comparing multiple metrics)
+  strip: true            # Strip plots with trends (comparing multiple metrics)
   
   strip_settings:
     # Strip plots compare multiple metrics with trend lines and uncertainty bands

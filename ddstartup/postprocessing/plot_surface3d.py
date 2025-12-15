@@ -122,11 +122,12 @@ def generate_surface3d_plot(
         grid_vals = griddata(pts, vals, grid_points, method=method)
     except Exception as e:
         if "QH" in str(e) or "Qhull" in str(e) or "coplanar" in str(e).lower():
-            print(f"   ⚠️  Qhull precision error: data may be nearly coplanar. Trying nearest-neighbor interpolation...")
+            # Qhull precision error: data may be nearly coplanar, use nearest-neighbor fallback
             try:
                 grid_vals = griddata(pts, vals, grid_points, method="nearest")
+                # Success with fallback - no need to warn user
             except Exception as e2:
-                print(f"   ⚠️  Interpolation failed: {e2}. Skipping surface3d.")
+                print(f"   ⚠️  Interpolation failed (Qhull + nearest-neighbor): {e2}. Skipping surface3d.")
                 return None
         else:
             print(f"   ⚠️  Interpolation error: {e}. Skipping surface3d.")
@@ -255,3 +256,5 @@ def generate_surface3d_plot(
     outfile = outdir / f"{stem}__{target}_surface3d.html"
     fig.write_html(outfile, include_plotlyjs="cdn", include_mathjax="cdn")
     print(f"   3D surface plot saved: {outfile.name}")
+
+    return outfile
