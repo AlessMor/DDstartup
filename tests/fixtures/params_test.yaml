@@ -1,0 +1,130 @@
+# Parameter configuration for profiling tests
+# Configuration with 10,000 combinations (10×5×5×4×10×1)
+
+parameters:
+  V_plasma_field:
+    type: linear
+    min: 140
+    max: 160
+    points: 10
+    unit: m^3
+    description: Plasma volume
+  
+  T_i_field:
+    type: linear
+    min: 14
+    max: 20
+    points: 5
+    unit: keV
+    description: Ion temperature
+  
+  n_tot_field:
+    type: linear
+    min: 1.5e20
+    max: 2.0e20
+    points: 5
+    unit: 1/m^3
+    description: Total particle density
+  
+  tau_p_T_field:
+    type: linear
+    min: 0.5
+    max: 1.0
+    points: 4
+    unit: s
+    description: Tritium particle confinement time
+  
+  tau_p_He3_field:
+    type: linear
+    min: 0.8
+    max: 1.2
+    points: 1
+    unit: s
+    description: Helium-3 particle confinement time
+  
+  # P_aux_field:
+  #   type: linear
+  #   min: 50
+  #   max: 80
+  #   points: 1
+  #   unit: MW
+  #   description: Auxiliary heating power
+  
+  # P_aux_DT_eq_field:
+  #   type: linear
+  #   min: 50
+  #   max: 80
+  #   points: 1
+  #   unit: MW
+  #   description: Auxiliary power for DT equilibrium phase
+  
+  TBR_DT_field:
+    type: linear
+    min: 1.08
+    max: 1.12
+    points: 10
+    unit: dimensionless
+    description: Tritium breeding ratio for DT reactions
+  
+  TBR_DDn_field:
+    type: linear
+    min: 0.6
+    max: 0.8
+    points: 1
+    unit: dimensionless
+    description: Tritium breeding ratio for DD neutron branch
+  
+  tau_ifc_field:
+    type: linear
+    min: 7200
+    max: 14400
+    points: 1
+    unit: s
+    description: In-fuel cycle time (2-4 hours)
+  
+  tau_ofc_field:
+    type: linear
+    min: 7200
+    max: 14400
+    points: 1
+    unit: s
+    description: Out-of-fuel cycle time (2-4 hours)
+  
+  eta_th_field:
+    type: linear
+    min: 0.35
+    max: 0.38
+    points: 1
+    unit: dimensionless
+    description: Thermal conversion efficiency
+  
+  capacity_factor_field:
+    type: linear
+    min: 0.7
+    max: 0.8
+    points: 1
+    unit: dimensionless
+    description: Plant capacity factor
+  
+  price_of_electricity_field:
+    type: linear
+    min: 6.0e-08
+    max: 7.5e-08
+    points: 1
+    unit: 1/J
+    description: Price of electricity (~0.22-0.27 $/kWh)
+  
+  I_target_field:
+    type: linear
+    min: 1.0
+    max: 1.5
+    points: 1
+    unit: kg
+    description: Target tritium inventory
+  
+  max_simulation_time:
+    value: 31536000
+    unit: s
+    description: Total simulation time (1 year in seconds)
+  
+# Total combinations: 10 × 5 × 5 × 4 × 10 × 1 = 10,000
