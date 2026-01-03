@@ -19,8 +19,8 @@
 #       and outputs are saved back to the same folder automatically.
 
 files: 
-- 'test_parametric_T_seeded'  # Folder name (relative to outputs/)
-- 'test_parametric_lump'  # Default: process files in the latest folder
+- 'paper_parametric_T_seeded'  # Folder name (relative to outputs/)
+- 'paper_parametric_lump'  # Default: process files in the latest folder
 
 # Alternative examples:
 # files: "20251008_081422_parametric_T_seeded"  # Specific folder
