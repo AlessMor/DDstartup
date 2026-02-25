@@ -1,9 +1,11 @@
 {
+    "python.defaultInterpreterPath": "/home/alessmor/anaconda3/envs/ddstartupenv/bin/python",
     "python-envs.defaultEnvManager": "ms-python.python:system",
     "python-envs.defaultPackageManager": "ms-python.python:pip",
     "python-envs.pythonProjects": [],
     "python.testing.pytestArgs": [
-        "tests"
+        "tests",
+        "--no-cov"
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true

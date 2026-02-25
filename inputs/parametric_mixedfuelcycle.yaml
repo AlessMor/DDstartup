@@ -1,0 +1,33 @@
+# Configuration for ddstartup multispecies parametric analysis
+
+analysis_type: multispecies
+method: parametric
+
+# Optional legacy-style presets:
+# - none (default): use params file as-is
+# - T-seeded_old: old DT startup style (D auto, T direct, He3/He4 disabled)
+# - lump_old: old lump-style stop (T storage target, no T injection, He3/He4 disabled)
+# - T-seeded: like T-seeded_old but He3/He4 channels active (no He injection)
+# - lump: like lump_old but He3/He4 channels active (no He injection)
+dd_startup_method: none
+
+vector_length: 200
+max_simulation_time: 315360000  # 10 years [s]
+targets:
+  - target_specie: T
+    target_fraction_in_plasma: 0.5
+
+enforce_constant_total_density: true
+allow_negative_auto_injection: false
+auto_injection_use_storage_limits: false
+# Optional: if true, route THe3 channel 3 (T+He3->5He+p) to He4 via
+# instantaneous 5He->He4+n decay in plasma source terms.
+route_the3_ch3_to_he4: false
+
+n_jobs: null
+chunk_size: null
+batch_size: null
+
+output_dir: outputs
+verbose: true
+filter: null

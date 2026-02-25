@@ -36,8 +36,8 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "ddstartup=ddstartup.main:main",
-            "ddstartup-postprocess=ddstartup.postprocessing.cli:main",
+            "ddstartup=src.main:main",
+            "ddstartup-postprocess=src.postprocessing.cli:main",
         ],
     },
     classifiers=[

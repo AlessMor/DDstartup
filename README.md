@@ -79,16 +79,47 @@ The code will then build the iterator element by creating all possible combinati
 
 ```bash
 # Run parametric analysis
-python -m ddstartup params_test parametric_tseeded
+python -m src params_test parametric_tseeded
 
 # Run with parameter filtering
-python -m ddstartup params_test parametric_tseeded_filtered
+python -m src params_test parametric_tseeded_filtered
 
 # Verify configuration without running
-python -m ddstartup params_test parametric_tseeded --dry-run
+python -m src params_test parametric_tseeded --dry-run
 
 # Run Sobol sensitivity analysis
-python -m ddstartup params_sobol sobol_tseeded
+python -m src params_sobol sobol_tseeded
+```
+
+### Multispecies Usage (time-dependent)
+
+```bash
+# Run multispecies parametric analysis
+python -m src params_mixedfuelcycle parametric_mixedfuelcycle
+
+# Dry-run configuration validation
+python -m src params_mixedfuelcycle parametric_mixedfuelcycle --dry-run
+```
+
+Multispecies parameter files support a compact layout with global fields plus nested species blocks:
+
+```yaml
+parameters:
+  V_plasma_field: {type: scalar, value: 2000, unit: m^3}
+  T_i_field: {type: vector, values: [14, 20], unit: keV}
+  n_tot_field: {type: scalar, value: 7.0e19, unit: 1/m^3}
+  initial_fractions:
+    D: {type: scalar, value: 0.5}
+    T: {type: scalar, value: 0.0}
+    He3: {type: scalar, value: 0.5}
+    He4: {type: scalar, value: 0.0}
+  species_params:
+    D:
+      tau_p: {type: scalar, value: 5.0, unit: s}
+      injection_mode: {type: scalar, value: auto}
+    T:
+      tau_p: {type: scalar, value: 5.0, unit: s}
+      injection_mode: {type: scalar, value: direct}
 ```
 
 
@@ -99,18 +130,18 @@ python -m ddstartup params_sobol sobol_tseeded
 **Quick start:**
 ```bash
 # Parametric T-seeded method
-python -m ddstartup params_test parametric_tseeded
+python -m src params_test parametric_tseeded
 
 # Parametric lump method  
-python -m ddstartup params_test parametric_lump
+python -m src params_test parametric_lump
 
 # Sobol sensitivity analysis
-python -m ddstartup params_sobol sobol_tseeded
+python -m src params_sobol sobol_tseeded
 ```
 
 **Command structure:**
 ```bash
-python -m ddstartup <parameter_file> <config_file> [--verbose] [--dry-run]
+python -m src <parameter_file> <config_file> [--verbose] [--dry-run]
 ```
 
 **Files:**
@@ -146,7 +177,7 @@ with h5py.File('outputs/latest/ddstartup_*.h5', 'r') as f:
     print(f"Success rate: {np.sum(success)/len(success)*100:.1f}%")
 ```
 
-**Visualization tools** (in `ddstartup/postprocessing/`):
+**Visualization tools** (in `src/postprocessing/`):
 - `plot_kde_functions.py`: Kernel density estimation
 - `plot_parcoords_functions.py`: Parallel coordinates
 - `plot_shap_functions.py`: SHAP analysis
@@ -157,9 +188,9 @@ with h5py.File('outputs/latest/ddstartup_*.h5', 'r') as f:
 ### 4. Tests
 
 ```bash
-pytest                                    # Run all tests
-pytest --cov=ddstartup --cov-report=html  # With coverage
-pytest tests/test_*.py -v                 # Specific tests
+conda run -n ddstartupenv python -m pytest                           # Run all tests in ddstartupenv
+conda run -n ddstartupenv python -m pytest --cov=src --cov-report=html
+conda run -n ddstartupenv python -m pytest tests/test_*.py -v
 ```
 
 ---
@@ -168,20 +199,20 @@ pytest tests/test_*.py -v                 # Specific tests
 
 **Parameter sweep:**
 ```bash
-python -m ddstartup params_test parametric_tseeded
+python -m src params_test parametric_tseeded
 # Analyze with Python/Jupyter using HDF5 output
 ```
 
 **Sensitivity analysis:**
 ```bash
-python -m ddstartup params_sobol sobol_tseeded
+python -m src params_sobol sobol_tseeded
 # Calculate Sobol indices from output
 ```
 
 **Compare methods:**
 ```bash
-python -m ddstartup params_test parametric_lump
-python -m ddstartup params_test parametric_tseeded
+python -m src params_test parametric_lump
+python -m src params_test parametric_tseeded
 # Compare outputs/*/ddstartup_*.h5 files
 ```
 
@@ -191,9 +222,9 @@ python -m ddstartup params_test parametric_tseeded
 
 ```
 dd_startup/
-├── ddstartup/                    # Main package
+├── src/                          # Main package
 │   ├── __init__.py
-│   ├── __main__.py              # Entry point (python -m ddstartup)
+│   ├── __main__.py              # Entry point (python -m src)
 │   ├── main.py                  # CLI argument parsing and workflow
 │   ├── physics/                 # Physics models
 │   │   ├── lump_functions.py       # Lump method (steady-state)
@@ -201,7 +232,7 @@ dd_startup/
 │   │   ├── reactivity_functions.py # Fusion reactivity calculations
 │   │   ├── radiation.py            # Radiation losses
 │   │   ├── power_balance.py        # Power balance calculations
-│   │   └── sobol_functions.py      # Sobol wrappers
+│   │   └── ...                    # Additional physics helpers
 │   ├── methods/                 # Analysis methods
 │   │   ├── parametric_computation.py   # Parametric sweeps
 │   │   ├── sobol_computation.py        # Sobol sensitivity
@@ -227,7 +258,6 @@ dd_startup/
 │       ├── physics_cache.py            # Physics result caching
 │       ├── filters.py                  # Parameter filtering
 │       ├── system_profiler.py          # Hardware optimization
-│       ├── profiling.py                # Performance profiling
 │       ├── tools.py                    # CLI tools
 │       └── units_and_constants.py      # Physical constants
 ├── inputs/                      # Configuration files
