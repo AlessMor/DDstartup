@@ -25,59 +25,7 @@ import time
 from pathlib import Path
 from SALib.sample import saltelli
 from SALib.analyze import sobol
-
-
-def _evaluate_lump_sample(params_dict: Dict[str, float]) -> Dict[str, Any]:
-    """Evaluate lump model at a single sample point."""
-    from src.methods.parametric_computation import _compute_lump
-    
-    # Use the exact parameter order expected by _compute_lump
-    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq',
-                   'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'capacity_factor', 'price_of_electricity']
-    
-    param_vector = [params_dict[name] for name in param_names]
-    temp_arrays = [np.array([val]) for val in param_vector]
-    param_shapes = tuple([1] * len(param_names))
-    
-    result = _compute_lump(
-        linear_index=0,
-        input_arrays_flat=temp_arrays,
-        param_shapes_array=param_shapes,
-        reactivity_lookup=None
-    )
-    return result
-
-
-def _evaluate_tseeded_sample(params_dict: Dict[str, float], config: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Evaluate T-seeded model at a single sample point."""
-    from src.methods.parametric_computation import _compute_tseeded
-    
-    # Extract config parameters
-    if config is None:
-        config = {}
-    max_simulation_time = config.get('max_simulation_time', 31536000)  # Default 1 year
-    vector_length = config.get('vector_length', 200)
-    
-    # Use the exact parameter order expected by _compute_tseeded
-    # T-seeded has: V_plasma, T_i, n_tot, tau_p_T, P_aux, P_aux_DT_eq, 
-    #               TBR_DT, TBR_DDn, tau_ifc, tau_ofc, eta_th, capacity_factor, price_of_electricity
-    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'P_aux', 'P_aux_DT_eq',
-                   'TBR_DT', 'TBR_DDn', 'tau_ifc', 'tau_ofc', 
-                   'eta_th', 'capacity_factor', 'price_of_electricity']
-    
-    param_vector = [params_dict[name] for name in param_names]
-    temp_arrays = [np.array([val]) for val in param_vector]
-    param_shapes = tuple([1] * len(param_names))
-    
-    result = _compute_tseeded(
-        linear_index=0,
-        input_arrays_flat=temp_arrays,
-        param_shapes_array=param_shapes,
-        max_simulation_time=max_simulation_time,
-        vector_length=vector_length,
-        reactivity_lookup=None
-    )
-    return result
+from src.utils.reactivity_lookup import ReactivityLookupTable
 
 
 def generate_sobol_samples(
@@ -123,21 +71,38 @@ def compute_sample_worker(args):
     Worker function for parallel evaluation of Sobol samples.
     
     Args:
-        args: Tuple of (sample_id, params_dict, analysis_type, config)
+        args: Tuple of (sample_id, params_dict, analysis_type, config, reactivity_lookup)
         
     Returns:
         Dictionary with sample results
     """
-    sample_id, params_dict, analysis_type, config = args
-    
-    # Select appropriate evaluation function
-    if analysis_type == 'lump':
-        evaluate_func = lambda p: _evaluate_lump_sample(p)
-    else:  # T_seeded
-        evaluate_func = lambda p: _evaluate_tseeded_sample(p, config)
-    
+    sample_id, params_dict, analysis_type, config, reactivity_lookup = args
+
     try:
-        result = evaluate_func(params_dict)
+        from src.methods.parametric_computation import _compute_combination
+
+        from src.registry.parameter_registry import ALLOWED_ANALYSIS_TYPES
+        if analysis_type not in ALLOWED_ANALYSIS_TYPES:
+            raise ValueError(f"Unsupported analysis_type for point evaluation: {analysis_type}")
+
+        input_arrays_by_name = {
+            name: np.array([float(value)], dtype=float)
+            for name, value in params_dict.items()
+        }
+        param_names = list(input_arrays_by_name.keys())
+        input_arrays_flat = [input_arrays_by_name[name] for name in param_names]
+        param_shapes_array = np.ones(len(param_names), dtype=np.int64)
+
+        result = _compute_combination(
+            linear_index=0,
+            input_arrays_flat=input_arrays_flat,
+            param_names=param_names,
+            param_shapes_array=param_shapes_array,
+            output_vector_length=int(config["vector_length"]),
+            targets=config.get("targets"),
+            reactivity_lookup=reactivity_lookup,
+            analysis_type=analysis_type,
+        )
         
         # Check if computation was successful
         if not result.get('sol_success', False):
@@ -192,7 +157,6 @@ def run_sobol_analysis(
     input_data: Dict[str, np.ndarray],
     output_file: str,
     config: Dict[str, Any],
-    compute_function: Any = None,  # Not used, kept for API compatibility
     verbose: bool = True
 ) -> Dict[str, Any]:
     """
@@ -211,14 +175,13 @@ def run_sobol_analysis(
         input_data: Dictionary of parameter arrays (min/max ranges extracted)
         output_file: Path to output HDF5 file
         config: Configuration dictionary with analysis settings
-        compute_function: Not used (kept for API compatibility)
         verbose: Whether to print progress information
         
     Returns:
         Dictionary with Sobol indices and statistics
     """
     # Extract configuration
-    analysis_type = config.get('analysis_type', 'lump')
+    analysis_type = config.get('analysis_type', 'multispecies')
     n_samples = config.get('n_samples', 1000)
     seed = config.get('seed', 42)
     n_jobs = config.get('n_jobs', 11)
@@ -259,19 +222,29 @@ def run_sobol_analysis(
     
     samples, problem = generate_sobol_samples(param_ranges, n_samples, seed=seed)
     
+    if "T_i" not in param_names:
+        raise ValueError("Sobol analysis requires parameter 'T_i' to build reactivity lookup table")
+    T_i_idx = param_names.index("T_i")
+    unique_T_i = np.unique(np.asarray(samples[:, T_i_idx], dtype=float))
+    if verbose:
+        print(f"Building reactivity lookup table for {len(unique_T_i)} unique T_i values...")
+    reactivity_lookup = ReactivityLookupTable(unique_T_i).to_dict()
+    if verbose:
+        print("Reactivity lookup table ready.")
+
     # Collect all samples to evaluate
     all_samples = []
     
     # Create a config dict with necessary parameters for T-seeded
     eval_config = {
-        'max_simulation_time': config.get('max_simulation_time', 31536000),
-        'vector_length': config.get('vector_length', 200)
+        'max_simulation_time': config['max_simulation_time'],
+        'vector_length': config['vector_length']
     }
     
     # Create parameter dictionaries for each sample
     for sample_id, sample_row in enumerate(samples):
         params_dict = {name: float(val) for name, val in zip(param_names, sample_row)}
-        all_samples.append((sample_id, params_dict, analysis_type, eval_config))
+        all_samples.append((sample_id, params_dict, analysis_type, eval_config, reactivity_lookup))
     
     # Compute all samples in parallel
     if verbose:

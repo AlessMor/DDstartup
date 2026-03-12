@@ -6,6 +6,10 @@ setup(
     description="DD Startup: Fusion reactor tritium breeding and startup time analysis",
     author="Alessandro Morandi, Samuele Meschini, Gabriele Iob",
     packages=find_packages(),
+    include_package_data=True,
+    package_data={
+        "src.registry": ["*.yaml"],
+    },
     python_requires=">=3.8",
     install_requires=[
         "numpy>=1.20.0",

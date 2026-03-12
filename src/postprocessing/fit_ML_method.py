@@ -7,13 +7,11 @@ Key entry points:
 - train_model: train an MLP with log-target handling and diagnostics.
 - plot_overfitting_diagnostics: save diagnostic plots if desired.
 - predict_numpy / pairwise_pdp_grid / density_2d: helpers for PDP generation.
-- train_from_df: convenience wrapper to clean, train, and optionally save artifacts.
 """
 
 from __future__ import annotations
 
 import math
-import pickle
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -588,57 +586,6 @@ def plot_overfitting_diagnostics(diagnostics: dict, target_name: str = "target",
     plt.close(fig)
 
 
-# --------------------------
-# Convenience wrapper
-# --------------------------
-def train_from_df(
-    df: pd.DataFrame,
-    target: str,
-    feature_cols: Iterable[str] | None = None,
-    *,
-    output_dir: str | Path | None = None,
-    save_prefix: str | None = None,
-    verbose: bool = True,
-    plot_diagnostics: bool = False,
-    **train_kwargs,
-):
-    """
-    Clean the DataFrame, train the MLP, optionally save artifacts and diagnostics.
-    """
-    X, y, features, y_is_log = clean_dataframe(df, target, feature_cols=feature_cols, verbose=verbose)
-    model, x_scaler, y_scaler, r2, mae, rmse, nrmse, mape, device, diagnostics, y_shift, y_is_log = train_model(
-        X,
-        y,
-        y_is_log=y_is_log,
-        **train_kwargs,
-    )
-
-    out_dir = Path(output_dir) if output_dir is not None else None
-    prefix = save_prefix or f"mlp_{target}"
-
-    if out_dir is not None:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        model_path = out_dir / f"{prefix}.pt"
-        scalers_path = out_dir / f"{prefix}_scalers.pkl"
-        diagnostics_path = out_dir / f"{prefix}_diagnostics.pkl"
-        torch.save(model.state_dict(), model_path)
-        with open(scalers_path, "wb") as f:
-            pickle.dump({"x": x_scaler, "y": y_scaler, "y_shift": y_shift, "y_is_log": y_is_log}, f)
-        with open(diagnostics_path, "wb") as f:
-            pickle.dump(diagnostics, f)
-        if verbose:
-            print(f"Saved artifacts to {out_dir}:")
-            print(f"  - {model_path.name}")
-            print(f"  - {scalers_path.name}")
-            print(f"  - {diagnostics_path.name}")
-
-    if plot_diagnostics and out_dir is not None:
-        diag_path = out_dir / f"{prefix}_overfitting.png"
-        plot_overfitting_diagnostics(diagnostics, target_name=target, save_path=diag_path)
-
-    return model, x_scaler, y_scaler, diagnostics, device, features, X, y_shift, y_is_log
-
-
 if __name__ == "__main__":
     # Minimal example on synthetic data
     rng = np.random.default_rng(0)
@@ -646,4 +593,5 @@ if __name__ == "__main__":
     y_demo = np.exp(X_demo[:, 0] - 0.5 * X_demo[:, 1]) + rng.normal(scale=0.1, size=5000)
     df_demo = pd.DataFrame(X_demo, columns=[f"x{i}" for i in range(5)])
     df_demo["target"] = y_demo
-    train_from_df(df_demo, target="target", output_dir="mlp_demo_outputs", save_prefix="demo", verbose=True, plot_diagnostics=True)
+    X_train, y_train, _, y_is_log = clean_dataframe(df_demo, target="target", verbose=True)
+    train_model(X_train, y_train, y_is_log=y_is_log)

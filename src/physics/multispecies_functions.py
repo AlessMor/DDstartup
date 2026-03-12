@@ -1,194 +1,128 @@
-"""Multispecies time-dependent fuel-cycle solver (T-seeded style)."""
+"""Multispecies time-dependent fuel cycle solver (T-seeded style)."""
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import numpy as np
-from scipy.integrate import solve_ivp
 from numba import njit
+from scipy.integrate import solve_ivp
 
-from src.physics.reactivity_functions import (
-    sigmav_DD_BoschHale,
-    sigmav_DHe3_BoschHale,
-    sigmav_DT_BoschHale,
-    sigmav_He3He3_placeholder,
-    sigmav_THe3_placeholder,
-    sigmav_TT_placeholder,
+from src.physics.multispecies_injection import _compute_injection_rates_numba
+from src.registry.parameter_registry import (
+    INJECTION_MODE_AUTO,
+    INJECTION_MODE_CUSTOM,
+    INJECTION_MODE_TO_ID,
+    SPECIES,
+)
+from src.utils.reactivity_lookup import compute_reactivities_from_functions
+
+# Keep the species count local for fixed-size numba loops.
+N_SPECIES = len(SPECIES)
+TRITIUM_INDEX = SPECIES.index("T")
+HELIUM3_INDEX = SPECIES.index("He3")
+REACTIVITY_CHANNELS = (
+    "sigmav_DD_p",
+    "sigmav_DD_n",
+    "sigmav_DT",
+    "sigmav_DHe3",
+    "sigmav_TT",
+    "sigmav_He3He3",
+    "sigmav_THe3_ch1",
+    "sigmav_THe3_ch2",
+    "sigmav_THe3_ch3",
 )
 
-SPECIES: Tuple[str, ...] = ("D", "T", "He3", "He4")
-N_SPECIES = len(SPECIES)
-_MODE_OFF = 0
-_MODE_DIRECT = 1
-_MODE_AUTO = 2
+
+def _reactivity_tuple_from_mapping(reactivities: Mapping[str, float]) -> Tuple[float, ...]:
+    """Convert a reactivity mapping into the fixed channel tuple used by the RHS."""
+    return tuple(float(reactivities[channel]) for channel in REACTIVITY_CHANNELS)
 
 
-def _build_index(
-    species_enabled: Mapping[str, bool],
-    ofc_enabled: Mapping[str, bool],
-) -> Dict[Tuple[str, str], int]:
-    idx: Dict[Tuple[str, str], int] = {}
-    cursor = 0
-    for sp in SPECIES:
-        if not species_enabled.get(sp, False):
-            continue
-        if ofc_enabled.get(sp, False):
-            idx[(sp, "ofc")] = cursor
-            cursor += 1
-        for comp in ("ifc", "st", "n"):
-            idx[(sp, comp)] = cursor
-            cursor += 1
-    return idx
-
-
-@njit(cache=True, fastmath=True)
-def _safe_outflow(N: float, tau: float) -> float:
-    if (not np.isfinite(tau)) or (tau <= 0.0):
-        return 0.0
-    return N / tau
-
-
-@njit(cache=True, fastmath=True)
-def _allocate_auto_injection_numba(
-    required_total: float,
-    auto_mask: np.ndarray,
-    weights: np.ndarray,
-    caps: np.ndarray,
-) -> tuple[np.ndarray, float]:
-    alloc = np.zeros(N_SPECIES, dtype=np.float64)
-
-    if required_total <= 0.0:
-        residual = required_total
-        if residual < 0.0:
-            residual = 0.0
-        return alloc, residual
-
-    remaining = required_total
-    active = np.zeros(N_SPECIES, dtype=np.bool_)
-    for i in range(N_SPECIES):
-        if auto_mask[i] and (caps[i] > 0.0):
-            active[i] = True
-
-    for _ in range(N_SPECIES + 2):
-        active_count = 0
-        for i in range(N_SPECIES):
-            if active[i]:
-                active_count += 1
-
-        if (remaining <= 0.0) or (active_count == 0):
-            break
-
-        wsum = 0.0
-        for i in range(N_SPECIES):
-            if active[i]:
-                wi = weights[i]
-                if wi < 0.0:
-                    wi = 0.0
-                wsum += wi
-
-        before = remaining
-
-        if wsum <= 0.0:
-            for i in range(N_SPECIES):
-                if not active[i]:
-                    continue
-                share = remaining / active_count
-                room = caps[i] - alloc[i]
-                if room < 0.0:
-                    room = 0.0
-                add = share
-                if add > room:
-                    add = room
-                alloc[i] += add
-        else:
-            for i in range(N_SPECIES):
-                if not active[i]:
-                    continue
-                wi = weights[i]
-                if wi < 0.0:
-                    wi = 0.0
-                share = remaining * wi / wsum
-                room = caps[i] - alloc[i]
-                if room < 0.0:
-                    room = 0.0
-                add = share
-                if add > room:
-                    add = room
-                alloc[i] += add
-
-        alloc_sum = 0.0
-        for i in range(N_SPECIES):
-            alloc_sum += alloc[i]
-        remaining = required_total - alloc_sum
-
-        for i in range(N_SPECIES):
-            if active[i] and ((caps[i] - alloc[i]) <= 1e-16):
-                active[i] = False
-
-        if abs(before - remaining) < 1e-16:
-            break
-
-    residual = required_total
-    for i in range(N_SPECIES):
-        residual -= alloc[i]
-    if residual < 0.0:
-        residual = 0.0
-    return alloc, residual
-
-
-@njit(cache=True, fastmath=True)
+@njit(cache=True)
 def _compute_rhs_and_control_numba(
-    y: np.ndarray,
-    idx_ofc: np.ndarray,
-    idx_ifc: np.ndarray,
-    idx_st: np.ndarray,
-    idx_n: np.ndarray,
-    species_enabled_arr: np.ndarray,
-    ofc_enabled_arr: np.ndarray,
-    mode_codes: np.ndarray,
-    tau_p_arr: np.ndarray,
-    tau_ifc_arr: np.ndarray,
-    tau_ofc_arr: np.ndarray,
-    lambda_arr: np.ndarray,
-    N_st_min_arr: np.ndarray,
-    Ndot_max_arr: np.ndarray,
-    auto_weights_arr: np.ndarray,
+    state_vec: np.ndarray,
+    ofc_idx: np.ndarray,
+    ifc_idx: np.ndarray,
+    stor_idx: np.ndarray,
+    plasma_idx: np.ndarray,
+    tau_p_vec: np.ndarray,
+    tau_ifc_vec: np.ndarray,
+    tau_ofc_vec: np.ndarray,
+    decay_vec: np.ndarray,
+    stor_min_vec: np.ndarray,
+    max_inj_vec: np.ndarray,
+    use_storage_vec: np.ndarray,
+    mode_vec: np.ndarray,
+    custom_req_vec: np.ndarray,
+    mix_weight_vec: np.ndarray,
+    use_mix_auto: bool,
     V_plasma: float,
-    TBR_DT: float,
-    TBR_DDn: float,
-    sigmav_DD_p: float,
-    sigmav_DD_n: float,
+    n_tot: float,
+    total_density_feedback_tau: float,
+    TBR_DT: float, TBR_DDn: float,
+    sigmav_DD_p: float, sigmav_DD_n: float,
     sigmav_DT: float,
     sigmav_DHe3: float,
     sigmav_TT: float,
     sigmav_He3He3: float,
-    sigmav_THe3_ch1: float,
-    sigmav_THe3_ch2: float,
-    sigmav_THe3_ch3: float,
-    route_THe3_ch3_to_He4: bool,
-    enforce_constant_total_density: bool,
-    allow_negative_auto_injection: bool,
+    sigmav_THe3_ch1: float, sigmav_THe3_ch2: float, sigmav_THe3_ch3: float,
 ) -> tuple[np.ndarray, np.ndarray, float, float, float]:
-    dydt = np.zeros_like(y)
-    n_clamped = np.zeros(N_SPECIES, dtype=np.float64)
-    plasma_source = np.zeros(N_SPECIES, dtype=np.float64)
-    q = np.zeros(N_SPECIES, dtype=np.float64)
-    Ndot = np.zeros(N_SPECIES, dtype=np.float64)
+    """Compute multispecies derivatives and controlled injections.
 
-    # Plasma densities and reaction rates.
+    Args:
+        state_vec: Flat state vector with OFC, IFC, storage, and plasma entries.
+        ofc_idx: Per-species OFC indices into ``state_vec`` or ``-1`` if absent.
+        ifc_idx: Per-species IFC indices into ``state_vec`` or ``-1`` if absent.
+        stor_idx: Per-species storage indices into ``state_vec`` or ``-1`` if absent.
+        plasma_idx: Per-species plasma density indices into ``state_vec`` or ``-1``.
+        tau_p_vec: Per-species plasma confinement times.
+        tau_ifc_vec: Per-species IFC residence times.
+        tau_ofc_vec: Per-species OFC residence times.
+        decay_vec: Per-species radioactive decay constants.
+        stor_min_vec: Per-species storage thresholds for storage-fed injection.
+        max_inj_vec: Per-species hard upper bounds on injection rate.
+        use_storage_vec: Flags selecting whether injection drains storage.
+        mode_vec: Per-species integer injection mode ids.
+        custom_req_vec: Per-species custom injection requests for this RHS call.
+        mix_weight_vec: Per-species AUTO mix weights used for total-density closure.
+        use_mix_auto: Whether any AUTO species is available for weighted closure.
+        V_plasma: Plasma volume used to convert density change into atom flow.
+        n_tot: Total-density setpoint used by AUTO density-closure control.
+        total_density_feedback_tau: Relaxation time used to restore total
+            density back to ``n_tot`` when AUTO channels are available.
+        TBR_DT: DT tritium breeding ratio for the bred-tritium source term.
+        TBR_DDn: DDn tritium breeding ratio for the bred-tritium source term.
+        sigmav_DD_p: DDp reactivity.
+        sigmav_DD_n: DDn reactivity.
+        sigmav_DT: DT reactivity.
+        sigmav_DHe3: DHe3 reactivity.
+        sigmav_TT: TT reactivity.
+        sigmav_He3He3: He3He3 reactivity.
+        sigmav_THe3_ch1: THe3 channel-1 reactivity.
+        sigmav_THe3_ch2: THe3 channel-2 reactivity.
+        sigmav_THe3_ch3: THe3 channel-3 reactivity.
+    """
+    plasma_n = np.zeros(N_SPECIES, dtype=np.float64)
+    reaction_term = np.zeros(N_SPECIES, dtype=np.float64)
+    plasma_net = np.zeros(N_SPECIES, dtype=np.float64)
+    inj_cap = np.zeros(N_SPECIES, dtype=np.float64)
+    ifc_stock = np.zeros(N_SPECIES, dtype=np.float64)
+    stor_stock = np.zeros(N_SPECIES, dtype=np.float64)
+    ifc_release = np.zeros(N_SPECIES, dtype=np.float64)
+
+    # Read the current non-negative plasma densities from the flat state vector.
     for i in range(N_SPECIES):
-        if (not species_enabled_arr[i]) or (idx_n[i] < 0):
+        if plasma_idx[i] < 0:
             continue
-        n_i = y[idx_n[i]]
-        if n_i < 0.0:
-            n_i = 0.0
-        n_clamped[i] = n_i
+        n_i = state_vec[plasma_idx[i]]
+        plasma_n[i] = n_i if n_i > 0.0 else 0.0
 
-    n_D = n_clamped[0]
-    n_T = n_clamped[1]
-    n_He3 = n_clamped[2]
-
+    # Precompute densities and fusion reaction rates for the plasma source terms.
+    n_D = plasma_n[0]
+    n_T = plasma_n[1]
+    n_He3 = plasma_n[2]
     R_DD_p = 0.5 * n_D * n_D * sigmav_DD_p
     R_DD_n = 0.5 * n_D * n_D * sigmav_DD_n
     R_DT = n_D * n_T * sigmav_DT
@@ -200,151 +134,143 @@ def _compute_rhs_and_control_numba(
     R_THe3_ch3 = n_T * n_He3 * sigmav_THe3_ch3
     R_THe3_total = R_THe3_ch1 + R_THe3_ch2 + R_THe3_ch3
 
-    if species_enabled_arr[1]:
-        # T source/sink:
-        # + from DDp, - from DT, -2 from TT, - from all THe3 branches.
-        plasma_source[1] = R_DD_p - R_DT - 2.0 * R_TT - R_THe3_total
-    if species_enabled_arr[0]:
-        # D source/sink:
-        # - from DDp/DDn/DT/DHe3, + from THe3 channel 2 (T+He3 -> He4 + D).
-        plasma_source[0] = -R_DD_p - R_DD_n - R_DT - R_DHe3 + R_THe3_ch2
-    if species_enabled_arr[2]:
-        # He3 source/sink:
-        # + from DDn, - from DHe3, -2 from He3He3, - from all THe3 branches.
-        plasma_source[2] = R_DD_n - R_DHe3 - 2.0 * R_He3He3 - R_THe3_total
-    if species_enabled_arr[3]:
-        he4_from_the3_ch3 = 0.0
-        if route_THe3_ch3_to_He4:
-            he4_from_the3_ch3 = R_THe3_ch3
-        # He4 source:
-        # + from DT and DHe3; + from TT and He3He3;
-        # + from THe3 branches 1 and 2; optionally + from branch 3 if 5He is
-        # treated as instantaneously decaying to He4+n.
-        plasma_source[3] = (
-            R_DT + R_DHe3 + R_TT + R_He3He3 + R_THe3_ch1 + R_THe3_ch2 + he4_from_the3_ch3
+    # Assemble the uncontrolled plasma source/sink term for each species.
+    if plasma_idx[0] >= 0:
+        reaction_term[0] = -R_DD_p - R_DD_n - R_DT - R_DHe3 + R_THe3_ch2
+    if plasma_idx[1] >= 0:
+        reaction_term[1] = R_DD_p - R_DT - 2.0 * R_TT - R_THe3_total
+    if plasma_idx[2] >= 0:
+        reaction_term[2] = R_DD_n - R_DHe3 - 2.0 * R_He3He3 - R_THe3_total
+    if plasma_idx[3] >= 0:
+        reaction_term[3] = (
+            R_DT + R_DHe3 + R_TT + R_He3He3 + R_THe3_ch1 + R_THe3_ch2 + R_THe3_ch3
         )
 
-    # Injection control.
-    fixed_sum = 0.0
-    auto_mask = np.zeros(N_SPECIES, dtype=np.bool_)
-    auto_caps = np.zeros(N_SPECIES, dtype=np.float64)
-
+    # Build the controller inputs from the current state and species parameters.
     for i in range(N_SPECIES):
-        if not species_enabled_arr[i]:
+        if plasma_idx[i] < 0:
             continue
 
-        q[i] = plasma_source[i] - n_clamped[i] / tau_p_arr[i]
+        plasma_net[i] = reaction_term[i] - plasma_n[i] / tau_p_vec[i]
 
-        mode = mode_codes[i]
         N_ifc = 0.0
-        N_st = 0.0
-        if idx_ifc[i] >= 0:
-            N_ifc = y[idx_ifc[i]]
-        if idx_st[i] >= 0:
-            N_st = y[idx_st[i]]
+        N_stor = 0.0
+        if ifc_idx[i] >= 0:
+            N_ifc = state_vec[ifc_idx[i]]
+        if stor_idx[i] >= 0:
+            N_stor = state_vec[stor_idx[i]]
+        ifc_stock[i] = N_ifc
+        stor_stock[i] = N_stor
 
-        if mode == _MODE_OFF:
-            Ndot_i = 0.0
-            fixed_sum += Ndot_i
-            Ndot[i] = Ndot_i
-        elif mode == _MODE_DIRECT:
-            inj = N_ifc / tau_ifc_arr[i] - lambda_arr[i] * N_st
-            if N_st > N_st_min_arr[i]:
-                if inj < 0.0:
-                    inj = 0.0
-                if inj > Ndot_max_arr[i]:
-                    inj = Ndot_max_arr[i]
-            else:
-                inj = 0.0
-            fixed_sum += inj
-            Ndot[i] = inj
-        elif mode == _MODE_AUTO:
-            auto_mask[i] = True
-            auto_caps[i] = Ndot_max_arr[i]
-            Ndot[i] = 0.0
+        tau_ifc = tau_ifc_vec[i]
+        ifc_out_rate = 0.0
+        if np.isfinite(tau_ifc) and (tau_ifc > 0.0):
+            ifc_out_rate = N_ifc / tau_ifc
+        if ifc_out_rate < 0.0:
+            ifc_out_rate = 0.0
+        ifc_release[i] = ifc_out_rate
 
-    required_auto_total = np.nan
-    unmet_auto_total = np.nan
+        species_cap = max_inj_vec[i]
+        if use_storage_vec[i] and (N_stor <= stor_min_vec[i]):
+            species_cap = 0.0
+        elif (not use_storage_vec[i]) and (not np.isfinite(species_cap)):
+            species_cap = np.inf
+        if species_cap < 0.0:
+            species_cap = 0.0
+        inj_cap[i] = species_cap
 
-    if enforce_constant_total_density:
-        q_sum = 0.0
-        for i in range(N_SPECIES):
-            q_sum += q[i]
+    # Compute the selected injection rates from the prepared controller inputs.
+    inj_rate, total_inj_need, total_inj_gap, total_dn_dt = _compute_injection_rates_numba(
+        plasma_idx,
+        plasma_n,
+        plasma_net,
+        ifc_release,
+        stor_stock,
+        decay_vec,
+        inj_cap,
+        mode_vec,
+        custom_req_vec,
+        mix_weight_vec,
+        use_mix_auto,
+        V_plasma,
+        n_tot,
+        total_density_feedback_tau,
+    )
 
-        raw_required_auto_total = -V_plasma * q_sum - fixed_sum
-        neg_unmet = 0.0
-        if (not allow_negative_auto_injection) and (raw_required_auto_total < 0.0):
-            required_auto_total = 0.0
-            neg_unmet = -raw_required_auto_total
-        else:
-            required_auto_total = raw_required_auto_total
+    # Tritium breeding is reused later in the compartment balances.
+    bred_tritium_inflow = V_plasma * (TBR_DDn * R_DD_n + TBR_DT * R_DT)
+    tritium_ofc_stock = 0.0
+    if ofc_idx[TRITIUM_INDEX] >= 0:
+        tritium_ofc_stock = state_vec[ofc_idx[TRITIUM_INDEX]]
+    he3_ofc_decay_source = decay_vec[TRITIUM_INDEX] * tritium_ofc_stock
+    he3_ifc_decay_source = decay_vec[TRITIUM_INDEX] * ifc_stock[TRITIUM_INDEX]
+    he3_stor_decay_source = decay_vec[TRITIUM_INDEX] * stor_stock[TRITIUM_INDEX]
 
-        alloc, pos_unmet = _allocate_auto_injection_numba(
-            required_auto_total, auto_mask, auto_weights_arr, auto_caps
-        )
-        for i in range(N_SPECIES):
-            if auto_mask[i]:
-                Ndot[i] = alloc[i]
-        unmet_auto_total = pos_unmet + neg_unmet
-    else:
-        for i in range(N_SPECIES):
-            if auto_mask[i]:
-                Ndot[i] = 0.0
+    rhs_vec = np.zeros_like(state_vec)
 
-    sum_dn_dt = 0.0
+    # Assemble the compartment and plasma derivatives using the selected
+    # injection rates together with recycling, breeding, exhaust, and decay.
     for i in range(N_SPECIES):
-        sum_dn_dt += Ndot[i] / V_plasma + q[i]
-
-    # State derivatives.
-    for i in range(N_SPECIES):
-        if not species_enabled_arr[i]:
+        if plasma_idx[i] < 0:
             continue
 
         N_ofc = 0.0
-        N_ifc = 0.0
-        N_st = 0.0
-        if idx_ofc[i] >= 0:
-            N_ofc = y[idx_ofc[i]]
-        if idx_ifc[i] >= 0:
-            N_ifc = y[idx_ifc[i]]
-        if idx_st[i] >= 0:
-            N_st = y[idx_st[i]]
+        if ofc_idx[i] >= 0:
+            N_ofc = state_vec[ofc_idx[i]]
+        N_ifc = ifc_stock[i]
+        N_stor = stor_stock[i]
 
-        exhaust_rate = (n_clamped[i] / tau_p_arr[i]) * V_plasma
-        ofc_out = 0.0
-        if ofc_enabled_arr[i]:
-            ofc_out = _safe_outflow(N_ofc, tau_ofc_arr[i])
-        ifc_out = _safe_outflow(N_ifc, tau_ifc_arr[i])
-        inj_rate = Ndot[i]
-        lam = lambda_arr[i]
+        plasma_exhaust = (plasma_n[i] / tau_p_vec[i]) * V_plasma
+        ofc_out_rate = 0.0
+        if ofc_idx[i] >= 0:
+            tau_ofc = tau_ofc_vec[i]
+            if np.isfinite(tau_ofc) and (tau_ofc > 0.0):
+                ofc_out_rate = N_ofc / tau_ofc
 
-        breeding_source = 0.0
+        ifc_out_rate = ifc_release[i]
+        species_inj = inj_rate[i]
+        species_decay = decay_vec[i]
+
+        bred_inflow = 0.0
         if i == 1:
-            breeding_source = V_plasma * (TBR_DDn * R_DD_n + TBR_DT * R_DT)
+            bred_inflow = bred_tritium_inflow
 
-        if ofc_enabled_arr[i]:
-            dN_ofc_dt = breeding_source - ofc_out - lam * N_ofc
-            dN_ifc_dt = ofc_out + exhaust_rate - ifc_out - lam * N_ifc
+        # OFC/IFC routing differs depending on whether the species uses an OFC.
+        if ofc_idx[i] >= 0:
+            dN_ofc_dt = bred_inflow - ofc_out_rate - species_decay * N_ofc
+            dN_ifc_dt = ofc_out_rate + plasma_exhaust - ifc_out_rate - species_decay * N_ifc
         else:
             dN_ofc_dt = 0.0
-            dN_ifc_dt = exhaust_rate + breeding_source - ifc_out - lam * N_ifc
+            dN_ifc_dt = plasma_exhaust + bred_inflow - ifc_out_rate - species_decay * N_ifc
 
-        if mode_codes[i] == _MODE_AUTO:
-            dN_st_dt = ifc_out - lam * N_st
+        # Storage either passively fills from IFC or actively supplies injection.
+        if not use_storage_vec[i]:
+            dN_stor_dt = ifc_out_rate - species_decay * N_stor
         else:
-            dN_st_dt = ifc_out - inj_rate - lam * N_st
+            dN_stor_dt = ifc_out_rate - species_inj - species_decay * N_stor
 
-        if idx_ofc[i] >= 0:
-            dydt[idx_ofc[i]] = dN_ofc_dt
-        if idx_ifc[i] >= 0:
-            dydt[idx_ifc[i]] = dN_ifc_dt
-        if idx_st[i] >= 0:
-            dydt[idx_st[i]] = dN_st_dt
-        if idx_n[i] >= 0:
-            n_raw = y[idx_n[i]]
-            dydt[idx_n[i]] = Ndot[i] / V_plasma + plasma_source[i] - n_raw / tau_p_arr[i]
+        if i == HELIUM3_INDEX:
+            if ofc_idx[i] >= 0:
+                dN_ofc_dt += he3_ofc_decay_source
+            else:
+                # When He3 has no explicit OFC state, fold the OFC decay source
+                # into the reduced IFC-only routing so the daughter inventory is kept.
+                dN_ifc_dt += he3_ofc_decay_source
+            dN_ifc_dt += he3_ifc_decay_source
+            dN_stor_dt += he3_stor_decay_source
 
-    return dydt, Ndot, required_auto_total, unmet_auto_total, sum_dn_dt
+        # Write the component derivatives back into the flat RHS vector.
+        if ofc_idx[i] >= 0:
+            rhs_vec[ofc_idx[i]] = dN_ofc_dt
+        if ifc_idx[i] >= 0:
+            rhs_vec[ifc_idx[i]] = dN_ifc_dt
+        if stor_idx[i] >= 0:
+            rhs_vec[stor_idx[i]] = dN_stor_dt
+        if plasma_idx[i] >= 0:
+            n_raw = state_vec[plasma_idx[i]]
+            rhs_vec[plasma_idx[i]] = species_inj / V_plasma + reaction_term[i] - n_raw / tau_p_vec[i]
+
+    return rhs_vec, inj_rate, total_inj_need, total_inj_gap, total_dn_dt
 
 
 def solve_multispecies_ode_system(
@@ -352,145 +278,128 @@ def solve_multispecies_ode_system(
     V_plasma: float,
     T_i: float,
     n_tot: float,
-    f0: Mapping[str, float],
-    species_params: Mapping[str, Mapping[str, float]],
-    injection_mode: Mapping[str, str],
-    automatic_injection_weights: Mapping[str, float],
+    species_params: Mapping[str, Mapping[str, Any]],
+    initial_conditions: Mapping[str, Mapping[str, float]],
     TBR_DT: float,
     TBR_DDn: float,
     max_simulation_time: float,
     vector_length: int,
-    targets: Optional[list[Mapping[str, Any]]] = None,
-    enforce_constant_total_density: bool = True,
-    allow_negative_auto_injection: bool = False,
-    auto_injection_use_storage_limits: bool = False,
-    route_THe3_ch3_to_He4: bool = False,
+    reactivities: Mapping[str, float],
+    target_conditions: Optional[list[Mapping[str, Any]]] = None,
+    injection_mix_weights: Optional[Mapping[str, float]] = None,
+    temperature_function: Optional[Any] = None,
     solver_method: str = "BDF",
     solver_rtol: float = 1e-6,
     solver_atol: float = 1e-3,
-    reactivities: Optional[Mapping[str, float]] = None,
 ) -> Dict[str, Any]:
-    """Solve multispecies fuel-cycle ODE system and return physics diagnostics."""
+    """Solve the multispecies fuel cycle ODE model on a uniform output grid.
 
+    Args:
+        V_plasma: Plasma volume in m^3.
+        T_i: Constant ion temperature in keV used when ``temperature_function``
+            is not provided.
+        n_tot: Total plasma density in m^-3.
+        species_params: Per species solver parameters keyed by ``SPECIES``.
+            Optional key ``inject_from_storage`` (default ``True``) disables
+            storage drain from injection when set to ``False``.
+            Optional key ``injection_mode`` (default ``"off"``) selects one of
+            ``direct``, ``auto``, ``custom``, ``constant_density``, ``off``.
+            ``constant_density`` keeps the species' own plasma density flat
+            when its cap allows it. ``off`` disables species injection.
+            For ``injection_mode="custom"``, key
+            ``injection_custom_function`` must be a callable prepared at IO
+            level that accepts a single context mapping argument.
+        initial_conditions: Per species initial state keyed by ``SPECIES``.
+            Required keys per species are ``f_0``, ``N_ofc_0``, ``N_ifc_0``,
+            and ``N_stor_0``.
+        TBR_DT: DT tritium breeding ratio.
+        TBR_DDn: DDn tritium breeding ratio.
+        max_simulation_time: Maximum integration time in seconds.
+        vector_length: Output timeline length for interpolation.
+        reactivities: Mapping of required reactivity channels in m^3/s.
+        target_conditions: Optional terminal conditions for startup target detection.
+            Each condition may include ``stop_on_target`` (default ``True``)
+            and ``direction`` (default ``+1``).
+        injection_mix_weights: Optional control only injection mixture weights
+            keyed by species (for example ``{"D": 1.0, "T": 1.0}``).
+            AUTO species default to unit weight when not explicitly provided.
+            Positive weights are used only for AUTO weighted mix allocation.
+        temperature_function: Optional callable returning the instantaneous
+            ion temperature in keV from the current solver state. The callable
+            receives a context mapping with ``t``, ``V_plasma``, ``n_tot``,
+            per-species inventories/densities (for example ``n_D``), and
+            non-negative plasma fractions ``f_D`` ... ``f_He4``.
+        solver_method: ``solve_ivp`` method name.
+        solver_rtol: Relative tolerance for the ODE solver.
+        solver_atol: Absolute tolerance for the ODE solver.
+
+    Returns:
+        Dictionary containing time profiles, startup metadata, diagnostics,
+        and per species states/injection rates.
+
+    Raises:
+        ValueError: If a target metric is unknown.
+    """
+    species_params_full = {sp: dict(species_params[sp]) for sp in SPECIES}
+    initial_conditions_full = {sp: dict(initial_conditions[sp]) for sp in SPECIES}
     for sp in SPECIES:
-        if sp not in species_params:
-            raise ValueError(f"Missing species_params entry for {sp!r}")
+        species_params_full[sp].setdefault("inject_from_storage", False)
+        species_params_full[sp].setdefault("injection_mode", "off")
+    if (temperature_function is not None) and (not callable(temperature_function)):
+        raise ValueError("temperature_function must be callable when provided.")
 
     # Species activation: when False, the species is removed from all equations.
-    species_enabled = {sp: bool(species_params[sp].get("enable_plasma_channel", True)) for sp in SPECIES}
-    if not any(species_enabled.values()):
-        raise ValueError("At least one species must have enable_plasma_channel=True")
+    species_enabled = {
+        sp: bool(species_params_full[sp]["enable_plasma_channel"]) for sp in SPECIES
+    }
+    target_conditions = [] if target_conditions is None else [dict(c) for c in target_conditions]
+    injection_mix_weights = {} if injection_mix_weights is None else dict(injection_mix_weights)
 
-    # Targets:
-    # - targets=None or [] -> no target-based stopping
-    # - list of dicts -> integration stops when any provided condition is reached
-    target_conditions: list[Dict[str, Any]] = []
-    if targets is not None:
-        if not isinstance(targets, (list, tuple)):
-            raise ValueError("targets must be a list of dictionaries or None")
-
-        for i, target in enumerate(targets):
-            if not isinstance(target, Mapping):
-                raise ValueError(f"targets[{i}] must be a mapping")
-
-            sp = target.get("target_specie", None)
-            if sp is None:
-                raise ValueError(f"targets[{i}] must define 'target_specie'")
-            sp = str(sp)
-            if sp not in SPECIES:
-                raise ValueError(f"targets[{i}]['target_specie'] must be one of {SPECIES}")
-            if not species_enabled.get(sp, False):
-                raise ValueError(f"targets[{i}] refers to disabled species {sp!r}")
-
-            frac = target.get("target_fraction_in_plasma", None)
-            if frac is not None:
-                target_conditions.append(
-                    {
-                        "target_specie": sp,
-                        "metric": "fraction",
-                        "value": float(frac),
-                        "label": f"{sp}:fraction>={float(frac):.6e}",
-                    }
-                )
-
-            inv_ifc = target.get("target_inventory_ifc", None)
-            if inv_ifc is not None:
-                target_conditions.append(
-                    {
-                        "target_specie": sp,
-                        "metric": "ifc",
-                        "value": float(inv_ifc),
-                        "label": f"{sp}:ifc>={float(inv_ifc):.6e}",
-                    }
-                )
-
-            inv_ofc = target.get("target_inventory_ofc", None)
-            if inv_ofc is not None:
-                target_conditions.append(
-                    {
-                        "target_specie": sp,
-                        "metric": "ofc",
-                        "value": float(inv_ofc),
-                        "label": f"{sp}:ofc>={float(inv_ofc):.6e}",
-                    }
-                )
-
-            inv_st = target.get("target_inventory_storage", None)
-            if inv_st is not None:
-                target_conditions.append(
-                    {
-                        "target_specie": sp,
-                        "metric": "st",
-                        "value": float(inv_st),
-                        "label": f"{sp}:storage>={float(inv_st):.6e}",
-                    }
-                )
-
-    # OFC compartment is active only if tau_ofc is finite and positive; otherwise IFC-only routing is used.
+    # OFC compartment is active only if tau_ofc is finite and positive; otherwise IFC only routing is used.
     tau_ofc_map: Dict[str, float] = {}
     ofc_enabled: Dict[str, bool] = {}
     for sp in SPECIES:
-        tau_ofc_sp = float(species_params[sp].get("tau_ofc", np.inf))
+        tau_ofc_sp = float(species_params_full[sp]["tau_ofc"])
         tau_ofc_map[sp] = tau_ofc_sp
         ofc_enabled[sp] = species_enabled[sp] and np.isfinite(tau_ofc_sp) and (tau_ofc_sp > 0.0)
 
-    f_local = {sp: float(f0.get(sp, 0.0)) for sp in SPECIES}
+    f_local = {sp: float(initial_conditions_full[sp]["f_0"]) for sp in SPECIES}
+
+    fixed_reactivity_values = _reactivity_tuple_from_mapping(reactivities)
+    (
+        sigmav_DD_p,
+        sigmav_DD_n,
+        sigmav_DT,
+        sigmav_DHe3,
+        sigmav_TT,
+        sigmav_He3He3,
+        sigmav_THe3_ch1,
+        sigmav_THe3_ch2,
+        sigmav_THe3_ch3,
+    ) = fixed_reactivity_values
+
+    @lru_cache(maxsize=512)
+    def _reactivity_values_for_temperature(T_keV: float) -> Tuple[float, ...]:
+        return _reactivity_tuple_from_mapping(compute_reactivities_from_functions(float(T_keV)))
+
+    idx: Dict[Tuple[str, str], int] = {}
+    cursor = 0
     for sp in SPECIES:
-        if not species_enabled[sp]:
-            f_local[sp] = 0.0
-    f_sum = sum(f_local.values())
-    if f_sum <= 0.0:
-        raise ValueError("Initial fractions for enabled species must have a positive sum")
-    if not np.isclose(f_sum, 1.0, atol=1e-12, rtol=0.0):
-        for sp in SPECIES:
-            f_local[sp] = f_local[sp] / f_sum
-
-    if reactivities is None:
-        _, sigmav_DD_n, sigmav_DD_p = sigmav_DD_BoschHale(float(T_i))
-        sigmav_DT = sigmav_DT_BoschHale(float(T_i))
-        sigmav_DHe3 = sigmav_DHe3_BoschHale(float(T_i))
-        sigmav_TT = sigmav_TT_placeholder(float(T_i))
-        sigmav_He3He3 = sigmav_He3He3_placeholder(float(T_i))
-        sigmav_THe3_ch1, sigmav_THe3_ch2, sigmav_THe3_ch3 = sigmav_THe3_placeholder(float(T_i))
-    else:
-        sigmav_DD_p = float(reactivities.get("sigmav_DD_p", 0.0))
-        sigmav_DD_n = float(reactivities.get("sigmav_DD_n", 0.0))
-        sigmav_DT = float(reactivities.get("sigmav_DT", 0.0))
-        sigmav_DHe3 = float(reactivities.get("sigmav_DHe3", 0.0))
-        sigmav_TT = float(reactivities.get("sigmav_TT", 0.0))
-        sigmav_He3He3 = float(reactivities.get("sigmav_He3He3", 0.0))
-        sigmav_THe3_ch1 = float(reactivities.get("sigmav_THe3_ch1", 0.0))
-        sigmav_THe3_ch2 = float(reactivities.get("sigmav_THe3_ch2", 0.0))
-        sigmav_THe3_ch3 = float(reactivities.get("sigmav_THe3_ch3", 0.0))
-
-    idx = _build_index(species_enabled, ofc_enabled)
+        if not species_enabled.get(sp, False):
+            continue
+        if ofc_enabled.get(sp, False):
+            idx[(sp, "ofc")] = cursor
+            cursor += 1
+        for comp in ("ifc", "stor", "n"):
+            idx[(sp, comp)] = cursor
+            cursor += 1
     idx_ofc = {sp: idx.get((sp, "ofc"), -1) for sp in SPECIES}
     idx_ifc = {sp: idx.get((sp, "ifc"), -1) for sp in SPECIES}
-    idx_st = {sp: idx.get((sp, "st"), -1) for sp in SPECIES}
+    idx_stor = {sp: idx.get((sp, "stor"), -1) for sp in SPECIES}
     idx_n = {sp: idx.get((sp, "n"), -1) for sp in SPECIES}
 
     active_inventory_idx = np.array(
-        [idx[(sp, comp)] for sp in SPECIES for comp in ("ofc", "ifc", "st") if (sp, comp) in idx],
+        [idx[(sp, comp)] for sp in SPECIES for comp in ("ofc", "ifc", "stor") if (sp, comp) in idx],
         dtype=np.int64,
     )
     active_density_idx = np.array([idx_n[sp] for sp in SPECIES if idx_n[sp] >= 0], dtype=np.int64)
@@ -501,78 +410,269 @@ def solve_multispecies_ode_system(
     for sp in SPECIES:
         if species_enabled[sp]:
             if idx_ofc[sp] >= 0:
-                y0[idx_ofc[sp]] = 100.0
+                y0[idx_ofc[sp]] = float(initial_conditions_full[sp]["N_ofc_0"])
             if idx_ifc[sp] >= 0:
-                y0[idx_ifc[sp]] = 100.0
-            if idx_st[sp] >= 0:
-                y0[idx_st[sp]] = 100.0
+                y0[idx_ifc[sp]] = float(initial_conditions_full[sp]["N_ifc_0"])
+            if idx_stor[sp] >= 0:
+                y0[idx_stor[sp]] = float(initial_conditions_full[sp]["N_stor_0"])
             if idx_n[sp] >= 0:
                 y0[idx_n[sp]] = n_tot * f_local[sp]
 
-    valid_modes = {"auto", "direct", "off"}
-    mode_to_code = {"off": _MODE_OFF, "direct": _MODE_DIRECT, "auto": _MODE_AUTO}
-    for sp in SPECIES:
-        mode = injection_mode.get(sp, "off")
-        if mode not in valid_modes:
-            raise ValueError(f"Invalid injection_mode for {sp}: {mode}")
-
-    # Backward-compatible flag kept in API/config; auto injection is always
-    # independent from storage in this solver.
-    _ = auto_injection_use_storage_limits
-
     idx_ofc_arr = np.array([idx_ofc[sp] for sp in SPECIES], dtype=np.int64)
     idx_ifc_arr = np.array([idx_ifc[sp] for sp in SPECIES], dtype=np.int64)
-    idx_st_arr = np.array([idx_st[sp] for sp in SPECIES], dtype=np.int64)
+    idx_stor_arr = np.array([idx_stor[sp] for sp in SPECIES], dtype=np.int64)
     idx_n_arr = np.array([idx_n[sp] for sp in SPECIES], dtype=np.int64)
 
-    species_enabled_arr = np.array([species_enabled[sp] for sp in SPECIES], dtype=np.bool_)
-    ofc_enabled_arr = np.array([ofc_enabled[sp] for sp in SPECIES], dtype=np.bool_)
-    mode_codes = np.array([mode_to_code[injection_mode.get(sp, "off")] for sp in SPECIES], dtype=np.int64)
-
-    tau_p_arr = np.array([float(species_params[sp]["tau_p"]) for sp in SPECIES], dtype=np.float64)
-    tau_ifc_arr = np.array([float(species_params[sp]["tau_ifc"]) for sp in SPECIES], dtype=np.float64)
+    tau_p_arr = np.array([float(species_params_full[sp]["tau_p"]) for sp in SPECIES], dtype=np.float64)
+    tau_ifc_arr = np.array([float(species_params_full[sp]["tau_ifc"]) for sp in SPECIES], dtype=np.float64)
     tau_ofc_arr = np.array([tau_ofc_map[sp] for sp in SPECIES], dtype=np.float64)
-    lambda_arr = np.array([float(species_params[sp]["lambda_decay"]) for sp in SPECIES], dtype=np.float64)
-    N_st_min_arr = np.array([float(species_params[sp]["N_st_min"]) for sp in SPECIES], dtype=np.float64)
-    Ndot_max_arr = np.array([float(species_params[sp]["Ndot_max"]) for sp in SPECIES], dtype=np.float64)
-    auto_weights_arr = np.array([float(automatic_injection_weights.get(sp, 1.0)) for sp in SPECIES], dtype=np.float64)
+    lambda_arr = np.array([float(species_params_full[sp]["lambda_decay"]) for sp in SPECIES], dtype=np.float64)
+    N_stor_min_arr = np.array([float(species_params_full[sp]["N_stor_min"]) for sp in SPECIES], dtype=np.float64)
+    Ndot_max_arr = np.array([float(species_params_full[sp]["Ndot_max"]) for sp in SPECIES], dtype=np.float64)
+    inject_from_storage_arr = np.array(
+        [bool(species_params_full[sp]["inject_from_storage"]) for sp in SPECIES],
+        dtype=np.bool_,
+    )
+    injection_mode_name_map: Dict[str, str] = {}
+    for sp in SPECIES:
+        mode_name = str(species_params_full[sp]["injection_mode"]).strip().lower().replace("-", "_")
+        if mode_name not in INJECTION_MODE_TO_ID:
+            raise ValueError(
+                f"Unknown injection_mode for species {sp!r}: {mode_name!r}. "
+                f"Allowed modes: {list(INJECTION_MODE_TO_ID.keys())}"
+            )
+        injection_mode_name_map[sp] = mode_name
+    injection_mode_arr = np.array(
+        [int(INJECTION_MODE_TO_ID[injection_mode_name_map[sp]]) for sp in SPECIES],
+        dtype=np.int64,
+    )
+    custom_callable_by_species: list[Any] = [None] * N_SPECIES
+    has_custom_mode = False
+    for isp, sp in enumerate(SPECIES):
+        if injection_mode_arr[isp] != INJECTION_MODE_CUSTOM:
+            continue
+        custom_fn = species_params_full[sp].get("injection_custom_function")
+        if not callable(custom_fn):
+            raise ValueError(
+                f"Species {sp!r} uses injection_mode='custom' but injection_custom_function is not callable. "
+                "Custom functions must be compiled at IO level and passed to the solver."
+            )
+        custom_callable_by_species[isp] = custom_fn
+        has_custom_mode = True
+
+    injection_mix_weight_map = {
+        sp: (1.0 if injection_mode_arr[isp] == INJECTION_MODE_AUTO else 0.0)
+        for isp, sp in enumerate(SPECIES)
+    }
+    for sp_raw, value in injection_mix_weights.items():
+        sp = str(sp_raw)
+        if sp not in injection_mix_weight_map:
+            raise ValueError(f"Unknown species in injection_mix_weights: {sp!r}")
+        w = float(value)
+        if w < 0.0:
+            raise ValueError(f"Negative injection mix weight for species {sp!r}: {w}")
+        injection_mix_weight_map[sp] = w
+
+    injection_mix_weight_arr = np.array(
+        [float(injection_mix_weight_map[sp]) for sp in SPECIES],
+        dtype=np.float64,
+    )
+
+    use_injection_mix_control = False
+    for isp in range(N_SPECIES):
+        if (
+            idx_n_arr[isp] >= 0
+            and (injection_mode_arr[isp] == INJECTION_MODE_AUTO)
+            and (injection_mix_weight_arr[isp] > 0.0)
+        ):
+            use_injection_mix_control = True
+            break
+
+    total_density_feedback_tau = 0.0
+    if use_injection_mix_control:
+        for isp in range(N_SPECIES):
+            if idx_n_arr[isp] < 0:
+                continue
+            if injection_mode_arr[isp] != INJECTION_MODE_AUTO:
+                continue
+            tau_p_val = tau_p_arr[isp]
+            if (not np.isfinite(tau_p_val)) or (tau_p_val <= 0.0):
+                continue
+            if (total_density_feedback_tau <= 0.0) or (tau_p_val < total_density_feedback_tau):
+                total_density_feedback_tau = tau_p_val
+
+    control_t: list[float] = []
+    control_ndot: list[np.ndarray] = []
+    temperature_t: list[float] = []
+    temperature_history_adaptive: list[float] = []
+
+    def _build_state_context(y: np.ndarray, *, clamp_negative: bool) -> Dict[str, float]:
+        """Build a per-species state mapping for Python-level callbacks."""
+        state_by_name: Dict[str, float] = {}
+        for isp, sp in enumerate(SPECIES):
+            n_ifc = float(y[idx_ifc_arr[isp]]) if idx_ifc_arr[isp] >= 0 else 0.0
+            n_ofc = float(y[idx_ofc_arr[isp]]) if idx_ofc_arr[isp] >= 0 else 0.0
+            n_stor = float(y[idx_stor_arr[isp]]) if idx_stor_arr[isp] >= 0 else 0.0
+            n_plasma = float(y[idx_n_arr[isp]]) if idx_n_arr[isp] >= 0 else 0.0
+            if clamp_negative:
+                n_ifc = max(n_ifc, 0.0) if np.isfinite(n_ifc) else 0.0
+                n_ofc = max(n_ofc, 0.0) if np.isfinite(n_ofc) else 0.0
+                n_stor = max(n_stor, 0.0) if np.isfinite(n_stor) else 0.0
+                n_plasma = max(n_plasma, 0.0) if np.isfinite(n_plasma) else 0.0
+            state_by_name[f"N_ifc_{sp}"] = n_ifc
+            state_by_name[f"N_ofc_{sp}"] = n_ofc
+            state_by_name[f"N_stor_{sp}"] = n_stor
+            state_by_name[f"n_{sp}"] = n_plasma
+        return state_by_name
 
     def _ode_system(t: float, y: np.ndarray) -> np.ndarray:
-        dydt, _, _, _, _ = _compute_rhs_and_control_numba(
+        """Evaluate ODE right hand side for ``solve_ivp`` callbacks.
+
+        Args:
+            t: Current simulation time in seconds.
+            y: Current state vector.
+
+        Returns:
+            State derivative vector matching ``y`` shape.
+        """
+        custom_request_arr = np.full(N_SPECIES, np.nan, dtype=np.float64)
+        state_by_name: Optional[Dict[str, float]] = None
+        temperature_keV = float(T_i)
+        reactivity_values = fixed_reactivity_values
+        if has_custom_mode or (temperature_function is not None):
+            state_by_name = _build_state_context(y, clamp_negative=False)
+
+        if temperature_function is not None:
+            temperature_env = _build_state_context(y, clamp_negative=True)
+            temperature_env["t"] = float(t)
+            temperature_env["V_plasma"] = float(V_plasma)
+            temperature_env["n_tot"] = float(n_tot)
+            n_plasma_total = sum(float(temperature_env[f"n_{sp}"]) for sp in SPECIES)
+            temperature_env["n_plasma_total"] = n_plasma_total
+            if n_plasma_total > 0.0:
+                for sp in SPECIES:
+                    temperature_env[f"f_{sp}"] = float(temperature_env[f"n_{sp}"]) / n_plasma_total
+            else:
+                for sp in SPECIES:
+                    temperature_env[f"f_{sp}"] = 0.0
+
+            try:
+                temperature_keV = float(temperature_function(temperature_env))
+            except Exception as exc:
+                raise ValueError(f"Failed evaluating temperature_function: {exc}") from exc
+            if (not np.isfinite(temperature_keV)) or (temperature_keV <= 0.0):
+                raise ValueError(
+                    "temperature_function must return a finite positive temperature in keV; "
+                    f"got {temperature_keV!r}"
+                )
+            reactivity_values = _reactivity_values_for_temperature(float(temperature_keV))
+            temperature_t.append(float(t))
+            temperature_history_adaptive.append(float(temperature_keV))
+
+        (
+            sigmav_DD_p_eval,
+            sigmav_DD_n_eval,
+            sigmav_DT_eval,
+            sigmav_DHe3_eval,
+            sigmav_TT_eval,
+            sigmav_He3He3_eval,
+            sigmav_THe3_ch1_eval,
+            sigmav_THe3_ch2_eval,
+            sigmav_THe3_ch3_eval,
+        ) = reactivity_values
+
+        if has_custom_mode:
+            assert state_by_name is not None
+
+            for isp, sp in enumerate(SPECIES):
+                custom_fn = custom_callable_by_species[isp]
+                if custom_fn is None:
+                    continue
+
+                local_env: Dict[str, Any] = dict(state_by_name)
+                local_env["t"] = float(t)
+                local_env["V_plasma"] = float(V_plasma)
+                local_env["n_tot"] = float(n_tot)
+                local_env["T_i"] = float(temperature_keV)
+                local_env["T_keV"] = float(temperature_keV)
+                for channel, value in zip(REACTIVITY_CHANNELS, reactivity_values):
+                    local_env[channel] = float(value)
+
+                local_env["N_ifc"] = state_by_name[f"N_ifc_{sp}"]
+                local_env["N_ofc"] = state_by_name[f"N_ofc_{sp}"]
+                local_env["N_stor"] = state_by_name[f"N_stor_{sp}"]
+                local_env["n"] = state_by_name[f"n_{sp}"]
+
+                local_env["tau_p"] = float(tau_p_arr[isp])
+                local_env["tau_ifc"] = float(tau_ifc_arr[isp])
+                local_env["tau_ofc"] = float(tau_ofc_arr[isp])
+                local_env["lambda_decay"] = float(lambda_arr[isp])
+                local_env["N_stor_min"] = float(N_stor_min_arr[isp])
+                local_env["Ndot_max"] = float(Ndot_max_arr[isp])
+
+                local_env[f"tau_p_{sp}"] = local_env["tau_p"]
+                local_env[f"tau_ifc_{sp}"] = local_env["tau_ifc"]
+                local_env[f"tau_ofc_{sp}"] = local_env["tau_ofc"]
+                local_env[f"lambda_decay_{sp}"] = local_env["lambda_decay"]
+                local_env[f"N_stor_min_{sp}"] = local_env["N_stor_min"]
+                local_env[f"Ndot_max_{sp}"] = local_env["Ndot_max"]
+
+                try:
+                    custom_request_arr[isp] = float(custom_fn(local_env))
+                except Exception as exc:
+                    raise ValueError(
+                        f"Failed evaluating injection_custom_function for species {sp!r}: {exc}"
+                    ) from exc
+
+        dydt, ndot_i, _, _, _ = _compute_rhs_and_control_numba(
             y,
             idx_ofc_arr,
             idx_ifc_arr,
-            idx_st_arr,
+            idx_stor_arr,
             idx_n_arr,
-            species_enabled_arr,
-            ofc_enabled_arr,
-            mode_codes,
             tau_p_arr,
             tau_ifc_arr,
             tau_ofc_arr,
             lambda_arr,
-            N_st_min_arr,
+            N_stor_min_arr,
             Ndot_max_arr,
-            auto_weights_arr,
+            inject_from_storage_arr,
+            injection_mode_arr,
+            custom_request_arr,
+            injection_mix_weight_arr,
+            bool(use_injection_mix_control),
             float(V_plasma),
+            float(n_tot),
+            float(total_density_feedback_tau),
             float(TBR_DT),
             float(TBR_DDn),
-            float(sigmav_DD_p),
-            float(sigmav_DD_n),
-            float(sigmav_DT),
-            float(sigmav_DHe3),
-            float(sigmav_TT),
-            float(sigmav_He3He3),
-            float(sigmav_THe3_ch1),
-            float(sigmav_THe3_ch2),
-            float(sigmav_THe3_ch3),
-            bool(route_THe3_ch3_to_He4),
-            bool(enforce_constant_total_density),
-            bool(allow_negative_auto_injection),
+            float(sigmav_DD_p_eval),
+            float(sigmav_DD_n_eval),
+            float(sigmav_DT_eval),
+            float(sigmav_DHe3_eval),
+            float(sigmav_TT_eval),
+            float(sigmav_He3He3_eval),
+            float(sigmav_THe3_ch1_eval),
+            float(sigmav_THe3_ch2_eval),
+            float(sigmav_THe3_ch3_eval),
         )
+        # Record adaptive step injection outputs so they can be interpolated
+        # onto the final output grid without re-running the controller.
+        control_t.append(float(t))
+        control_ndot.append(ndot_i.copy())
         return dydt
 
     def _negative_event(t: float, y: np.ndarray) -> float:
+        """Detect unphysical negative inventories or densities.
+
+        Args:
+            t: Current simulation time in seconds.
+            y: Current state vector.
+
+        Returns:
+            Signed event value, crossing zero when any guarded state becomes
+            negative beyond tolerance.
+        """
         inv_min = np.min(y[active_inventory_idx] + 100.0) if active_inventory_idx.size else np.inf
         den_min = np.min(y[active_density_idx] + 1e5) if active_density_idx.size else np.inf
         return float(min(inv_min, den_min))
@@ -582,35 +682,89 @@ def solve_multispecies_ode_system(
 
     target_event_functions = []
     for cond in target_conditions:
+        if not bool(cond.get("stop_on_target", True)):
+            continue
+
         sp = str(cond["target_specie"])
         metric = str(cond["metric"])
         value = float(cond["value"])
+        direction = float(cond.get("direction", 1.0))
+        if direction > 0.0:
+            direction = 1.0
+        elif direction < 0.0:
+            direction = -1.0
+        else:
+            direction = 0.0
 
         if metric == "fraction":
             def _event(_, y, sp=sp, value=value):
+                """Detect target crossing for species plasma fraction.
+
+                Args:
+                    _: Unused simulation time argument.
+                    y: Current state vector.
+                    sp: Species key captured from target condition.
+                    value: Target fraction value.
+
+                Returns:
+                    Signed event residual for ``n_sp / n_tot - value``.
+                """
                 if idx_n[sp] < 0:
                     return -value
                 return float(y[idx_n[sp]]) / n_tot - value
         elif metric == "ifc":
             def _event(_, y, sp=sp, value=value):
+                """Detect target crossing for IFC inventory.
+
+                Args:
+                    _: Unused simulation time argument.
+                    y: Current state vector.
+                    sp: Species key captured from target condition.
+                    value: Target IFC inventory in atoms.
+
+                Returns:
+                    Signed event residual for ``N_ifc - value``.
+                """
                 if idx_ifc[sp] < 0:
                     return -value
                 return float(y[idx_ifc[sp]]) - value
         elif metric == "ofc":
             def _event(_, y, sp=sp, value=value):
+                """Detect target crossing for OFC inventory.
+
+                Args:
+                    _: Unused simulation time argument.
+                    y: Current state vector.
+                    sp: Species key captured from target condition.
+                    value: Target OFC inventory in atoms.
+
+                Returns:
+                    Signed event residual for ``N_ofc - value``.
+                """
                 if idx_ofc[sp] < 0:
                     return -value
                 return float(y[idx_ofc[sp]]) - value
-        elif metric == "st":
+        elif metric == "stor":
             def _event(_, y, sp=sp, value=value):
-                if idx_st[sp] < 0:
+                """Detect target crossing for storage inventory.
+
+                Args:
+                    _: Unused simulation time argument.
+                    y: Current state vector.
+                    sp: Species key captured from target condition.
+                    value: Target storage inventory in atoms.
+
+                Returns:
+                    Signed event residual for ``N_stor - value``.
+                """
+                if idx_stor[sp] < 0:
                     return -value
-                return float(y[idx_st[sp]]) - value
+                return float(y[idx_stor[sp]]) - value
         else:
             raise ValueError(f"Unknown target metric: {metric}")
 
         _event.terminal = True
-        _event.direction = 1
+        _event.direction = direction
         target_event_functions.append(_event)
 
     events_to_solve = target_event_functions + [_negative_event]
@@ -626,11 +780,11 @@ def solve_multispecies_ode_system(
             rtol=solver_rtol,
             atol=solver_atol,
         )
-    except Exception as e:
+    except Exception as exc:  # Keep parametric sweeps alive by surfacing per case solver crashes as normal errors.
         return {
             "t_startup": np.inf,
             "sol_success": False,
-            "error": f"Unexpected solver exception: {e}",
+            "error": f"Unexpected solver exception: {exc}",
         }
 
     error: Any = None
@@ -671,6 +825,20 @@ def solve_multispecies_ode_system(
         t_sorted = t_with_event[sort_idx]
         Y_sorted = Y_with_event[:, sort_idx]
 
+        # ``np.interp`` expects a strictly increasing x-array; when solve_ivp
+        # already ends exactly at the terminal event, appending ``t_startup``
+        # creates a duplicate endpoint that can appear as a tiny final jump.
+        if t_sorted.size >= 2:
+            keep = np.ones(t_sorted.size, dtype=np.bool_)
+            for j in range(1, t_sorted.size):
+                dt = t_sorted[j] - t_sorted[j - 1]
+                tol = 1.0e-12 * max(1.0, abs(t_sorted[j]), abs(t_sorted[j - 1]))
+                if dt <= tol:
+                    # Keep the most recent sample (typically y_event).
+                    keep[j - 1] = False
+            t_sorted = t_sorted[keep]
+            Y_sorted = Y_sorted[:, keep]
+
         t_array = np.linspace(0.0, t_startup, max(2, int(vector_length)))
         Y_interp = np.vstack([np.interp(t_array, t_sorted, Y_sorted[i, :]) for i in range(Y_sorted.shape[0])])
     else:
@@ -687,102 +855,70 @@ def solve_multispecies_ode_system(
 
     data: Dict[Tuple[str, str], np.ndarray] = {}
     for sp in SPECIES:
-        for comp in ("ofc", "ifc", "st", "n"):
+        for comp in ("ofc", "ifc", "stor", "n"):
             pos = idx.get((sp, comp), None)
             if pos is None:
                 data[(sp, comp)] = np.zeros_like(t_array)
             else:
                 data[(sp, comp)] = Y_interp[pos, :]
 
-    Ndot_history = {sp: np.zeros_like(t_array) for sp in SPECIES}
-    sum_dn_dt_history = np.zeros_like(t_array)
-    required_auto_total_history = np.full_like(t_array, np.nan, dtype=float)
-    unmet_auto_total_history = np.full_like(t_array, np.nan, dtype=float)
-    sum_abs_dn_terms_history = np.zeros_like(t_array)
-    n_total_history = np.zeros_like(t_array)
+    T_i_history = np.full_like(t_array, float(T_i), dtype=float)
+    if temperature_t:
+        temp_t = np.asarray(temperature_t, dtype=float)
+        temp_values = np.asarray(temperature_history_adaptive, dtype=float)
 
-    for i in range(len(t_array)):
-        y_i = Y_interp[:, i]
+        order = np.argsort(temp_t, kind="mergesort")
+        temp_t = temp_t[order]
+        temp_values = temp_values[order]
 
-        dydt_i, Ndot_i, required_i, unmet_i, sum_dn_i = _compute_rhs_and_control_numba(
-            y_i,
-            idx_ofc_arr,
-            idx_ifc_arr,
-            idx_st_arr,
-            idx_n_arr,
-            species_enabled_arr,
-            ofc_enabled_arr,
-            mode_codes,
-            tau_p_arr,
-            tau_ifc_arr,
-            tau_ofc_arr,
-            lambda_arr,
-            N_st_min_arr,
-            Ndot_max_arr,
-            auto_weights_arr,
-            float(V_plasma),
-            float(TBR_DT),
-            float(TBR_DDn),
-            float(sigmav_DD_p),
-            float(sigmav_DD_n),
-            float(sigmav_DT),
-            float(sigmav_DHe3),
-            float(sigmav_TT),
-            float(sigmav_He3He3),
-            float(sigmav_THe3_ch1),
-            float(sigmav_THe3_ch2),
-            float(sigmav_THe3_ch3),
-            bool(route_THe3_ch3_to_He4),
-            bool(enforce_constant_total_density),
-            bool(allow_negative_auto_injection),
-        )
+        if temp_t.size >= 2:
+            keep = np.ones(temp_t.size, dtype=np.bool_)
+            for j in range(1, temp_t.size):
+                dt = temp_t[j] - temp_t[j - 1]
+                tol = 1.0e-12 * max(1.0, abs(temp_t[j]), abs(temp_t[j - 1]))
+                if dt <= tol:
+                    keep[j - 1] = False
+            temp_t = temp_t[keep]
+            temp_values = temp_values[keep]
+
+        T_i_history = np.interp(t_array, temp_t, temp_values)
+
+    Ndot_inj_history = {sp: np.zeros_like(t_array) for sp in SPECIES}
+    if control_t:
+        ctrl_t = np.asarray(control_t, dtype=float)
+        ctrl_ndot = np.asarray(control_ndot, dtype=float)
+
+        order = np.argsort(ctrl_t, kind="mergesort")
+        ctrl_t = ctrl_t[order]
+        ctrl_ndot = ctrl_ndot[order, :]
+
+        if ctrl_t.size >= 2:
+            keep = np.ones(ctrl_t.size, dtype=np.bool_)
+            for j in range(1, ctrl_t.size):
+                dt = ctrl_t[j] - ctrl_t[j - 1]
+                tol = 1.0e-12 * max(1.0, abs(ctrl_t[j]), abs(ctrl_t[j - 1]))
+                if dt <= tol:
+                    # Keep the most recent control sample at duplicate times.
+                    keep[j - 1] = False
+            ctrl_t = ctrl_t[keep]
+            ctrl_ndot = ctrl_ndot[keep, :]
 
         for isp, sp in enumerate(SPECIES):
-            Ndot_history[sp][i] = Ndot_i[isp]
-
-        sum_abs_terms_i = 0.0
-        n_total_i = 0.0
-        for isp, sp in enumerate(SPECIES):
-            if (not species_enabled[sp]) or idx_n_arr[isp] < 0:
-                continue
-            n_sp_i = float(y_i[idx_n_arr[isp]])
-            dn_sp_dt_i = float(dydt_i[idx_n_arr[isp]])
-            sum_abs_terms_i += abs(dn_sp_dt_i)
-            n_total_i += n_sp_i
-
-        sum_abs_dn_terms_history[i] = sum_abs_terms_i
-        n_total_history[i] = n_total_i
-
-        sum_dn_dt_history[i] = sum_dn_i
-        required_auto_total_history[i] = required_i
-        unmet_auto_total_history[i] = unmet_i
-
-    n_total_drift_history = n_total_history - n_total_history[0]
-    if n_total_history[0] != 0.0:
-        n_total_rel_drift_history = n_total_drift_history / n_total_history[0]
-    else:
-        n_total_rel_drift_history = np.full_like(n_total_drift_history, np.nan)
-
-    eps_res = np.finfo(float).eps
-    normalized_residual_history = sum_dn_dt_history / np.maximum(sum_abs_dn_terms_history, eps_res)
+            Ndot_inj_history[sp] = np.interp(t_array, ctrl_t, ctrl_ndot[:, isp])
 
     result: Dict[str, Any] = {
         "t": t_array,
+        "T_i": T_i_history,
         "t_startup": t_startup,
         "sol_success": bool(sol_success),
         "error": None if sol_success else error,
-        "sum_dn_dt": sum_dn_dt_history,
-        "required_auto_total": required_auto_total_history,
-        "unmet_auto_total": unmet_auto_total_history,
-        "normalized_residual": normalized_residual_history,
-        "n_total_rel_drift": n_total_rel_drift_history,
     }
 
     for sp in SPECIES:
         result[f"n_{sp}"] = data[(sp, "n")]
         result[f"N_ofc_{sp}"] = data[(sp, "ofc")]
         result[f"N_ifc_{sp}"] = data[(sp, "ifc")]
-        result[f"N_st_{sp}"] = data[(sp, "st")]
-        result[f"Ndot_{sp}"] = Ndot_history[sp]
+        result[f"N_stor_{sp}"] = data[(sp, "stor")]
+        result[f"Ndot_inj_{sp}"] = Ndot_inj_history[sp]
 
     return result

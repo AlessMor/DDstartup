@@ -29,6 +29,7 @@ from src.postprocessing.fit_ML_method import (
     plot_overfitting_diagnostics,
     train_model,
 )
+from src.postprocessing.plot_utils_functions import get_param_label
 
 
 def compute_1d_pdp(
@@ -254,13 +255,13 @@ def generate_ml_pairwise_plots(
     print(f"   Generating {len(pairs)} pairwise PDP plots...")
 
     # Use get_param_label with unit to get properly formatted label (unit already included)
-    target_label = registry.get_param_label(target, unit=target_unit) if registry is not None else target
+    target_label = get_param_label(target, registry=registry, unit=target_unit) if registry is not None else target
     # Also get symbol-only version for titles (without unit)
     target_symbol = registry.get_symbol(target) if registry is not None else target
     for pidx, (i, j) in enumerate(pairs, 1):
         pi, pj = usable[i], usable[j]
-        xi = registry.get_param_label(pi) if registry is not None else pi
-        xj = registry.get_param_label(pj) if registry is not None else pj
+        xi = get_param_label(pi, registry=registry) if registry is not None else pi
+        xj = get_param_label(pj, registry=registry) if registry is not None else pj
         try:
             gi, gj, Z = pairwise_pdp_grid(
                 model,
@@ -357,7 +358,7 @@ def generate_ml_pairwise_plots(
         bg1d = int(cfg.get("pdp1d_bg_samples", 500))
         print(f"   Generating 1D PDPs for {len(usable)} features (grid={g1d}, bg={bg1d})...")
         for fi, feat in enumerate(usable):
-            xi = registry.get_param_label(feat) if registry is not None else feat
+            xi = get_param_label(feat, registry=registry) if registry is not None else feat
             try:
                 grid, pdp_vals, pdp_std = compute_1d_pdp(
                     model,
@@ -393,7 +394,7 @@ def generate_ml_pairwise_plots(
         ice_samples = int(cfg.get("ice_n_samples", 200))
         print(f"   Generating ICE plots (grid={ice_grid}, samples={ice_samples})...")
         for fi, feat in enumerate(usable):
-            xi = registry.get_param_label(feat) if registry is not None else feat
+            xi = get_param_label(feat, registry=registry) if registry is not None else feat
             try:
                 grid, ice = compute_ice_curves(
                     model,

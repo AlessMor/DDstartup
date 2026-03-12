@@ -13,6 +13,7 @@ from matplotlib.patches import Patch
 from src.postprocessing.plot_utils_functions import (
     drop_near_constant,
     ensure_registry,
+    get_param_label,
     quartile_bins,
     quartile_colors,
     resolve_outdir_and_stem,
@@ -195,13 +196,11 @@ def quartile_probability_plot(
     axes = np.atleast_1d(axes).ravel()
 
     csv_rows = []
-    rpow = 9  # rounding precision for discrete grouping (kept for future use)
-
     for i, param in enumerate(varying):
         ax = axes[i]
 
         # get & clean label and unit up front
-        raw_label = getattr(registry, "get_param_label", lambda n, **k: n)(param) or ""
+        raw_label = get_param_label(param, registry=registry) or ""
         label0    = _clean_symbol_label(raw_label)  # keep $...$ for mathtext
         unit0     = getattr(registry, "get_unit",  lambda n, **k: None)(param) or ""
 
@@ -239,9 +238,6 @@ def quartile_probability_plot(
         p_unit  = _escape_dollars(unit_override or unit0)  # ESCAPE $ IN UNIT ONLY
 
         # ---------- choose representative x positions ----------
-        xr = np.round(xa, rpow)
-        _levels = np.unique(xr)  # currently unused but kept for possible future discrete logic
-
         uniq_vals = np.sort(np.unique(x_all[np.isfinite(x_all)]))
         if uniq_vals.size == 0:
             ax.set_visible(False)
@@ -475,7 +471,7 @@ def quartile_probability_plot(
         axes[j].set_visible(False)
 
     # figure title: clean mathtext for the target symbol; escape dollars in unit only
-    raw_tlabel = getattr(registry, "get_param_label", lambda n, **k: n)(target)
+    raw_tlabel = get_param_label(target, registry=registry)
     t_label = _strip_trailing_unit(_clean_symbol_label(raw_tlabel))
     t_unit  = _escape_dollars(target_unit or getattr(registry, "get_unit", lambda n, **k: None)(target) or "")
     title = f"P(quartile | parameter value) wrt {t_label if not t_unit else f'{t_label} [{t_unit}]'}"

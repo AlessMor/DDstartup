@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 
-from src.postprocessing.plot_utils_functions import ensure_registry, resolve_outdir_and_stem
+from src.postprocessing.plot_utils_functions import ensure_registry, get_param_label, resolve_outdir_and_stem
 from src.postprocessing.postprocess_functions import get_discrete_colorscale
 
 
@@ -39,7 +39,7 @@ def generate_parcoords_plot(
         target_unit: Unit string for target variable
         file_type: Type of file (for plot title)
         output_path: Path to save HTML plot file
-        registry: ParameterRegistry instance (optional, will create if not provided)
+        registry: Registry API module (optional, will use default if not provided)
         show_titles: If False, omit figure title
     """
     df_filtered = df_filtered if df is None else df
@@ -93,7 +93,7 @@ def generate_parcoords_plot(
         unique_vals = np.sort(np.unique(values))
         
         # Use symbol instead of parameter name - use HTML formatting for Plotly
-        param_label = registry.get_param_label(param, renderer='plotly')
+        param_label = get_param_label(param, registry=registry, renderer='plotly')
         # Add line break for parallel coords layout
         unit = registry.get_unit(param)
         label = param_label.replace(' [', '<br>[') if ' [' in param_label else param_label
@@ -105,7 +105,7 @@ def generate_parcoords_plot(
     
     # Add target dimension
     values = df_filtered[target]
-    target_label = registry.get_param_label(target, unit=target_unit, renderer='plotly')
+    target_label = get_param_label(target, registry=registry, unit=target_unit, renderer='plotly')
     target_label = target_label.replace(' [', '<br>[') if ' [' in target_label else target_label
     dimensions.append(dict(label=target_label, values=values, range=[values.min(), values.max()]))
     

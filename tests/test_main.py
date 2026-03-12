@@ -1,12 +1,12 @@
 """Integration tests for the main execution.
 
-These tests run the full parametric computation for both T_seeded and lump
-analysis types using the test parameter file located under `inputs/params_test.yaml`
-and the corresponding config files `parametric_tseeded` and `parametric_lump`.
+These tests run full parametric computations for both dd_startup_tseeded and
+dd_startup_lump analysis types using fixture parameter files and per-test
+temporary configs.
 
-The test checks:
+The tests check:
  - the main() function returns success (0)
- - a new HDF5 output file is created under `outputs/`
+ - a new HDF5 output file is created under a per-test temp output directory
  - the HDF5 file contains expected metadata and groups
  - at least one numeric output dataset contains finite (non-NaN) values
 
@@ -17,7 +17,6 @@ created output file.
 
 from pathlib import Path
 import sys
-import os
 import time
 import h5py
 import numpy as np
@@ -35,8 +34,7 @@ def _find_repo_root():
 	return Path(__file__).resolve().parents[2]
 
 
-def _latest_h5_in_outputs(repo_root, before_set=None):
-	outputs_dir = repo_root / 'outputs'
+def _latest_h5_in_dir(outputs_dir: Path, before_set=None):
 	pattern = 'ddstartup_*.h5'
 	candidates = list(outputs_dir.glob(f'**/{pattern}')) if outputs_dir.exists() else []
 	if before_set is not None:
@@ -44,6 +42,23 @@ def _latest_h5_in_outputs(repo_root, before_set=None):
 	if not candidates:
 		return None
 	return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def _write_parametric_config(config_path: Path, analysis_type: str, output_dir: Path) -> Path:
+	config_path.write_text(
+		f"""
+analysis_type: {analysis_type}
+method: parametric
+vector_length: 100
+max_simulation_time: 315360000
+n_jobs: 1
+chunk_size: 100
+batch_size: 50
+output_dir: {output_dir}
+verbose: true
+""".strip()
+	)
+	return config_path
 
 
 def _force_single_worker_defaults(monkeypatch):
@@ -69,11 +84,10 @@ def _force_single_worker_defaults(monkeypatch):
 
 
 def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
-	"""Run parametric T_seeded and lump analyses and validate outputs.
+	"""Run parametric dd_startup_tseeded and dd_startup_lump analyses and validate outputs.
 
-	Uses the parameters file name `params_test` (resolved by ddstartup) and the
-	config names `parametric_tseeded` and `parametric_lump` which exist under
-	`inputs/` in this repository.
+	Uses fixture parameter files and per-test temporary config files to avoid
+	writing into repository-level outputs.
 	"""
 
 	repo_root = _find_repo_root()
@@ -86,29 +100,33 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 	importlib.reload(mainmod)
 
 	configs = [
-		('params_test', 'parametric_tseeded', 'T_seeded'),
-		('params_test', 'parametric_lump', 'lump'),
+		(repo_root / 'tests' / 'fixtures' / 'params_test.yaml', 'dd_startup_tseeded', 'dd_startup_tseeded'),
+		(repo_root / 'tests' / 'fixtures' / 'params_test.yaml', 'dd_startup_lump', 'dd_startup_lump'),
 	]
 
-	for params_name, config_name, expected_analysis_type in configs:
-		# Record existing h5 files so we can detect newly created one
-		outputs_dir = repo_root / 'outputs'
+	for params_path, analysis_type, expected_analysis_type in configs:
+		outputs_dir = tmp_path / f"outputs_{analysis_type}"
+		config_path = _write_parametric_config(
+			tmp_path / f"config_{analysis_type}.yaml",
+			analysis_type=analysis_type,
+			output_dir=outputs_dir,
+		)
 		before = set(outputs_dir.glob('**/ddstartup_*.h5')) if outputs_dir.exists() else set()
 
 		# Build argv as the CLI would receive it
-		argv = ['ddstartup', params_name, config_name, '--verbose']
+		argv = ['ddstartup', str(params_path), str(config_path), '--verbose']
 		monkeypatch.setattr(sys, 'argv', argv)
 
 		# Run main (should return 0 on success)
 		ret = mainmod.main()
-		assert ret == 0, f"main() returned non-zero for {config_name}: {ret}"
+		assert ret == 0, f"main() returned non-zero for {analysis_type}: {ret}"
 
 		# Allow filesystem timestamp resolution
 		time.sleep(0.1)
 
 		# Find the newly created h5 file
-		h5_file = _latest_h5_in_outputs(repo_root, before_set=before)
-		assert h5_file is not None, "No new HDF5 output file found in outputs/"
+		h5_file = _latest_h5_in_dir(outputs_dir, before_set=before)
+		assert h5_file is not None, f"No new HDF5 output file found in {outputs_dir}"
 
 		# Basic structure checks
 		with h5py.File(h5_file, 'r') as f:
@@ -131,8 +149,7 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 			# --- Additional check: verify per-combination consistency ---
 			#  - Outputs must exist at root and contain finite numeric values
 			#  - If a field has aliases, ensure alias datasets (if present) match canonical
-			from src.utils.parameter_registry import get_registry
-			registry = get_registry()
+			from src.registry import parameter_registry as registry
 			input_names = registry.get_input_names(expected_analysis_type)
 			output_names = registry.get_output_names(expected_analysis_type)
 			all_fields = registry.get_all_field_names(expected_analysis_type)
@@ -169,6 +186,9 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 			# The key requirement is that:
 			# - At least one successful result exists (checked above)
 			# - The majority of results should be finite (>50% success rate is acceptable)
+			# For DD-startup presets, some multispecies-only outputs may legitimately be
+			# all-NaN (e.g. TBE for dd_startup_lump); skip the threshold for those.
+			params_schema = registry.PARAMETER_SCHEMA
 			success_rate_per_field = {}
 			for name in output_names:
 				assert name in f, f"Expected output field '{name}' missing in HDF5 root"
@@ -181,12 +201,13 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 					finite_count = np.sum(np.isfinite(arr))
 					total_count = arr.size
 					success_rate_per_field[name] = finite_count / total_count if total_count > 0 else 0.0
-					# Require at least 50% success rate for each field
-					# (some combinations fail due to edge-case parameter combinations)
-					assert success_rate_per_field[name] >= 0.5, (
-						f"Output '{name}' has only {success_rate_per_field[name]*100:.1f}% finite values "
-						f"({finite_count}/{total_count}), expected at least 50%"
-					)
+					# Only enforce threshold for fields tagged with this analysis type
+					field_types = params_schema.get(name, {}).get('analysis_types', [])
+					if expected_analysis_type in field_types:
+						assert success_rate_per_field[name] >= 0.5, (
+							f"Output '{name}' has only {success_rate_per_field[name]*100:.1f}% finite values "
+							f"({finite_count}/{total_count}), expected at least 50%"
+						)
 				elif ds.dtype.kind == 'b':
 					# Booleans: ensure they are boolean values (no NaNs)
 					arr = ds[:]
@@ -197,7 +218,6 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 					pass
 
 			# 3) Aliases: if alias dataset exists, ensure equality with canonical
-			params_schema = registry.parameters
 			for field in all_fields:
 				props = params_schema.get(field, {})
 				aliases = props.get('aliases', [])
@@ -227,7 +247,7 @@ def test_parametric_analyses_create_h5(tmp_path, monkeypatch):
 								f"Alias '{alias}' value mismatch at {idx}: {ali_ds[idx]} != {canon[idx]}"
 							)
 @pytest.mark.filterwarnings("ignore:This process.*is multi-threaded.*:DeprecationWarning")
-def test_tseeded_main_test_params(monkeypatch):
+def test_tseeded_main_test_params(tmp_path, monkeypatch):
 	"""Run complete T-seeded analysis with params_main_test.yaml and verify t_startup values.
 	
 	This test:
@@ -251,24 +271,19 @@ def test_tseeded_main_test_params(monkeypatch):
 	# Ensure reload to pick up any local edits
 	importlib.reload(mainmod)
 	
-	# Copy params_main_test.yaml from fixtures to inputs/ directory
-	fixtures_dir = repo_root / 'tests' / 'fixtures'
-	inputs_dir = repo_root / 'inputs'
-	test_params_src = fixtures_dir / 'params_main_test.yaml'
-	test_params_dest = inputs_dir / 'params_main_test.yaml'
-	
-	# Copy the file if it doesn't exist in inputs
-	if not test_params_dest.exists():
-		import shutil
-		shutil.copy(test_params_src, test_params_dest)
-	
+	test_params_path = repo_root / 'tests' / 'fixtures' / 'params_main_test.yaml'
+	outputs_dir = tmp_path / "outputs_tseeded_main_test"
+	config_path = _write_parametric_config(
+		tmp_path / "config_tseeded_main_test.yaml",
+		analysis_type="dd_startup_tseeded",
+		output_dir=outputs_dir,
+	)
+
 	# Record existing h5 files to detect new one
-	outputs_dir = repo_root / 'outputs'
 	before = set(outputs_dir.glob('**/ddstartup_*.h5')) if outputs_dir.exists() else set()
 	
 	# Build argv for T-seeded parametric analysis
-	# Using params_main_test and parametric_tseeded config
-	argv = ['ddstartup', 'params_main_test', 'parametric_tseeded', '--verbose']
+	argv = ['ddstartup', str(test_params_path), str(config_path), '--verbose']
 	monkeypatch.setattr(sys, 'argv', argv)
 	
 	# Run main
@@ -281,8 +296,8 @@ def test_tseeded_main_test_params(monkeypatch):
 	# Allow filesystem timestamp resolution
 	time.sleep(0.5)
 	
-	# Find the newly created h5 file (search recursively in outputs/)
-	h5_file = _latest_h5_in_outputs(repo_root, before_set=before)
+	# Find the newly created h5 file (search recursively in temp output folder)
+	h5_file = _latest_h5_in_dir(outputs_dir, before_set=before)
 	assert h5_file is not None, "No HDF5 output file found"
 	
 	# Verify this is a new file
@@ -300,7 +315,7 @@ def test_tseeded_main_test_params(monkeypatch):
 	with h5py.File(h5_file, 'r') as f:
 		# Verify analysis type
 		assert 'analysis_type' in f.attrs, "Missing analysis_type attribute"
-		assert f.attrs['analysis_type'] == 'T_seeded', f"Expected T_seeded, got {f.attrs['analysis_type']}"
+		assert f.attrs['analysis_type'] == 'dd_startup_tseeded', f"Expected dd_startup_tseeded, got {f.attrs['analysis_type']}"
 		
 		# Load V_plasma and t_startup datasets
 		assert 'V_plasma' in f, "V_plasma dataset not found in HDF5"

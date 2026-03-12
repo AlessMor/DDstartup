@@ -5,7 +5,6 @@ Expected call from dispatcher (kwargs filtered upstream):
 generate_shap_plots(
     df=..., target=..., inputs=..., target_unit=..., output_dir=...,
     file_type=..., plot_name_prefix=..., registry=..., shap_interpolate=...,
-    # extra kwargs ignored via **_
 )
 """
 
@@ -16,6 +15,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import Normalize
 import matplotlib.cm as cm
+from src.postprocessing.plot_utils_functions import get_param_label
 
 def generate_shap_plots(
     *,
@@ -161,7 +161,7 @@ def generate_shap_plots(
     ax.set_ylim(-0.8, n_features - 0.2)
 
     # Use get_param_label with unit for axis label (includes unit properly formatted)
-    tlabel = registry.get_param_label(target, unit=target_unit) if registry is not None else target
+    tlabel = get_param_label(target, registry=registry, unit=target_unit) if registry is not None else target
     tsymbol = registry.get_symbol(target) if registry is not None else target
     ax.set_xlabel(f"Impact on {tlabel} (correlation × standardized value)", fontsize=12)
     ax.axvline(0.0, color="#888888", lw=1.0, alpha=0.8)

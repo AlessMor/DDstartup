@@ -23,7 +23,7 @@ from src.physics.reactivity_functions import (
     sigmav_DT_BoschHale,
     sigmav_DD_BoschHale
 )
-from src.utils.units_and_constants import lambda_T, tritium_mass
+from src.registry.parameter_registry import lambda_T, tritium_mass
 
 
 @pytest.fixture
@@ -53,7 +53,7 @@ def default_params():
     )
     
     max_simulation_time = 10 * 365.25 * 24 * 3600  # s (10 years)
-    N_st_min = 0.001 / tritium_mass  # Minimum storage tritium
+    N_stor_min = 0.001 / tritium_mass  # Minimum storage tritium
     
     return {
         'V_plasma': V_plasma,
@@ -68,7 +68,7 @@ def default_params():
         'sigmav_DT': sigmav_DT,
         'injection_rate_max': injection_rate_max,
         'max_simulation_time': max_simulation_time,
-        'N_st_min': N_st_min
+        'N_stor_min': N_stor_min
     }
 
 
@@ -94,7 +94,7 @@ class TestODESystem:
             default_params['sigmav_DD_n'],
             default_params['sigmav_DT'],
             default_params['injection_rate_max'],
-            default_params['N_st_min']
+            default_params['N_stor_min']
         )
         
         assert result.shape == (4,), "ODE system should return 4-element array"
@@ -118,7 +118,7 @@ class TestODESystem:
             default_params['sigmav_DD_n'],
             default_params['sigmav_DT'],
             default_params['injection_rate_max'],
-            default_params['N_st_min']
+            default_params['N_stor_min']
         )
         
         # With zero tritium, should have production from DD reactions
@@ -129,7 +129,7 @@ class TestODESystem:
         """Test injection rate calculation in ODE system."""
         t = 0.0
         
-        # Case 1: N_st below threshold - no injection
+        # Case 1: N_stor below threshold - no injection
         y_low_storage = np.array([1e25, 1e24, 0.0, 1e19])
         result_low = ode_system(
             t, y_low_storage,
@@ -144,10 +144,10 @@ class TestODESystem:
             default_params['sigmav_DD_n'],
             default_params['sigmav_DT'],
             default_params['injection_rate_max'],
-            default_params['N_st_min']
+            default_params['N_stor_min']
         )
         
-        # Case 2: N_st above threshold - injection possible
+        # Case 2: N_stor above threshold - injection possible
         y_high_storage = np.array([1e25, 1e24, 1e24, 1e19])
         result_high = ode_system(
             t, y_high_storage,
@@ -162,7 +162,7 @@ class TestODESystem:
             default_params['sigmav_DD_n'],
             default_params['sigmav_DT'],
             default_params['injection_rate_max'],
-            default_params['N_st_min']
+            default_params['N_stor_min']
         )
         
         # With higher storage, dn_T/dt should be higher (more injection)
@@ -187,7 +187,7 @@ class TestODESystem:
             default_params['sigmav_DD_n'],
             default_params['sigmav_DT'],
             default_params['injection_rate_max'],
-            default_params['N_st_min']
+            default_params['N_stor_min']
         )
         
         # Total tritium change rate accounting for decay
@@ -366,7 +366,7 @@ class TestSolveODESystem:
         print(f"  tau_ifc: {params_150['tau_ifc']:.0f} s")
         print(f"  tau_ofc: {params_150['tau_ofc']:.0f} s")
         print(f"  sigmav_DT: {params_150['sigmav_DT']:.4e} m^3/s")
-        print(f"  N_st_min: {params_150.get('N_st_min', 'default')}")
+        print(f"  N_stor_min: {params_150.get('N_stor_min', 'default')}")
         
         print(f"\nCalculated injection_rate_max:")
         print(f"  V_plasma=150: {params_150['injection_rate_max']:.4e} atoms/s")

@@ -10,12 +10,3 @@ This package contains different sensitivity analysis and parameter exploration m
 from src.methods.parametric_computation import run_parametric_analysis, print_parametric_summary
 from src.methods.sobol_computation import run_sobol_analysis, print_sobol_summary
 from src.methods.elemeffects_computation import run_elementary_effects_analysis, print_elementary_effects_summary
-
-__all__ = [
-    'run_parametric_analysis',
-    'print_parametric_summary',
-    'run_sobol_analysis',
-    'print_sobol_summary',
-    'run_elementary_effects_analysis',
-    'print_elementary_effects_summary',
-]

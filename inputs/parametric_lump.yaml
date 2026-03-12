@@ -1,7 +1,7 @@
 # Configuration for parametric lump analysis
 
 # Analysis settings
-analysis_type: lump
+analysis_type: dd_startup_lump
 method: parametric
 
 

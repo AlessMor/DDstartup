@@ -1,4 +1,4 @@
-# Example parameter set for ddstartup multispecies solver
+# Example parameter set for ddstartup shared across multispecies/lump/T_seeded.
 
 parameters:
   # Generic/global parameters
@@ -27,152 +27,51 @@ parameters:
     value: 1.0
     unit: dimensionless
 
-  # Species-specific fuel-cycle and injection parameters
   species_params:
     D:
-      f_0:
-        type: scalar
-        value: 0.5
-      tau_p:
-        type: scalar
-        value: 5.0
-        unit: s
-      lambda_decay:
-        type: scalar
-        value: 0.0
-        unit: 1/s
-      tau_ifc:
-        type: scalar
-        value: 14400
-        unit: s
-      tau_ofc:
-        type: scalar
-        value: 7200
-        unit: s
-      N_st_min:
-        type: scalar
-        value: 0.0
-      Ndot_max:
-        type: scalar
-        value: inf
-        unit: 1/s
-      injection_mode:
-        type: scalar
-        value: auto
-      automatic_injection_weight:
-        type: scalar
-        value: 1.0
-      enable_plasma_channel:
-        type: scalar
-        value: true
+      f_0: {type: scalar, value: 0.5}
+      tau_p: {type: scalar, value: 5.0, unit: s}
+      lambda_decay: {type: scalar, value: 0.0, unit: 1/s}
+      tau_ifc: {type: scalar, value: 14400, unit: s}
+      tau_ofc: {type: scalar, value: 7200, unit: s}
+      N_ifc_0: {type: scalar, value: 0.0}
+      N_stor_0: {type: scalar, value: 0.0}
+      N_stor_min: {type: scalar, value: 0.0}
+      Ndot_max: {type: scalar, value: inf, unit: 1/s}
+      enable_plasma_channel: {type: scalar, value: true}
 
     T:
-      f_0:
-        type: scalar
-        value: 0.0
-      tau_p:
-        type: scalar
-        value: 5.0
-        unit: s
-      lambda_decay:
-        type: scalar
-        value: 1.782834e-09
-        unit: 1/s
-      tau_ifc:
-        type: scalar
-        value: 14400
-        unit: s
-      tau_ofc:
-        type: scalar
-        value: 7200
-        unit: s
-      N_st_min:
-        type: scalar
-        value: 1.996731e23
-      Ndot_max:
-        type: scalar
-        value: inf
-        unit: 1/s
-      injection_mode:
-        type: scalar
-        value: direct
-      automatic_injection_weight:
-        type: scalar
-        value: 1.0
-      enable_plasma_channel:
-        type: scalar
-        value: true
+      f_0: {type: scalar, value: 0.0}
+      tau_p: {type: scalar, value: 5.0, unit: s}
+      lambda_decay: {type: scalar, value: 1.782834e-09, unit: 1/s}
+      tau_ifc: {type: scalar, value: 14400, unit: s}
+      tau_ofc: {type: scalar, value: 7200, unit: s}
+      N_ifc_0: {type: scalar, value: 0.0}
+      N_stor_0: {type: scalar, value: 0.0}
+      N_stor_min: {type: scalar, value: 1.996731e23}
+      Ndot_max: {type: scalar, value: inf, unit: 1/s}
+      enable_plasma_channel: {type: scalar, value: true}
 
     He3:
-      f_0:
-        type: scalar
-        value: 0.5
-      tau_p:
-        type: scalar
-        value: 5.0
-        unit: s
-      lambda_decay:
-        type: scalar
-        value: 0.0
-        unit: 1/s
-      tau_ifc:
-        type: scalar
-        value: 28800
-        unit: s
-      tau_ofc:
-        type: scalar
-        value: 86400
-        unit: s
-      N_st_min:
-        type: scalar
-        value: 0.0
-      Ndot_max:
-        type: scalar
-        value: inf
-        unit: 1/s
-      injection_mode:
-        type: scalar
-        value: auto
-      automatic_injection_weight:
-        type: scalar
-        value: 1.0
-      enable_plasma_channel:
-        type: scalar
-        value: true
+      f_0: {type: scalar, value: 0.5}
+      tau_p: {type: scalar, value: 5.0, unit: s}
+      lambda_decay: {type: scalar, value: 0.0, unit: 1/s}
+      tau_ifc: {type: scalar, value: 28800, unit: s}
+      tau_ofc: {type: scalar, value: 86400, unit: s}
+      N_ifc_0: {type: scalar, value: 0.0}
+      N_stor_0: {type: scalar, value: 0.0}
+      N_stor_min: {type: scalar, value: 0.0}
+      Ndot_max: {type: scalar, value: inf, unit: 1/s}
+      enable_plasma_channel: {type: scalar, value: true}
 
     He4:
-      f_0:
-        type: scalar
-        value: 0.0
-      tau_p:
-        type: scalar
-        value: 5.0
-        unit: s
-      lambda_decay:
-        type: scalar
-        value: 0.0
-        unit: 1/s
-      tau_ifc:
-        type: scalar
-        value: 28800
-        unit: s
-      tau_ofc:
-        type: scalar
-        value: inf
-        unit: s
-      N_st_min:
-        type: scalar
-        value: 0.0
-      Ndot_max:
-        type: scalar
-        value: inf
-        unit: 1/s
-      injection_mode:
-        type: scalar
-        value: off
-      automatic_injection_weight:
-        type: scalar
-        value: 1.0
-      enable_plasma_channel:
-        type: scalar
-        value: true
+      f_0: {type: scalar, value: 0.0}
+      tau_p: {type: scalar, value: 5.0, unit: s}
+      lambda_decay: {type: scalar, value: 0.0, unit: 1/s}
+      tau_ifc: {type: scalar, value: 28800, unit: s}
+      tau_ofc: {type: scalar, value: inf, unit: s}
+      N_ifc_0: {type: scalar, value: 0.0}
+      N_stor_0: {type: scalar, value: 0.0}
+      N_stor_min: {type: scalar, value: 0.0}
+      Ndot_max: {type: scalar, value: inf, unit: 1/s}
+      enable_plasma_channel: {type: scalar, value: true}

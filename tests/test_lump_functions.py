@@ -22,7 +22,7 @@ from src.physics.reactivity_functions import (
     sigmav_DD_BoschHale,
     sigmav_DHe3_BoschHale
 )
-from src.utils.units_and_constants import lambda_T, tritium_mass
+from src.registry.parameter_registry import lambda_T, tritium_mass
 
 
 @pytest.fixture

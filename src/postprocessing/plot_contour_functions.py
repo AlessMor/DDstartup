@@ -15,8 +15,12 @@ from matplotlib.ticker import FuncFormatter
 from scipy.interpolate import griddata
 import itertools, math
 
-from src.postprocessing.plot_utils_functions import resolve_outdir_and_stem, select_scalar_numeric
-from src.utils.parameter_registry import get_registry
+from src.postprocessing.plot_utils_functions import (
+    ensure_registry,
+    get_param_label,
+    resolve_outdir_and_stem,
+    select_scalar_numeric,
+)
 
 def _format_scientific(x, pos=None):
     """Format numbers with 2 significant figures in clean scientific notation."""
@@ -65,7 +69,7 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
     outputs_dir = Path(outputs_dir)
     outputs_dir.mkdir(parents=True, exist_ok=True)
     
-    registry = get_registry()
+    registry = ensure_registry()
 
     if x not in df.columns or y not in df.columns or target not in df.columns:
         raise ValueError('Required columns missing')
@@ -88,7 +92,7 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         cp = ax.contourf(X, Y, Z, cmap='viridis')
         
         # Colorbar with custom formatter for clean scientific notation
-        cbar_label = registry.get_param_label(target, use_symbol=True)
+        cbar_label = get_param_label(target, registry=registry, use_symbol=True)
         cbar = plt.colorbar(cp, ax=ax, format=FuncFormatter(_format_scientific))
         cbar.set_label(cbar_label, fontsize=10)
         cbar.ax.tick_params(labelsize=8)
@@ -101,8 +105,8 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
             ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
-        x_label = registry.get_param_label(x)
-        y_label = registry.get_param_label(y)
+        x_label = get_param_label(x, registry=registry)
+        y_label = get_param_label(y, registry=registry)
         ax.set_xlabel(x_label, fontsize=10)
         ax.set_ylabel(y_label, fontsize=10)
         
@@ -117,7 +121,7 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
         pivot = df.pivot_table(index=y, columns=x, values=target, aggfunc='mean')
         
         # Heatmap with custom formatter for clean scientific notation
-        cbar_label = registry.get_param_label(target, use_symbol=True)
+        cbar_label = get_param_label(target, registry=registry, use_symbol=True)
         sns.heatmap(pivot, cmap='viridis', 
                    cbar_kws={'label': cbar_label, 'format': FuncFormatter(_format_scientific)},
                    fmt='.2g', ax=ax)
@@ -130,8 +134,8 @@ def plot_2d_cell_mean_heatmap(df, x, y, target, outputs_dir, plot_name=None, int
             ax.set_title(title, fontsize=12)
         
         # Axis labels with symbols
-        x_label = registry.get_param_label(x)
-        y_label = registry.get_param_label(y)
+        x_label = get_param_label(x, registry=registry)
+        y_label = get_param_label(y, registry=registry)
         ax.set_xlabel(x_label, fontsize=10)
         ax.set_ylabel(y_label, fontsize=10)
         ax.tick_params(labelsize=10)
@@ -172,7 +176,7 @@ def plot_interactive_pairwise_contours(
         target: Target variable name
         outputs_dir: Output directory for HTML file
         plot_name: Optional custom plot name
-        registry: ParameterRegistry instance (optional, will create if not provided)
+        registry: Registry API module (optional, will use default if not provided)
         
     Returns:
         Path to saved HTML file
@@ -180,10 +184,7 @@ def plot_interactive_pairwise_contours(
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     
-    # Get registry if not provided
-    if registry is None:
-        from src.utils.parameter_registry import get_registry
-        registry = get_registry()
+    registry = ensure_registry(registry)
     
     outdir, stem = resolve_outdir_and_stem(
         output_dir=output_dir,
@@ -206,9 +207,9 @@ def plot_interactive_pairwise_contours(
     y_param = inputs_present[1]
     
     # Get initial labels for Plotly
-    x_init = registry.get_param_label(x_param, renderer='plotly')
-    y_init = registry.get_param_label(y_param, renderer='plotly')
-    target_lbl = registry.get_param_label(target, renderer='plotly')
+    x_init = get_param_label(x_param, registry=registry, renderer='plotly')
+    y_init = get_param_label(y_param, registry=registry, renderer='plotly')
+    target_lbl = get_param_label(target, registry=registry, renderer='plotly')
     
     # Create initial heatmap
     pivot = df.pivot_table(index=y_param, columns=x_param, values=target, aggfunc='mean')
@@ -267,9 +268,9 @@ def plot_interactive_pairwise_contours(
     for x_p, y_p in combo_list:
         key = f'{x_p}_{y_p}'
         # Get formatted labels for Plotly
-        x_label = registry.get_param_label(x_p, renderer='plotly')
-        y_label = registry.get_param_label(y_p, renderer='plotly')
-        target_label = registry.get_param_label(target, renderer='plotly')
+        x_label = get_param_label(x_p, registry=registry, renderer='plotly')
+        y_label = get_param_label(y_p, registry=registry, renderer='plotly')
+        target_label = get_param_label(target, registry=registry, renderer='plotly')
         button = dict(
             label=f'{x_label} vs {y_label}',
             method='update',

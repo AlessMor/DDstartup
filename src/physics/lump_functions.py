@@ -1,8 +1,16 @@
+"""Legacy lump model solver.
+
+.. deprecated::
+    The main pipeline now routes all analysis types (including ``lump``)
+    through the unified multispecies ODE solver
+    (:func:`~src.physics.multispecies_functions.solve_multispecies_ode_system`).
+    This module is retained only as a reference implementation for unit tests.
+"""
 import numpy as np
 from typing import Dict, Tuple
 from numba import njit
-from src.utils.units_and_constants import *
-from src.utils.parameter_registry import get_registry
+from src.registry.parameter_registry import lambda_T, tritium_mass
+from src.registry.parameter_registry import make_result_dict
 
 @njit(cache=True)
 def lump_numba(
@@ -212,8 +220,7 @@ def lump_solver(
         else:
             error = f"Solution violates physical constraints: n_T={n_T:.2e}, n_D={n_D:.2e}, n_He3={n_He3:.2e}, t_startup={t_startup:.2e}s"
     
-    registry = get_registry()
-    return registry.make_result_dict({
+    return make_result_dict({
         'n_T': float(n_T),
         'n_D': float(n_D),
         'n_He3': float(n_He3),

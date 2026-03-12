@@ -1,15 +1,7 @@
 import numpy as np
 from numpy import float64
 from numpy.typing import NDArray
-
-
-def _zeros_like_temperature_input(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
-    """Return zeros matching scalar/array shape of temperature input."""
-    arr = np.asarray(ion_temp_profile, dtype=np.float64)
-    if arr.ndim == 0:
-        return float64(0.0)
-    return np.zeros_like(arr, dtype=np.float64)
-
+from scipy.constants import N_A, elementary_charge, Boltzmann
 
 def sigmav_DT_BoschHale(ion_temp_profile: float64) -> float64:
     r"""Deuterium-Tritium reaction.
@@ -146,36 +138,146 @@ def sigmav_DHe3_BoschHale(ion_temp_profile: float64) -> float64:
 
     return sigmav*1e-6  # [m^3/s]
 
+def sigmav_TT_CF88(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
+    r"""Tritium-Tritium reaction.
 
-def sigmav_TT_placeholder(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
-    r"""Placeholder reactivity for T + T -> 4He + 2n.
+    Calculate :math:`\langle \sigma v \rangle` for a given characteristic ion energy using Caughlan & Fowler 1988 method.
 
-    Returns zero for all temperatures. This is intentionally a placeholder API
-    so TT channels can be wired in higher-level solvers without changing model
-    structure when a validated parametrization is added later.
+    Formulation from :cite:`caughlan_nuclear_1988`.
+
+    Args:
+        ion_temp_profile: ion temperature profile [keV], scalar or array-like
+
+    Returns:
+        :math:`\langle \sigma v \rangle` in m^3/s, scalar or array matching input shape
     """
-    return _zeros_like_temperature_input(ion_temp_profile)
+    # Q = 11.332 MeV
+    # Na*sigmav = 1.67e9/T923*exp(-4.872/T913)*(1+0.086*T913-0.455*T923-0.272*T9+0.148*T943+0.225*T953)
+    # where T9: ion_temp_profile in units of 10^9 K
+    # T9nm: notation for (T9)^(n/m)
+    
+    # Convert ion_temp_profile from keV to T9 (10^9 K)
+    T9 = ion_temp_profile*1e3 / (Boltzmann / elementary_charge) / 1e9 
 
+    # Compute the sigmav value using the CF88 formulation
+    sigmav = 1/N_A * 1.67e9 / (T9**(2/3)) * np.exp(-4.872 / (T9**(1/3))) * (1 + 0.086 * (T9**(1/3)) - 0.455 * (T9**(2/3)) - 0.272 * T9 + 0.148 * (T9**(4/3)) + 0.225 * (T9**(5/3)))
+    # NOTE: The original CF88 formula gives Na*sigmav, so we divide by Avogadro's number (N_A) to get sigmav in cm^3/s.
+    # it is then converted to m^3/s by multiplying by 1e-6.
+    return sigmav*1e-6  # [m^3/s]
 
-def sigmav_He3He3_placeholder(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
-    r"""Placeholder reactivity for 3He + 3He fusion channels.
+def sigmav_He3He3_CF88(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
+    r"""Helium-3 + Helium-3 reaction.
 
-    Returns zero for all temperatures.
+    Calculate :math:`\langle \sigma v \rangle` for a given characteristic ion energy using Caughlan & Fowler 1988 method.
+
+    Formulation from :cite:`caughlan_nuclear_1988`.
+
+    Args:
+        ion_temp_profile: ion temperature profile [keV], scalar or array-like
+    Returns:
+        :math:`\langle \sigma v \rangle` in m^3/s, scalar or array matching input shape
     """
-    return _zeros_like_temperature_input(ion_temp_profile)
+    # Q = 12.860 MeV
+    # Na*sigmav = 6.04e10/T923*exp(-12.276/T913)*(1+0.034*T913-0.522*T923-0.124*T9+0.353*T943+0.213*T953)
+    # where T9: ion_temp_profile in units of 10^9 K
+    # T9nm: notation for (T9)^(n/m)
+    
+    # Convert ion_temp_profile from keV to T9 (10^9 K)
+    T9 = ion_temp_profile*1e3 / (Boltzmann / elementary_charge) / 1e9 
 
+    # Compute the sigmav value using the CF88 formulation
+    sigmav = 1/N_A * 6.04e10 / (T9**(2/3)) * np.exp(-12.276 / (T9**(1/3))) * (1 + 0.034 * (T9**(1/3)) - 0.522 * (T9**(2/3)) - 0.124 * T9 + 0.353 * (T9**(4/3)) + 0.213 * (T9**(5/3)))
+    # NOTE: The original CF88 formula gives Na*sigmav, so we divide by Avogadro's number (N_A) to get sigmav in cm^3/s.
+    # it is then converted to m^3/s by multiplying by 1e-6.
+    return sigmav*1e-6  # [m^3/s]
 
-def sigmav_THe3_placeholder(
+def sigmav_THe3_D_CF88(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
+    r"""T + 3He -> 4He + D reaction.
+
+    Calculate :math:`\langle \sigma v \rangle` for a given characteristic ion energy using Caughlan & Fowler 1988 method.
+
+    Formulation from :cite:`caughlan_nuclear_1988`.
+
+    Args:
+        ion_temp_profile: ion temperature profile [keV], scalar or array-like
+    Returns:
+        :math:`\langle \sigma v \rangle` in m^3/s, scalar or array matching input shape
+    """
+    # Q = 14.320 MeV
+    # Na*sigmav = 5.46e09*T9A56/T932*exp(-7.733/T9A13)
+    # T9: ion_temp_profile in units of 10^9 K
+    # T9A = T9/(1+0.128*T9)
+    T9 = ion_temp_profile*1e3 / (Boltzmann / elementary_charge) / 1e9  # Convert ion_temp_profile from keV to T9 (10^9 K)
+    T9A = T9 / (1 + 0.128 * T9)
+    sigmav = 1/N_A * 5.46e09 * (T9A**(5/6)) / (T9**(3/2)) * np.exp(-7.733 / T9A)
+    # NOTE: The original CF88 formula gives Na*sigmav, so we divide by Avogadro's number (N_A) to get sigmav in cm^3/s.
+    # it is then converted to m^3/s by multiplying by 1e-6.
+    return sigmav*1e-6  # [m^3/s]
+
+def sigmav_THe3_np_CF88(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
+    r"""T + 3He -> 4He + n + p reaction.
+
+    Calculate :math:`\langle \sigma v \rangle` for a given characteristic ion energy using Caughlan & Fowler 1988 method.
+
+    Formulation from :cite:`caughlan_nuclear_1988`.
+
+    Args:
+        ion_temp_profile: ion temperature profile [keV], scalar or array-like
+    Returns:
+        :math:`\langle \sigma v \rangle` in m^3/s, scalar or array matching input shape
+    """
+    # Q = 12.096 MeV
+    # Na*sigmav = 7.71e09*T9A56/T932*exp(-7.733/T9A13)
+    # T9: ion_temp_profile in units of 10^9 K
+    # T9A = T9/(1+0.115*T9)
+    T9 = ion_temp_profile*1e3 / (Boltzmann / elementary_charge) / 1e9  # Convert ion_temp_profile from keV to T9 (10^9 K)
+    T9A = T9 / (1 + 0.115 * T9)
+    sigmav = 1/N_A * 7.71e09 * (T9A**(5/6)) / (T9**(3/2)) * np.exp(-7.733 / T9A)
+    # NOTE: The original CF88 formula gives Na*sigmav, so we divide by Avogadro's number (N_A) to get sigmav in cm^3/s.
+    # it is then converted to m^3/s by multiplying by 1e-6.
+    return sigmav*1e-6  # [m^3/s]
+
+def sigmav_THe3_He5p(ion_temp_profile: float64 | NDArray[np.float64]) -> float64 | NDArray[np.float64]:
+    r"""T + 3He -> 5He + p reaction.
+
+    Calculate :math:`\langle \sigma v \rangle` for a given characteristic ion energy.
+
+    This is a placeholder function that returns zero for all temperatures, as
+    this channel is not expected to contribute significantly to overall fusion
+    reactivity. This is intentionally a placeholder API so T+3He channels can
+    be wired in higher-level solvers without changing model structure when a
+    validated parametrization is added later.
+
+    Args:
+        ion_temp_profile: ion temperature profile [keV], scalar or array-like
+    Returns:
+        :math:`\langle \sigma v \rangle` in m^3/s (currently zero for all temperatures), scalar or array matching input shape
+    """
+    arr = np.asarray(ion_temp_profile, dtype=np.float64)
+    if arr.ndim == 0:
+        return float64(0.0)
+    return np.zeros_like(arr, dtype=np.float64)  # [m^3/s]
+
+def sigmav_THe3_CF88(
     ion_temp_profile: float64 | NDArray[np.float64],
 ) -> tuple[float64 | NDArray[np.float64], float64 | NDArray[np.float64], float64 | NDArray[np.float64]]:
-    r"""Placeholder reactivities for the three T + 3He branches.
+    r"""Reactivities for the three T + 3He branches using Caughlan & Fowler 1988 method.
 
     Branches exposed as separate channels:
-    1) T + 3He -> 4He + p + n  (nominal 51%)
-    2) T + 3He -> 4He + D      (nominal 43%)
-    3) T + 3He -> 5He + p      (nominal 6%)
+    1) T + 3He -> 4He + p + n  (ch1, nominal 51%)
+    2) T + 3He -> 4He + D      (ch2, nominal 43%)
+    3) T + 3He -> 5He + p      (ch3, nominal 6%)
 
-    Returns zeros for all temperatures and channels.
+    Formulation from :cite:`caughlan_nuclear_1988`.
+
+    Args:
+        ion_temp_profile: Ion temperature (keV), scalar or array-like.
+
+    Returns:
+        Tuple of three reactivity channels (ch1, ch2, ch3) in m^3/s, matching the scalar-vs-array shape
+        pattern of ``ion_temp_profile``.
     """
-    zeros = _zeros_like_temperature_input(ion_temp_profile)
-    return zeros, zeros, zeros
+    ch1 = sigmav_THe3_np_CF88(ion_temp_profile)
+    ch2 = sigmav_THe3_D_CF88(ion_temp_profile)
+    ch3 = sigmav_THe3_He5p(ion_temp_profile)
+    return ch1, ch2, ch3

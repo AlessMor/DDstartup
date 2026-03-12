@@ -7,11 +7,120 @@ power and energy metrics from both lump and T-seeded solver outputs.
 
 import numpy as np
 from numba import njit
-from src.utils.units_and_constants import E_DDn, E_DDp, E_DT, E_DHe3
-from src.utils.tools import trapz_numba
+from src.registry.parameter_registry import REACTION_ENERGY_BY_CHANNEL
 from src.physics.radiation import (
     calculate_total_radiation_power
 )
+
+E_DDp = float(REACTION_ENERGY_BY_CHANNEL["sigmav_DD_p"])
+E_DDn = float(REACTION_ENERGY_BY_CHANNEL["sigmav_DD_n"])
+E_DT = float(REACTION_ENERGY_BY_CHANNEL["sigmav_DT"])
+E_DHe3 = float(REACTION_ENERGY_BY_CHANNEL["sigmav_DHe3"])
+E_TT = float(REACTION_ENERGY_BY_CHANNEL["sigmav_TT"])
+E_He3He3 = float(REACTION_ENERGY_BY_CHANNEL["sigmav_He3He3"])
+E_THe3_ch1 = float(REACTION_ENERGY_BY_CHANNEL["sigmav_THe3_ch1"])
+E_THe3_ch2 = float(REACTION_ENERGY_BY_CHANNEL["sigmav_THe3_ch2"])
+E_THe3_ch3 = float(REACTION_ENERGY_BY_CHANNEL["sigmav_THe3_ch3"])
+
+
+@njit(cache=True, fastmath=True)
+def _compute_fusion_power_profiles_numba(
+    n_D,
+    n_T,
+    n_He3,
+    n_tot,
+    V_plasma,
+    sigmav_DD_p,
+    sigmav_DD_n,
+    sigmav_DT,
+    sigmav_DHe3,
+    sigmav_TT,
+    sigmav_He3He3,
+    sigmav_THe3_ch1,
+    sigmav_THe3_ch2,
+    sigmav_THe3_ch3,
+):
+    """Compute channel-resolved fusion power profiles for all timeline points.
+
+    Args:
+        n_D: Deuterium density profile in m^-3.
+        n_T: Tritium density profile in m^-3.
+        n_He3: Helium-3 density profile in m^-3.
+        n_tot: Total plasma density in m^-3.
+        V_plasma: Plasma volume in m^3.
+        sigmav_DD_p: DDp reactivity in m^3/s.
+        sigmav_DD_n: DDn reactivity in m^3/s.
+        sigmav_DT: DT reactivity in m^3/s.
+        sigmav_DHe3: DHe3 reactivity in m^3/s.
+        sigmav_TT: TT reactivity in m^3/s.
+        sigmav_He3He3: He3He3 reactivity in m^3/s.
+        sigmav_THe3_ch1: THe3 branch-1 reactivity in m^3/s.
+        sigmav_THe3_ch2: THe3 branch-2 reactivity in m^3/s.
+        sigmav_THe3_ch3: THe3 branch-3 reactivity in m^3/s.
+
+    Returns:
+        Tuple of per-channel fusion power arrays (W) plus scalar DT-equilibrium
+        power ``P_DT_eq``.
+    """
+    n = n_D.size
+    P_DDn = np.empty(n, dtype=np.float64)
+    P_DDp = np.empty(n, dtype=np.float64)
+    P_DT = np.empty(n, dtype=np.float64)
+    P_DHe3 = np.empty(n, dtype=np.float64)
+    P_TT = np.empty(n, dtype=np.float64)
+    P_He3He3 = np.empty(n, dtype=np.float64)
+    P_THe3_ch1 = np.empty(n, dtype=np.float64)
+    P_THe3_ch2 = np.empty(n, dtype=np.float64)
+    P_THe3_ch3 = np.empty(n, dtype=np.float64)
+
+    half_sigmav_DD_n = 0.5 * sigmav_DD_n
+    half_sigmav_DD_p = 0.5 * sigmav_DD_p
+    half_sigmav_TT = 0.5 * sigmav_TT
+    half_sigmav_He3He3 = 0.5 * sigmav_He3He3
+
+    V_E_DDn = V_plasma * E_DDn
+    V_E_DDp = V_plasma * E_DDp
+    V_E_DT = V_plasma * E_DT
+    V_E_DHe3 = V_plasma * E_DHe3
+    V_E_TT = V_plasma * E_TT
+    V_E_He3He3 = V_plasma * E_He3He3
+    V_E_THe3_ch1 = V_plasma * E_THe3_ch1
+    V_E_THe3_ch2 = V_plasma * E_THe3_ch2
+    V_E_THe3_ch3 = V_plasma * E_THe3_ch3
+
+    for i in range(n):
+        nd = n_D[i]
+        nt = n_T[i]
+        n3 = n_He3[i]
+        nd2 = nd * nd
+        nt2 = nt * nt
+        n32 = n3 * n3
+        nt_n3 = nt * n3
+
+        P_DDn[i] = nd2 * half_sigmav_DD_n * V_E_DDn
+        P_DDp[i] = nd2 * half_sigmav_DD_p * V_E_DDp
+        P_DT[i] = nd * nt * sigmav_DT * V_E_DT
+        P_DHe3[i] = nd * n3 * sigmav_DHe3 * V_E_DHe3
+        P_TT[i] = nt2 * half_sigmav_TT * V_E_TT
+        P_He3He3[i] = n32 * half_sigmav_He3He3 * V_E_He3He3
+        P_THe3_ch1[i] = nt_n3 * sigmav_THe3_ch1 * V_E_THe3_ch1
+        P_THe3_ch2[i] = nt_n3 * sigmav_THe3_ch2 * V_E_THe3_ch2
+        P_THe3_ch3[i] = nt_n3 * sigmav_THe3_ch3 * V_E_THe3_ch3
+
+    P_DT_eq = 0.25 * n_tot * n_tot * sigmav_DT * V_E_DT
+
+    return (
+        P_DDn,
+        P_DDp,
+        P_DT,
+        P_DHe3,
+        P_TT,
+        P_He3He3,
+        P_THe3_ch1,
+        P_THe3_ch2,
+        P_THe3_ch3,
+        P_DT_eq,
+    )
 
 
 @njit(cache=True, fastmath=True)
@@ -21,32 +130,22 @@ def calculate_P_aux_from_power_balance(
     tau_E, n_He3=0.0,
     Z_eff=1
 ):
-    """
-    Calculate required auxiliary heating power from power balance.
-    
-    P_aux = P_rad + P_confinement - P_charged
-    
-    where:
-    - P_rad = P_brem + P_line + P_synch (radiation losses)
-    - P_confinement = 3*n*T*V/tau_E (energy confinement loss)
-    - P_charged = power from charged fusion products (He3 from DDn, p from DDp, alpha from DT)
-    
+    """Compute required auxiliary heating power from a simple power balance.
+
     Args:
-        n_T: Tritium density (m⁻³)
-        n_D: Deuterium density (m⁻³)
-        T_i: Ion temperature (keV)
-        V_plasma: Plasma volume (m³)
-        sigmav_DD_p, sigmav_DD_n: DD reaction rates (m³/s)
-        sigmav_DT: DT reaction rate (m³/s)
-        tau_E: Energy confinement time (s)
-        Z_eff: Effective charge (default 1)
-        
+        n_T: Tritium density in m^-3.
+        n_D: Deuterium density in m^-3.
+        T_i: Ion temperature in keV.
+        V_plasma: Plasma volume in m^3.
+        sigmav_DD_p: DDp reactivity in m^3/s.
+        sigmav_DD_n: DDn reactivity in m^3/s.
+        sigmav_DT: DT reactivity in m^3/s.
+        tau_E: Energy confinement time in s.
+        n_He3: Helium-3 density in m^-3.
+        Z_eff: Effective ion charge.
+
     Returns:
-        float: P_aux in Watts (minimum 0)
-        
-    Notes:
-        Used by both lump and T-seeded analyses when P_aux is not specified.
-        Negative P_aux (self-heating plasma) is clipped to 0.
+        Auxiliary heating power in W, clipped to be non-negative.
     """
     # Calculate radiation power (returns tuple: (P_total, P_brems, P_line, P_sync))
     P_rad, _, _, _ = calculate_total_radiation_power(n_e = n_T+n_D+n_He3, T_e=T_i, Z_eff=Z_eff, V_plasma=V_plasma)
@@ -84,229 +183,164 @@ def calculate_P_aux_from_power_balance(
 
 
 @njit(cache=True, fastmath=True)
-def compute_fusion_powers(n_D, n_T, n_tot, V_plasma, 
-                          sigmav_DD_p, sigmav_DD_n, sigmav_DT,
-                          n_He3=0.0, sigmav_DHe3=0.0):
-    """
-    JIT-compiled core function to compute fusion powers from densities.
-    
-    Optimized with fastmath for both scalar and array inputs.
-    Works for both lump (scalar) and T-seeded (array) analyses.
-    
+def _sum_fusion_channels_numba(
+    P_DDn,
+    P_DDp,
+    P_DT,
+    P_DHe3,
+    P_TT,
+    P_He3He3,
+    P_THe3_ch1,
+    P_THe3_ch2,
+    P_THe3_ch3,
+):
+    """Sum all channel-resolved fusion power profiles.
+
     Args:
-        n_D: Deuterium density (m⁻³) - scalar or array
-        n_T: Tritium density (m⁻³) - scalar or array
-        n_tot: Total density (m⁻³) - scalar
-        V_plasma: Plasma volume (m³) - scalar
-        sigmav_DD_p, sigmav_DD_n, sigmav_DT: Reaction rates (m³/s) - scalars
-        n_He3: Helium-3 density (m⁻³) - scalar or array (default 0.0)
-        sigmav_DHe3: DHe3 reaction rate (m³/s) - scalar (default 0.0)
-        
+        P_DDn: DDn channel power profile in W.
+        P_DDp: DDp channel power profile in W.
+        P_DT: DT channel power profile in W.
+        P_DHe3: DHe3 channel power profile in W.
+        P_TT: TT channel power profile in W.
+        P_He3He3: He3He3 channel power profile in W.
+        P_THe3_ch1: THe3 channel-1 power profile in W.
+        P_THe3_ch2: THe3 channel-2 power profile in W.
+        P_THe3_ch3: THe3 channel-3 power profile in W.
+
     Returns:
-        tuple: (P_DDn, P_DDp, P_DT, P_DHe3, P_DT_eq) in Watts
-            - P_DDn, P_DDp, P_DT, P_DHe3: Can be scalar or array
-            - P_DT_eq: Always scalar (equilibrium reference)
-            
-    Notes:
-        - For T-seeded analysis: pass n_He3=0.0 (default) to skip DHe3
-        - For lump analysis: pass actual n_He3 and sigmav_DHe3 values
+        Total fusion power profile in W.
     """
-    # Pre-compute common terms
-    half_sigmav_DD_n = 0.5 * sigmav_DD_n
-    half_sigmav_DD_p = 0.5 * sigmav_DD_p
-    n_D_squared = n_D * n_D
-    n_D_n_T = n_D * n_T
-    
-    # Pre-multiply volume and energy terms (constants)
-    V_E_DDn = V_plasma * E_DDn
-    V_E_DDp = V_plasma * E_DDp
-    V_E_DT = V_plasma * E_DT
-    V_E_DHe3 = V_plasma * E_DHe3
-    
-    # Calculate fusion powers
-    P_DDn = n_D_squared * half_sigmav_DD_n * V_E_DDn
-    P_DDp = n_D_squared * half_sigmav_DD_p * V_E_DDp
-    P_DT = n_D_n_T * sigmav_DT * V_E_DT
-    P_DHe3 = n_D * n_He3 * sigmav_DHe3 * V_E_DHe3
-    
-    # DT equilibrium power (50-50 mixture, always scalar)
-    P_DT_eq = 0.25 * n_tot * n_tot * sigmav_DT * V_E_DT
-    
-    return P_DDn, P_DDp, P_DT, P_DHe3, P_DT_eq
+    n = P_DDn.size
+    out = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        out[i] = (
+            P_DDn[i]
+            + P_DDp[i]
+            + P_DT[i]
+            + P_DHe3[i]
+            + P_TT[i]
+            + P_He3He3[i]
+            + P_THe3_ch1[i]
+            + P_THe3_ch2[i]
+            + P_THe3_ch3[i]
+        )
+    return out
+
+@njit(cache=True, fastmath=True)
+def _compute_tbe_from_ndot_numba(n_D, n_T, sigmav_DT, V_plasma, Ndot_T, N_stor_T, N_stor_min_T):
+    """Compute TBE profile from explicit tritium injection-rate history.
+
+    Args:
+        n_D: Deuterium density profile in m^-3.
+        n_T: Tritium density profile in m^-3.
+        sigmav_DT: DT reactivity in m^3/s.
+        V_plasma: Plasma volume in m^3.
+        Ndot_T: Tritium injection-rate profile in atoms/s.
+        N_stor_T: Tritium storage inventory profile in atoms.
+        N_stor_min_T: Minimum storage threshold in atoms.
+
+    Returns:
+        TBE profile with ``np.nan`` where tritium injection is unavailable.
+    """
+    n = n_D.size
+    out = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        if Ndot_T[i] > 0.0:
+            out[i] = (n_D[i] * n_T[i] * sigmav_DT * V_plasma) / Ndot_T[i]
+        else:
+            out[i] = np.nan
+    return out
 
 
 @njit(cache=True, fastmath=True)
-def compute_lump_powers_and_energies(
-    n_T, n_D, n_He3, t_startup,
-    V_plasma, sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3,
-    P_aux, P_aux_DT_eq
-):
-    """
-    Compute fusion powers and energies for lump analysis (steady-state).
-    
-    Uses JIT-compiled core function for power calculations, then applies
-    steady-state energy calculation (power × time). Includes DHe3 reaction.
-    
-    Args:
-        n_T: Steady-state tritium density (m⁻³)
-        n_D: Steady-state deuterium density (m⁻³)
-        n_He3: Steady-state helium-3 density (m⁻³)
-        t_startup: Startup time (s)
-        V_plasma: Plasma volume (m³)
-        sigmav_DD_p, sigmav_DD_n, sigmav_DT, sigmav_DHe3: Reaction rates (m³/s)
-        P_aux: Auxiliary heating power during DD startup (W)
-        P_aux_DT_eq: Auxiliary power for DT equilibrium (W)
-        
-    Returns:
-        dict: Power and energy metrics
-            - P_DDn, P_DDp, P_DT, P_DT_eq: Fusion powers (W)
-            - P_fusion_total: Total fusion power (W)
-            - E_fusion_DD: Total DD fusion energy (J)
-            - E_fusion_DT_eq: DT equilibrium fusion energy (J)
-            - E_aux_DD: Auxiliary energy during DD startup (J)
-            - E_aux_DT_eq: Auxiliary energy for DT equilibrium (J)
-    """
-    # Core power calculations (JIT-compiled, includes DHe3)
-    n_tot = n_D  # Assuming n_D ≈ n_tot for DD startup
-    P_DDn, P_DDp, P_DT, P_DHe3, P_DT_eq = compute_fusion_powers(
-        n_D, n_T, n_tot, V_plasma, 
-        sigmav_DD_p, sigmav_DD_n, sigmav_DT,
-        n_He3, sigmav_DHe3
-    )
-    
-    # Total fusion power
-    P_fusion_total = P_DDn + P_DDp + P_DT + P_DHe3
-    
-    # Energies (steady-state × time)
-    E_fusion_DD = P_fusion_total * t_startup
-    E_fusion_DT_eq = P_DT_eq * t_startup
-    E_aux_DD = P_aux * t_startup
-    E_aux_DT_eq = P_aux_DT_eq * t_startup
-    
-    return {
-        'P_DDn': P_DDn,
-        'P_DDp': P_DDp,
-        'P_DT': P_DT,
-        'P_DT_eq': P_DT_eq,
-        'P_fusion_total': P_fusion_total,
-        'E_fusion_DD': E_fusion_DD,
-        'E_fusion_DT_eq': E_fusion_DT_eq,
-        'E_aux_DD': E_aux_DD,
-        'E_aux_DT_eq': E_aux_DT_eq
-    }
-
-
-def compute_tseeded_powers_and_energies(
-    t_startup, t_raw, n_T_raw, n_D_raw,
-    N_ofc_raw, N_ifc_raw, N_st_raw,
-    n_tot, V_plasma, 
-    sigmav_DD_p, sigmav_DD_n, sigmav_DT,
+def _compute_tbe_from_ifc_numba(
+    n_D,
+    n_T,
+    sigmav_DT,
+    V_plasma,
+    N_ifc,
+    N_stor,
     tau_ifc,
-    P_aux, P_aux_DT_eq,
-    injection_rate_max, N_st_min,
-    vector_length
+    injection_rate_max,
+    N_stor_min,
+    lambda_T_value,
 ):
-    """
-    Compute fusion powers and energies for T-seeded analysis (time-dependent).
-    
-    Uses JIT-compiled core function for power calculations with interpolated
-    density arrays, then integrates to get energies. No DHe3 reaction.
-    
+    """Compute TBE profile from IFC/storage states and injection control law.
+
     Args:
-        t_startup: Time to reach DT operation (s)
-        t_raw: Raw time points from ODE solver (array)
-        n_T_raw: Raw tritium density from solver (m⁻³, array)
-        n_D_raw: Raw deuterium density from solver (m⁻³, array)
-        N_ofc_raw, N_ifc_raw, N_st_raw: Raw tritium inventories (atoms, arrays)
-        n_tot: Total particle density (m⁻³, scalar)
-        V_plasma: Plasma volume (m³, scalar)
-        sigmav_DD_p, sigmav_DD_n, sigmav_DT: Reaction rates (m³/s, scalars)
-        TBR_DT, TBR_DDn: Tritium breeding ratios
-        tau_ifc: In-fuel-cycle time (s)
-        P_aux, P_aux_DT_eq: Auxiliary powers (W)
-        injection_rate_max: Max injection rate (atoms/s)
-        N_st_min: Min stored tritium (atoms)
-        vector_length: Length of output arrays
-        
+        n_D: Deuterium density profile in m^-3.
+        n_T: Tritium density profile in m^-3.
+        sigmav_DT: DT reactivity in m^3/s.
+        V_plasma: Plasma volume in m^3.
+        N_ifc: IFC inventory profile in atoms.
+        N_stor: Storage inventory profile in atoms.
+        tau_ifc: IFC residence time in s.
+        injection_rate_max: Injection-rate cap in atoms/s.
+        N_stor_min: Minimum storage threshold in atoms.
+        lambda_T_value: Tritium decay constant in s^-1.
+
     Returns:
-        dict: Interpolated time series and integrated energies
-            - t_interp: Uniform time grid (s)
-            - n_T, n_D: Interpolated densities (m⁻³)
-            - N_ofc, N_ifc, N_st: Interpolated inventories (atoms)
-            - P_DDn, P_DDp, P_DT: Power arrays (W)
-            - P_DT_eq: Scalar DT-equilibrium power (W)
-            - P_DT_eq_profile: DT-equilibrium power repeated across the time grid (W)
-            - TBE: Tritium breeding efficiency
-            - E_fusion_DD: Total DD fusion energy (J)
-            - E_fusion_DT_eq: DT equilibrium fusion energy (J)
-            - E_aux_DD: Auxiliary energy during DD startup (J)
-            - E_aux_DT_eq: Auxiliary energy for DT equilibrium (J)
+        TBE profile with ``np.nan`` where effective injection is unavailable.
     """
-    # Create uniform time grid
-    dt = t_startup / (vector_length - 1)
-    t_interp = np.arange(vector_length) * dt
-    
-    # Interpolate all raw quantities
-    N_ofc = np.interp(t_interp, t_raw, N_ofc_raw)
-    N_ifc = np.interp(t_interp, t_raw, N_ifc_raw)
-    N_st = np.interp(t_interp, t_raw, N_st_raw)
-    n_T = np.interp(t_interp, t_raw, n_T_raw)
-    n_D = np.interp(t_interp, t_raw, n_D_raw)
-    
-    # Core power calculations (JIT-compiled, n_He3=0.0 for T-seeded)
-    P_DDn, P_DDp, P_DT, P_DHe3, P_DT_eq_scalar = compute_fusion_powers(
-        n_D, n_T, n_tot, V_plasma, 
-        sigmav_DD_p, sigmav_DD_n, sigmav_DT
-        # n_He3 defaults to 0.0, sigmav_DHe3 defaults to 0.0
-    )
-    
-    # Broadcast P_DT_eq for any time-series operations, but keep scalar for storage
-    P_DT_eq_profile = np.full_like(P_DDn, P_DT_eq_scalar)
-    
-    # Integrate powers to get energies
-    E_fusion_DDn = trapz_numba(P_DDn, t_interp)
-    E_fusion_DDp = trapz_numba(P_DDp, t_interp)
-    E_fusion_DT = trapz_numba(P_DT, t_interp)
-    E_fusion_DD = E_fusion_DDn + E_fusion_DDp + E_fusion_DT
-    E_fusion_DT_eq = P_DT_eq_scalar * t_startup
-    
-    # Auxiliary energies
-    E_aux_DD = P_aux * t_startup
-    E_aux_DT_eq = P_aux_DT_eq * t_startup
-    
-    # Compute TBE (tritium breeding efficiency)
-    from src.utils.units_and_constants import lambda_T
-    
-    # Injection rate calculation
-    inj_temp = N_ifc / tau_ifc - lambda_T * N_st
-    inj_rate = np.clip(inj_temp, 0.0, injection_rate_max)
-    inj_rate = np.where(N_st > N_st_min, inj_rate, 0.0)
-    
-    # TBE calculation with safe division
-    with np.errstate(divide='ignore', invalid='ignore'):
-        TBE_raw = (n_D * n_T * sigmav_DT * V_plasma) / inj_rate
-    
-    TBE = np.where(
-        (N_st > N_st_min) & (inj_rate > 0),
-        TBE_raw,
-        np.nan
-    )
-    
-    return {
-        't_interp': t_interp,
-        'n_T': n_T,
-        'n_D': n_D,
-        'N_ofc': N_ofc,
-        'N_ifc': N_ifc,
-        'N_st': N_st,
-        'P_DDn': P_DDn,
-        'P_DDp': P_DDp,
-        'P_DT': P_DT,
-        'P_DT_eq': P_DT_eq_scalar,
-        'P_DT_eq_profile': P_DT_eq_profile,
-        'TBE': TBE,
-        'E_fusion_DD': E_fusion_DD,
-        'E_fusion_DT_eq': E_fusion_DT_eq,
-        'E_aux_DD': E_aux_DD,
-        'E_aux_DT_eq': E_aux_DT_eq
-    }
+    n = n_D.size
+    out = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        inj_temp = N_ifc[i] / tau_ifc - lambda_T_value * N_stor[i]
+        inj_rate = inj_temp
+        if inj_rate < 0.0:
+            inj_rate = 0.0
+        if inj_rate > injection_rate_max:
+            inj_rate = injection_rate_max
+        if N_stor[i] <= N_stor_min:
+            inj_rate = 0.0
+
+        if N_stor[i] > N_stor_min and inj_rate > 0.0:
+            out[i] = (n_D[i] * n_T[i] * sigmav_DT * V_plasma) / inj_rate
+        else:
+            out[i] = np.nan
+    return out
+
+
+@njit(cache=True, fastmath=True)
+def _compute_aux_power_profile_numba(
+    n_T,
+    n_D,
+    n_He3,
+    T_i,
+    V_plasma,
+    sigmav_DD_p,
+    sigmav_DD_n,
+    sigmav_DT,
+    tau_p_T,
+):
+    """Evaluate auxiliary-heating power profile pointwise.
+
+    Args:
+        n_T: Tritium density profile in m^-3.
+        n_D: Deuterium density profile in m^-3.
+        n_He3: Helium-3 density profile in m^-3.
+        T_i: Ion temperature in keV.
+        V_plasma: Plasma volume in m^3.
+        sigmav_DD_p: DDp reactivity in m^3/s.
+        sigmav_DD_n: DDn reactivity in m^3/s.
+        sigmav_DT: DT reactivity in m^3/s.
+        tau_p_T: Effective energy-confinement timescale in s.
+
+    Returns:
+        Auxiliary-heating power profile in W.
+    """
+    n = n_T.size
+    out = np.empty(n, dtype=np.float64)
+    for i in range(n):
+        out[i] = calculate_P_aux_from_power_balance(
+            n_T[i],
+            n_D[i],
+            T_i,
+            V_plasma,
+            sigmav_DD_p,
+            sigmav_DD_n,
+            sigmav_DT,
+            tau_p_T,
+            n_He3=n_He3[i],
+        )
+    return out

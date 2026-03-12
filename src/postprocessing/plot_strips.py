@@ -73,9 +73,7 @@ strip_settings:
 PROGRAMMATIC USAGE:
 ------------------
 from src.postprocessing.plot_strips import generate_strip_plot
-from src.utils.parameter_registry import get_registry
-
-registry = get_registry()
+from src.registry import parameter_registry as registry
 
 generate_strip_plot(
     h5_file='outputs/results.h5',
@@ -110,6 +108,8 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from statsmodels.nonparametric.smoothers_lowess import lowess
 from typing import Dict, Any, List, Optional
+
+from src.postprocessing.plot_utils_functions import ensure_registry
 
 # Import hdf5plugin for LZ4 compression support
 try:
@@ -251,7 +251,7 @@ def get_label(metric, unit_conversions, registry):
     Args:
         metric: Metric name
         unit_conversions: Dictionary of unit conversions
-        registry: ParameterRegistry instance
+        registry: Registry API module
         
     Returns:
         String label
@@ -275,7 +275,7 @@ def get_axis_label(metric, unit_conversions, registry):
     Args:
         metric: Metric name
         unit_conversions: Dictionary of unit conversions
-        registry: ParameterRegistry instance
+        registry: Registry API module
         
     Returns:
         String axis label with units
@@ -358,7 +358,7 @@ def generate_strip_plot(
         plot_name_prefix: Prefix for plot filename (e.g., 'ddstartup_20251113_..._parametric_T_seeded')
         unit_conversions: Dictionary of unit conversions
         optimal_point: If True, mark optimal point minimizing all metrics
-        registry: ParameterRegistry instance
+        registry: Registry API module
         figsize: Figure size tuple
         frac: LOWESS smoothing fraction
         df: DataFrame with data (optional if h5_file is provided)
@@ -369,10 +369,7 @@ def generate_strip_plot(
     Returns:
         Path to saved plot file, or None if failed
     """
-    # Get registry if not provided
-    if registry is None:
-        from src.utils.parameter_registry import get_registry
-        registry = get_registry()
+    registry = ensure_registry(registry)
     
     # Extract settings from strip_settings if provided
     if strip_settings:

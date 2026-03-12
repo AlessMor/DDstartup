@@ -12,6 +12,7 @@ These functions centralize common tasks used across plot modules:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Iterable, Tuple
 
@@ -20,12 +21,91 @@ import pandas as pd
 
 
 def ensure_registry(registry=None):
-    """Return a registry instance, importing lazily when not provided."""
+    """Return registry API module when not explicitly provided."""
     if registry is not None:
         return registry
-    from src.utils.parameter_registry import get_registry as _get_registry
+    from src.registry import parameter_registry as _registry
+    return _registry
 
-    return _get_registry()
+
+def latex_to_html(latex_str: str) -> str:
+    """Convert a compact LaTeX-like symbol string to HTML markup."""
+    s = re.sub(r"^\$|\$$", "", str(latex_str))
+    greek_map = {
+        "\\tau": "τ",
+        "\\eta": "η",
+        "\\alpha": "α",
+        "\\beta": "β",
+        "\\gamma": "γ",
+        "\\delta": "δ",
+        "\\epsilon": "ε",
+        "\\lambda": "λ",
+        "\\mu": "μ",
+        "\\nu": "ν",
+        "\\pi": "π",
+        "\\rho": "ρ",
+        "\\sigma": "σ",
+        "\\phi": "φ",
+        "\\omega": "ω",
+        "\\Delta": "Δ",
+        "\\Sigma": "Σ",
+        "\\Omega": "Ω",
+        "\\Gamma": "Γ",
+        "\\Lambda": "Λ",
+        "\\Phi": "Φ",
+        "\\Psi": "Ψ",
+        "\\Theta": "Θ",
+        "\\Xi": "Ξ",
+        "\\zeta": "ζ",
+        "\\xi": "ξ",
+        "\\psi": "ψ",
+        "\\theta": "θ",
+        "\\kappa": "κ",
+        "\\chi": "χ",
+    }
+    for latex, html in greek_map.items():
+        s = s.replace(latex, html)
+
+    s = re.sub(r"\\mathrm\{([^}]*)\}", r"\1", s)
+    s = re.sub(r"_\{([^}]*)\}", r"<sub>\1</sub>", s)
+    s = re.sub(r"_([a-zA-Z0-9])", r"<sub>\1</sub>", s)
+    s = re.sub(r"\^\{([^}]*)\}", r"<sup>\1</sup>", s)
+    s = re.sub(r"\^([a-zA-Z0-9])", r"<sup>\1</sup>", s)
+    s = s.replace("\\_", "_")
+    s = re.sub(r"\\([a-zA-Z]+)", r"\1", s)
+    return s
+
+
+def get_param_label(
+    param_name: str,
+    *,
+    registry=None,
+    unit: str | None = None,
+    use_symbol: bool = True,
+    renderer: str = "matplotlib",
+) -> str:
+    """Return a renderer-aware label for a parameter using registry metadata."""
+    reg = ensure_registry(registry)
+    resolved_unit = reg.get_unit(param_name) if unit is None else unit
+
+    if renderer == "plain":
+        label = param_name
+        if resolved_unit and resolved_unit not in ["boolean", "string", "dimensionless"]:
+            label = f"{label} [{resolved_unit}]"
+        return label
+
+    if renderer == "plotly":
+        symbol = reg.get_symbol(param_name) if use_symbol else param_name
+        label = latex_to_html(symbol)
+        if resolved_unit and resolved_unit not in ["boolean", "string", "dimensionless"]:
+            label = f"{label} [{resolved_unit}]"
+        return label
+
+    label = reg.get_symbol(param_name) if use_symbol else param_name
+    if resolved_unit and resolved_unit not in ["boolean", "string", "dimensionless"]:
+        escaped_unit = resolved_unit.replace("$", r"\$")
+        label = f"{label} [{escaped_unit}]"
+    return label
 
 
 def resolve_outdir_and_stem(

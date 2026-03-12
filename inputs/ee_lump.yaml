@@ -2,7 +2,7 @@
 # This configuration uses the Morris method for sensitivity analysis
 
 # Analysis settings
-analysis_type: 'lump'                # Lump model (faster than T_seeded)
+analysis_type: 'dd_startup_lump'
 method: 'elementary_effects'         # Use Elementary Effects (Morris) method
 
 # Elementary Effects specific parameters

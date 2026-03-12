@@ -71,7 +71,7 @@ def plot_effect_size_matrix(
         outputs_dir: Directory to save outputs
         plot_name: Optional plot name prefix
         save_csv: Whether to save CSV file
-        registry: ParameterRegistry instance (optional, will create if not provided)
+        registry: Registry API module (optional, will use default if not provided)
         show_titles: If False, omit the heatmap title
         
     Returns:

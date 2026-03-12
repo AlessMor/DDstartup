@@ -20,8 +20,10 @@ except ImportError:
 # -----------------------------------------------------------------------------
 # Project registry (schema + units)
 # -----------------------------------------------------------------------------
-from src.utils.parameter_registry import get_registry, PARAMETER_SCHEMA
+from src.registry import parameter_registry as registry_api
+from src.registry.parameter_registry import ALLOWED_ANALYSIS_TYPES, PARAMETER_SCHEMA
 from src.utils.io_functions import resolve_file_path, resolve_h5_inputs, stream_h5_to_df
+from src.utils.yaml_utils import parse_yaml_text, read_yaml_file
 
 
 # -----------------------------------------------------------------------------
@@ -62,14 +64,7 @@ def load_config_from_args(args, root: Path) -> Dict[str, Any]:
         sys.exit(1)
 
     print(f"📋 Loading configuration from: {Path(cfg_path).name}")
-    try:
-        import yaml  # type: ignore
-    except ImportError:
-        print("❌ PyYAML not installed. Install with: pip install pyyaml")
-        sys.exit(1)
-
-    with open(cfg_path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
+    cfg = read_yaml_file(cfg_path, default={})
 
     return cfg
 
@@ -155,8 +150,7 @@ def _runtime_from_h5(files: List[Path]) -> Dict[str, int]:
                         try: data = json.loads(txt)
                         except Exception:
                             try:
-                                import yaml  # noqa
-                                data = yaml.safe_load(txt)
+                                data = parse_yaml_text(txt, default={})
                             except Exception:
                                 data = {}
                         v = _coerce_int((data or {}).get(k))
@@ -362,8 +356,7 @@ def parse_filters_and_additional(config: Dict[str, Any]) -> Tuple[List[str], Dic
         if name not in PARAMETER_SCHEMA:
             # Create new entry
             PARAMETER_SCHEMA[name] = {
-                'role': 'computed',
-                'analysis_types': ['lump', 'T_seeded'],
+                'analysis_types': list(ALLOWED_ANALYSIS_TYPES),
                 'unit': unit,
                 'symbol': symbol,
                 'description': f'Computed: {additional_map.get(name, name)}',
@@ -394,7 +387,6 @@ def load_h5_to_df(
     downcast_float32: bool = False,
     vectors_to_scalar: bool = True,     # Extract last value from vectors to save memory
     verbose: bool = True,
-    keep: str = "slim",
     success_only: bool = False,
     plot_types: List[str] | None = None,
     strip_settings: Dict[str, Any] | None = None,
@@ -440,7 +432,7 @@ def load_h5_to_df(
        b. Compute additional variables (AST evaluation with numpy functions)
        c. Extract scalars from vectors if requested
     5. Concatenate filtered chunks into final DataFrame
-    6. Order columns logically (inputs, flexible, outputs, computed, targets)
+    6. Order columns logically (inputs, outputs, computed, targets)
     
     Args:
         h5_path: Path to HDF5 file with simulation data
@@ -453,7 +445,6 @@ def load_h5_to_df(
         vectors_to_scalar: Extract last value from time-series arrays (default True)
                           Set False if you need full time evolution data
         verbose: Print progress information
-        keep: Data retention mode (ignored, kept for backwards compatibility)
         success_only: Only keep rows where sol_success==True
         plot_types: List of plot types to generate (strip, contour, etc.)
                    Used to determine plot-specific columns needed
@@ -461,7 +452,7 @@ def load_h5_to_df(
         surface3d_settings: 3D surface plot configuration (axes)
     
     Returns:
-        DataFrame with columns ordered as: [inputs, flexible, outputs, computed, targets]
+        DataFrame with columns ordered as: [inputs, outputs, computed, targets]
         Each row represents one simulation. Vector columns are reduced to scalars if
         vectors_to_scalar=True.
     
@@ -498,25 +489,14 @@ def load_h5_to_df(
     with h5py.File(h5_path, "r") as f:
         file_keys = {k for k in f.keys() if isinstance(f[k], h5py.Dataset) and f[k].ndim >= 1}
 
-    # Inputs from schema: those tagged as input/flexible
-    def _schema_tag(meta: dict) -> str:
-        if not isinstance(meta, dict):
-            return ""
-        for k in ("role", "kind", "tag", "source", "category"):
-            v = meta.get(k)
-            if isinstance(v, str):
-                return v.lower()
-        return ""
-
-    schema_inputs = [
+    # Classify HDF5 columns: has default → input, else → output
+    input_params = [
         name for name, meta in PARAMETER_SCHEMA.items()
-        if name in file_keys and _schema_tag(meta) in ("input", "flexible")
+        if name in file_keys and "default" in meta
     ]
-    input_params = [n for n in schema_inputs if _schema_tag(PARAMETER_SCHEMA.get(n, {})) == "input"]
-    flexible_params = [n for n in schema_inputs if _schema_tag(PARAMETER_SCHEMA.get(n, {})) == "flexible"]
     output_params = [
         name for name, meta in PARAMETER_SCHEMA.items()
-        if name in file_keys and _schema_tag(meta) == "output"
+        if name in file_keys and "default" not in meta
     ]
 
     # Dependency helpers
@@ -647,7 +627,6 @@ def load_h5_to_df(
                     dst.append(n)
         ordered_cols: list[str] = []
         _add_unique(ordered_cols, input_params)
-        _add_unique(ordered_cols, flexible_params)
         outputs_needed = [
             n for n in output_params
             if n in df_.columns and (n in additional_base_deps or n in filter_deps or n in targets)
@@ -967,55 +946,6 @@ def print_columns_overview(df: pd.DataFrame, *, title: str) -> None:
         print(_fmt_row(row))
 
 
-# -----------------------------------------------------------------------------
-# Registry wrapper (keep for plot label/unit compatibility)
-# -----------------------------------------------------------------------------
-class AdditionalAwareRegistry:
-    """Wrapper around ParameterRegistry that overlays additional_variables metadata.
-    
-    This allows YAML-defined additional variables to override registry defaults
-    for symbols and units, ensuring consistent labeling across all plots.
-    """
-    def __init__(self, base, additional_meta: dict|None):
-        self._base = base; self._meta = additional_meta or {}
-    
-    def get_param_label(self, name: str, *a, **k):
-        """Get formatted parameter label, preferring additional_variables symbol/unit if defined."""
-        m = self._meta.get(name)
-        # Override unit if defined in additional_meta
-        if m and m.get("unit") and "unit" not in k:
-            k = {**k, "unit": m["unit"]}
-        # Always use base registry's formatting logic to handle LaTeX/escaping properly
-        # But allow overriding the symbol lookup
-        if m and m.get("symbol"):
-            # Store override for get_symbol to pick up
-            self._symbol_override = {name: m["symbol"]}
-        result = self._base.get_param_label(name, *a, **k) if hasattr(self._base,"get_param_label") else name
-        if hasattr(self, '_symbol_override'):
-            delattr(self, '_symbol_override')
-        return result
-    
-    def get_unit(self, name: str, *a, **k):
-        """Get parameter unit, preferring additional_variables unit if defined."""
-        m = self._meta.get(name)
-        if m and m.get("unit"): 
-            return m["unit"]
-        return self._base.get_unit(name, *a, **k) if hasattr(self._base,"get_unit") else None
-    
-    def get_symbol(self, name: str, *a, **k):
-        """Get parameter symbol, preferring additional_variables symbol if defined."""
-        # Check for temporary override (set by get_param_label)
-        if hasattr(self, '_symbol_override') and name in self._symbol_override:
-            return self._symbol_override[name]
-        m = self._meta.get(name)
-        if m and m.get("symbol"):
-            return m["symbol"]
-        return self._base.get_symbol(name, *a, **k) if hasattr(self._base,"get_symbol") else name
-    
-    def __getattr__(self, attr): 
-        return getattr(self._base, attr)
-
-
 @contextmanager
 def plot_style_context(show_titles: bool = True, font_scale: float | None = None):
     """
@@ -1086,7 +1016,7 @@ def plot_style_context(show_titles: bool = True, font_scale: float | None = None
                 continue
             matplotlib.rcParams[key] = val
 
-# colorscale kept for older plot modules
+# Shared colorscale helper for plot modules.
 def get_discrete_colorscale(n_chunks: int):
     import matplotlib, matplotlib.colors as mcolors, numpy as _np
     base = ["#2166AC","#4393C3","#92C5DE","#FFFFBF","#FDAE61","#F46D43","#D73027"]
@@ -1164,9 +1094,8 @@ def generate_plots_for_file(
     font_scale: float | None = None,
 ) -> None:
     # Registry (respect additional labels/units if provided)
-    registry = get_registry()
-    if additional_meta:
-        registry = AdditionalAwareRegistry(registry, additional_meta)
+    registry = registry_api
+    registry.set_metadata_overrides(additional_meta)
 
     print(f"\n📁 Processing: {path.name}")
 
@@ -1201,6 +1130,7 @@ def generate_plots_for_file(
     )
     if df.empty:
         print("   ⚠️  No data after filtering. Skipping file.")
+        registry.clear_metadata_overrides()
         return
 
     # Keep ALL rows (after config filters) to include failures for the "5th quartile"
@@ -1215,6 +1145,7 @@ def generate_plots_for_file(
         print(f"   ⚠️  Skipping missing targets for this file: {', '.join(missing_targets)}")
     if not available_targets:
         print("   ⚠️  No requested targets available in this file. Skipping.")
+        registry.clear_metadata_overrides()
         return
 
     # Dispatcher
@@ -1303,7 +1234,6 @@ def generate_plots_for_file(
 
             common = dict(
                 df=df_t,  # Filtered dataframe for most plots
-                df_filtered=df_t,
                 target=target,
                 inputs=inputs,
                 target_unit=tunit,
@@ -1324,7 +1254,6 @@ def generate_plots_for_file(
             # ML pairwise uses FULL unfiltered data for training
             common_ml = dict(
                 df=df_full,  # Full dataset including failures, NaN, Inf for unbiased training
-                df_filtered=df_full,
                 target=target,
                 inputs=inputs,
                 target_unit=tunit,
@@ -1369,4 +1298,5 @@ def generate_plots_for_file(
 
             gc.collect()
 
+    registry.clear_metadata_overrides()
     print("   🧹 Memory cleaned for next file")

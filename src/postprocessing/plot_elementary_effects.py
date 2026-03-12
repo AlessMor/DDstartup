@@ -16,17 +16,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from matplotlib.gridspec import GridSpec
-
-
-def _get_latex_name(param_name: str) -> str:
-    """Get LaTeX-formatted parameter name from registry."""
-    try:
-        from src.utils.parameter_registry import get_registry
-        registry = get_registry()
-        return registry.get_symbol(param_name)
-    except:
-        # Fallback to parameter name if registry not available
-        return param_name
+from src.registry.parameter_registry import get_symbol
 
 
 def plot_confidence_intervals(
@@ -98,7 +88,7 @@ def plot_confidence_intervals(
     # Sort by mu_star
     sorted_indices = np.argsort(valid_mu_star)[::-1]
     sorted_names = [valid_names[i] for i in sorted_indices]
-    sorted_latex_names = [_get_latex_name(name) for name in sorted_names]
+    sorted_latex_names = [get_symbol(name) for name in sorted_names]
     sorted_mu = [valid_mu[i] for i in sorted_indices]
     sorted_mu_star = [valid_mu_star[i] for i in sorted_indices]
     sorted_ci95 = [valid_ci95[i] for i in sorted_indices]
@@ -184,7 +174,7 @@ def plot_morris_scatter(
     
     # Add parameter labels
     for i, name in enumerate(valid_names):
-        latex_name = _get_latex_name(name)
+        latex_name = get_symbol(name)
         ax.annotate(latex_name, (valid_mu_star[i], valid_sigma_star[i]), 
                    textcoords="offset points", xytext=(0, 10), ha='center',
                    fontsize=10)
@@ -258,7 +248,7 @@ def plot_box_plots(
                 values = values[(values >= lower_bound) & (values <= upper_bound)]
             
             df_list.append(pd.DataFrame({
-                'Parameter': [_get_latex_name(param)] * len(values),
+                'Parameter': [get_symbol(param)] * len(values),
                 'Elementary Effect': values
             }))
     
@@ -269,7 +259,7 @@ def plot_box_plots(
     df = pd.concat(df_list, ignore_index=True)
     
     # Sort parameters by μ* (importance) - highest to lowest
-    sort_values = {_get_latex_name(param): mu_star.get(param, 0) 
+    sort_values = {get_symbol(param): mu_star.get(param, 0) 
                    for param in param_names}
     param_order = sorted(sort_values.keys(), key=lambda p: sort_values[p], reverse=True)
     
@@ -291,7 +281,7 @@ def plot_box_plots(
         # Find original parameter name
         original_param = None
         for p in param_names:
-            if _get_latex_name(p) == param_latex:
+            if get_symbol(p) == param_latex:
                 original_param = p
                 break
         if original_param:
@@ -376,7 +366,7 @@ def save_sensitivity_data_to_csv(
         for i, effect in enumerate(effects):
             raw_rows.append({
                 'parameter': name,
-                'parameter_latex': _get_latex_name(name),
+                'parameter_latex': get_symbol(name),
                 'trajectory': i + 1,
                 'elementary_effect': effect
             })

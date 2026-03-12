@@ -1,7 +1,7 @@
 # Configuration for parametric T_seeded analysis
 
 # Analysis settings
-analysis_type: T_seeded  # T_seeded or lump
+analysis_type: dd_startup_tseeded
 method: parametric       # parametric or sobol
 
 

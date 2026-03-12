@@ -76,12 +76,9 @@ def main():
     except (ValueError, FileNotFoundError) as e:
         print(f"Error loading parameter fields: {e}", file=sys.stderr)
         return 1
-    analysis_type = str(config.get('analysis_type', '')).strip()
-    # Override max_simulation_time from parameter config only for legacy ddstartup
-    # analyses where this behavior is expected.
-    if analysis_type in {'lump', 'T_seeded'}:
-        if 'max_simulation_time' in param_fields and param_fields['max_simulation_time'] is not None:
-            config['max_simulation_time'] = float(np.asarray(param_fields['max_simulation_time'][0]).squeeze())
+    # Allow per-parameter-file max_simulation_time override.
+    if 'max_simulation_time' in param_fields and param_fields['max_simulation_time'] is not None:
+        config['max_simulation_time'] = float(np.asarray(param_fields['max_simulation_time'][0]).squeeze())
     # Prepare input data arrays for analysis
     # This converts parameter fields into proper format for computation
     try:
@@ -194,7 +191,6 @@ def main():
                 input_data=input_data,
                 output_file=output_file,
                 config=config,
-                compute_function=None,  # Not used - internal evaluation
                 verbose=verbose
             )
             

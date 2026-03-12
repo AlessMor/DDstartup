@@ -5,8 +5,6 @@ Generates KDE plots split by quartiles of a scalar target variable.
 - Works with the new DF format: scalar columns are numeric; vector columns are object
   series containing per-row 1D numpy arrays (skipped here).
 - Uses df.attrs["_inner_dims"] to detect scalar vs vector columns.
-- Backward-compatible argument names (df/df_filtered, inputs/input_parameters,
-  output_dir/outputs_dir, plot_name_prefix/plot_name).
 """
 
 from pathlib import Path
@@ -18,37 +16,12 @@ import seaborn as sns
 from src.postprocessing.plot_utils_functions import (
     drop_near_constant,
     ensure_registry,
+    get_param_label,
     quartile_bins,
     quartile_colors,
     resolve_outdir_and_stem,
     select_scalar_numeric,
 )
-
-
-def _resolve_args(
-    *,
-    df=None,
-    df_filtered=None,
-    inputs=None,
-    input_parameters=None,
-    output_dir=None,
-    outputs_dir=None,
-    plot_name_prefix=None,
-    plot_name=None,
-    **_
-):
-    """Normalize old/new argument names to a single set."""
-    _df = df_filtered if df is None else df
-    _inputs = input_parameters if inputs is None else inputs
-    outdir, stem = resolve_outdir_and_stem(
-        output_dir=output_dir,
-        outputs_dir=outputs_dir,
-        plot_name_prefix=plot_name_prefix,
-        plot_name=plot_name,
-        default_stem="kde_by_quartile",
-        suffix="_kde_by_quartile" if plot_name_prefix else None,
-    )
-    return _df, _inputs, outdir, stem
 
 
 def _save_quartile_extremes_to_csv(
@@ -88,17 +61,13 @@ def _save_quartile_extremes_to_csv(
 
 def kde_quartile_plot(
     *,
-    df=None,
-    df_filtered=None,
+    df,
     target: str,
-    inputs=None,
-    input_parameters=None,
+    inputs,
     target_unit: str | None = None,
     output_dir=None,
-    outputs_dir=None,
     file_type: str = "",
     plot_name_prefix: str | None = None,
-    plot_name: str | None = None,
     registry=None,
     show_titles: bool = True,
     **_,
@@ -106,26 +75,19 @@ def kde_quartile_plot(
     """
     Create KDE plots for scalar inputs, split by quartiles of the scalar target.
 
-    Expected modern call (from orchestrator):
+    Expected call (from orchestrator):
         kde_quartile_plot(
             df=..., target=..., inputs=..., target_unit=..., output_dir=...,
             file_type=..., plot_name_prefix=..., registry=...
         )
-
-    Legacy names (df_filtered, input_parameters, outputs_dir, plot_name) are also accepted.
     """
     registry = ensure_registry(registry)
 
-    # Normalize incoming args
-    df, inputs, outdir, stem = _resolve_args(
-        df=df,
-        df_filtered=df_filtered,
-        inputs=inputs,
-        input_parameters=input_parameters,
+    outdir, stem = resolve_outdir_and_stem(
         output_dir=output_dir,
-        outputs_dir=outputs_dir,
         plot_name_prefix=plot_name_prefix,
-        plot_name=plot_name,
+        default_stem="kde_by_quartile",
+        suffix="_kde_by_quartile" if plot_name_prefix else None,
     )
 
     if df is None or len(df) == 0:
@@ -198,7 +160,7 @@ def kde_quartile_plot(
                 sns.kdeplot(data, fill=True, alpha=0.3, ax=ax, label=str(label), color=color_map[label])
 
         # Titles with label (get_param_label already includes unit)
-        p_label = getattr(registry, "get_param_label", lambda n, **k: n)(param)
+        p_label = get_param_label(param, registry=registry)
         ax.set_title(p_label, fontsize=10)
         ax.set_xlabel("")
         ax.set_ylabel("Density")

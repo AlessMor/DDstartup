@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import ast
 import numpy as np
-import yaml
 from pathlib import Path
 from typing import Sequence
 
@@ -29,10 +28,11 @@ except ImportError:
     pass
 
 import h5py
-from src.postprocessing.plot_utils_functions import ensure_registry
+from src.postprocessing.plot_utils_functions import ensure_registry, get_param_label
 from src.postprocessing.plot_strips import generate_strip_plot
 from src.postprocessing.postprocess_functions import normalize_expr
 from src.utils.io_functions import h5_to_df_core, resolve_h5_inputs
+from src.utils.yaml_utils import read_yaml_file
 
 
 def _extract_vars_from_expr(expr: str) -> set[str]:
@@ -330,8 +330,8 @@ def _plot_combined_quartile_probabilities(
                     alpha=0.3
                 )
     
-    tlabel = registry.get_param_label(target) if registry else target
-    xlabel = registry.get_param_label(input_param) if registry else input_param
+    tlabel = get_param_label(target, registry=registry) if registry else target
+    xlabel = get_param_label(input_param, registry=registry) if registry else input_param
     
     if show_titles:
         ax.set_title(f"Quartile Probabilities: {tlabel} vs {xlabel}")
@@ -456,7 +456,7 @@ def _plot_pdf(df_all: pd.DataFrame, target: str, registry, outdir: Path, show_ti
         plt.close()
         return None
     
-    tlabel = registry.get_param_label(target) if registry else target
+    tlabel = get_param_label(target, registry=registry) if registry else target
     if show_titles:
         ax.set_title(f"PDF of {tlabel} across runs")
     ax.set_xlabel(tlabel)
@@ -521,8 +521,7 @@ def compare_runs(
     # Load config if provided
     config = {}
     if config_path and config_path.exists():
-        with open(config_path) as f:
-            config = yaml.safe_load(f) or {}
+        config = read_yaml_file(config_path, default={})
         print(f"📄 Loaded config: {config_path}")
     
     # Parse additional variables

@@ -13,10 +13,3 @@ from src.postprocessing.plot_elementary_effects import (
     plot_box_plots,
     create_all_plots
 )
-
-__all__ = [
-    'plot_confidence_intervals',
-    'plot_morris_scatter',
-    'plot_box_plots',
-    'create_all_plots'
-]

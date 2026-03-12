@@ -2,7 +2,7 @@
 # Uses Saltelli sampling scheme for efficient Sobol index estimation
 
 # Analysis settings
-analysis_type: T_seeded
+analysis_type: dd_startup_tseeded
 method: sobol
 
 # Sobol-specific parameters

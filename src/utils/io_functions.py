@@ -12,43 +12,34 @@ This module contains functions for:
 from __future__ import annotations
 
 import argparse
-import os
+import ast
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import h5py
 import numpy as np
 import pandas as pd
-import yaml
 from scipy.stats import norm
 from tqdm import tqdm
 
 from .system_profiler import apply_parallelization_defaults
-from .parameter_registry import (
+from .yaml_utils import read_yaml_file
+from src.registry import parameter_registry as registry
+from src.registry.parameter_registry import (
+    ALLOWED_ANALYSIS_TYPES,
+    CUSTOM_INJECTION_ALLOWED_FUNCTIONS,
+    CUSTOM_INJECTION_ALLOWED_VARIABLES,
+    CUSTOM_INJECTION_PARAM_TEMPLATES,
+    CUSTOM_INJECTION_STATE_TEMPLATES,
+    INJECTION_MODES,
     PARAMETER_SCHEMA,
-    MULTISPECIES_PARAMETER_SCHEMA,
     SPECIES,
-    get_registry,
-    get_multispecies_registry,
+    SPECIES_ALIASES,
 )
-from .units_and_constants import u  # Pint UnitRegistry
 
 
-PathLike = Union[str, Path]
-
-
-def _normalize_analysis_type(analysis_type: Optional[str]) -> Optional[str]:
-    """Normalize analysis type aliases used across code paths."""
-    if analysis_type is None:
-        return None
-    return str(analysis_type).strip()
-
-
-def _is_multispecies_analysis(analysis_type: Optional[str]) -> bool:
-    """Return True when analysis_type targets the merged multispecies model."""
-    return _normalize_analysis_type(analysis_type) == "multispecies"
 
 def parse_arguments():
     """Parse command-line arguments"""
@@ -91,7 +82,7 @@ def resolve_file_path(filename: str, default_dir: str, extension: Optional[str] 
         filename: File name or path
         default_dir: Default directory to search in (e.g., 'inputs')
         extension: Optional single file extension to try (e.g., '.yaml' or 'yaml')
-        extensions: Optional list/tuple of extensions to try (ignored if extension is provided)
+        extensions: Optional list/tuple of extensions to try when extension is not provided
 
     Returns:
         Path object to the file
@@ -143,41 +134,52 @@ def load_config(yaml_path: Path) -> Dict[str, Any]:
         
     Raises:
         ValueError: If required fields are missing
-        yaml.YAMLError: If YAML file is malformed
     """
-    with open(yaml_path, 'r') as f:
-        config = yaml.safe_load(f)
+    config = read_yaml_file(yaml_path)
     
     if not isinstance(config, dict):
         raise ValueError(f"Config must be a mapping, got {type(config)!r}")
 
-    # Required fields
-    for field in ("analysis_type", "method"):
-        if field not in config:
-            raise ValueError(f"Missing required field in config: {field}")
+    # Required fields — analysis_type defaults to "multispecies" when omitted
+    if "method" not in config:
+        raise ValueError("Missing required field in config: method")
 
-    # Multispecies model path.
-    if _is_multispecies_analysis(config.get("analysis_type")):
-        return _load_multispecies_config(yaml_path)
+    analysis_type = str(config.get("analysis_type") or "multispecies").strip()
+    config["analysis_type"] = analysis_type
 
-    # Static defaults (non-performance)
-    static_defaults = {
-        "vector_length": 100,
-        "max_simulation_time": 10 * 365 * 24 * 3600,
-        "verbose": False,
-        "output_dir": "outputs",
-        "filter": None,  # parameter filter expression
-    }
-    for key, default in static_defaults.items():
-        config.setdefault(key, default)
+    if analysis_type not in ALLOWED_ANALYSIS_TYPES:
+        raise ValueError(f"Unknown analysis_type: {analysis_type!r}")
+
+    # Apply centralised defaults from the registry.
+    from src.registry.parameter_registry import apply_analysis_type_defaults
+    apply_analysis_type_defaults(config)
+
+    # Common defaults that are not analysis-type-specific
+    config.setdefault("verbose", False)
+    config.setdefault("output_dir", "outputs")
+    config.setdefault("filter", None)
+
+    config["vector_length"] = int(round(_parse_float(config["vector_length"])))
+    config["max_simulation_time"] = float(_parse_float(config["max_simulation_time"]))
+    config["targets"] = _parse_targets(config["targets"])
+
+    if analysis_type == "dd_startup_lump":
+        # For lump mode, prefer storage targets if provided, otherwise
+        # _apply_multispecies_dd_startup_overrides will auto-generate one
+        # from the species_params N_stor_min.
+        storage_targets = [t for t in config["targets"] if str(t.get("metric", "")).strip().lower() == "stor"]
+        if storage_targets:
+            config["targets"] = storage_targets
+
+    for key in ("n_jobs", "chunk_size", "batch_size"):
+        config.setdefault(key, None)
 
     # Parallelization-related keys: None means "auto"
-    for key in ("n_jobs", "chunk_size", "batch_size", "N_SAMPLES", "order"):
+    for key in ("N_SAMPLES", "order"):
         config.setdefault(key, None)
 
     # Fill in parallelization defaults based on system profiling
-    config = apply_parallelization_defaults(config, verbose=config["verbose"])
-
+    config = apply_parallelization_defaults(config, verbose=bool(config.get("verbose", False)))
     return config
 
 
@@ -186,183 +188,51 @@ def load_params(yaml_path: Path, analysis_type: Optional[str] = None) -> Dict[st
     Load parameters from YAML, convert to canonical units from PARAMETER_SCHEMA,
     and validate that required inputs for the requested analysis type exist.
 
+    All analysis types are loaded as 'multispecies' so that the full set of
+    per-species parameters is available to the unified solver.
+
     Returns:
         dict[base_param_name] = (values_in_default_unit, unit_str, metadata_dict)
     """
+    # Always load as multispecies — lump/T_seeded are now presets of the
+    # same multispecies engine.
+    return _load_registry_params(yaml_path, analysis_type="multispecies")
 
-    def _parse_numeric(value: Any) -> float:
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            v = value.lower()
-            if v in {"nan", ".nan", "null", "none"}:
-                return float("nan")
-            try:
-                return float(value)
-            except ValueError:
-                raise ValueError(f"Cannot parse numeric value: {value!r}")
-        raise ValueError(f"Cannot parse numeric value of type {type(value)}: {value!r}")
 
-    normalized_analysis_type = _normalize_analysis_type(analysis_type)
-    if _is_multispecies_analysis(normalized_analysis_type):
-        return _load_multispecies_params(yaml_path, analysis_type="multispecies")
-
-    registry = get_registry()
-
-    if not yaml_path.exists():
-        raise FileNotFoundError(f"Parameter file not found: {yaml_path}")
-    if yaml_path.suffix.lower() not in {".yaml", ".yml"}:
-        raise ValueError(f"Parameter file must be YAML (.yaml/.yml), got: {yaml_path.suffix}")
-
-    with open(yaml_path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
-
-    if "parameters" not in cfg or not isinstance(cfg["parameters"], dict):
-        raise ValueError("YAML file must contain top-level 'parameters' mapping")
-
-    params_cfg = cfg["parameters"]
-    result: Dict[str, Any] = {}
-
-    def _values_from_definition(field: str, kind: str, pts: int, definition: Dict[str, Any]) -> np.ndarray:
-        if kind == "scalar":
-            if "value" not in definition:
-                raise ValueError(f"Scalar parameter '{field}' must have 'value'")
-            return np.full(pts, _parse_numeric(definition["value"]), dtype=float)
-        if kind == "linear":
-            if "min" not in definition or "max" not in definition:
-                raise ValueError(f"Linear parameter '{field}' must have 'min' and 'max'")
-            vmin = _parse_numeric(definition["min"])
-            vmax = _parse_numeric(definition["max"])
-            return np.array([(vmin + vmax) / 2.0], dtype=float) if pts == 1 else np.linspace(vmin, vmax, pts, dtype=float)
-        if kind == "normal":
-            if "mean" not in definition:
-                raise ValueError(f"Normal parameter '{field}' must have 'mean'")
-            mean = _parse_numeric(definition["mean"])
-            std = _parse_numeric(definition.get("std", 1.0))
-            if pts == 1:
-                return np.array([mean], dtype=float)
-            percentiles = np.linspace(0.0, 1.0, pts + 2)[1:-1]
-            return mean + std * norm.ppf(percentiles)
-        if kind == "vector":
-            raw_vals = definition.get("values")
-            if not isinstance(raw_vals, list):
-                raise ValueError(f"Vector parameter '{field}' values must be a list")
-            return np.array([_parse_numeric(v) for v in raw_vals], dtype=float)
-        raise ValueError(f"Unknown parameter type '{kind}' for '{field}'")
-
-    for field_name, definition in params_cfg.items():
-        if not isinstance(definition, dict):
-            raise ValueError(f"Parameter '{field_name}' must be a mapping")
-
-        param_type = definition.get("type", "scalar")
-        points = int(definition.get("points", 1))
-        if points < 1:
-            raise ValueError(f"'points' must be >= 1 for '{field_name}'")
-
-        # Derive canonical parameter name from field name and aliases
-        base_guess = field_name[:-6] if field_name.endswith("_field") else field_name
-        base_name = registry.resolve_alias(base_guess)
-        schema = PARAMETER_SCHEMA.get(base_name, {})
-
-        allowed_extra = {"max_simulation_time"}
-        if not schema and base_name not in allowed_extra:
-            raise ValueError(f"Unknown parameter '{base_guess}' in YAML")
-
-        yaml_unit = definition.get("unit")
-        source_unit = yaml_unit or schema.get("unit") or "dimensionless"
-
-        values = _values_from_definition(field_name, param_type, points, definition)
-
-        if schema:
-            try:
-                values_default, final_unit = registry.convert_to_default_unit(base_name, values, source_unit)
-            except Exception as e:
-                raise ValueError(
-                    f"Unit conversion failed for '{field_name}': {source_unit!r} -> {schema.get('unit', source_unit)!r}: {e}"
-                )
-        else:
-            # Extra field (e.g., max_simulation_time) - keep as provided
-            values_default, final_unit = np.asarray(values, dtype=float), source_unit
-
-        metadata = {
-            "name": base_name,
-            "field": field_name,
-            "type": param_type,
-            "description": definition.get("description") or schema.get("description", ""),
-            "symbol": definition.get("symbol") or schema.get("symbol"),
-            "role": schema.get("role"),
-            "analysis_types": schema.get("analysis_types"),
-        }
-
-        result[base_name] = (values_default, final_unit, metadata)
-
-    if normalized_analysis_type:
-        provided_schema_names = [k for k in result.keys() if k in PARAMETER_SCHEMA]
-        missing = registry.missing_required(provided_schema_names, normalized_analysis_type)
-        if missing:
-            raise ValueError(
-                f"Missing required parameters for {normalized_analysis_type} analysis: {', '.join(missing)}"
-            )
-        # Fill computed-when-null entries if not provided
-        for name in registry.get_input_names(normalized_analysis_type):
-            if name in result or not registry.is_computed_when_null(name):
-                continue
-            schema = PARAMETER_SCHEMA.get(name, {})
-            default_unit = schema.get("unit", "dimensionless")
-            result[name] = (
-                np.array([np.nan], dtype=float),
-                default_unit,
-                {
-                    "name": name,
-                    "field": f"{name}_field",
-                    "type": "computed",
-                    "description": schema.get("description", ""),
-                    "symbol": schema.get("symbol"),
-                    "role": schema.get("role"),
-                    "analysis_types": schema.get("analysis_types"),
-                },
-            )
-
-    return result
 
 def prepare_input_data(
-    param_fields: Dict[str, Any],
+    params: Dict[str, Any],
     analysis_type: str,
     config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, np.ndarray]:
-    """Build ordered input arrays for the requested analysis type."""
-    normalized_analysis_type = _normalize_analysis_type(analysis_type)
-    if _is_multispecies_analysis(normalized_analysis_type):
-        return _prepare_multispecies_input_data(
-            param_fields,
-            analysis_type="multispecies",
-            config=config,
-        )
+    """
+    Prepare bulk input data from param_fields (YAML format with tuples).
 
-    registry = get_registry()
-    if normalized_analysis_type not in {"lump", "T_seeded"}:
+    All analysis types route through the unified multispecies engine,
+    so the parameter set is always the full multispecies schema.
+
+    Args:
+        params: Dict of param_fields with tuple values (value_array, unit, meta)
+        analysis_type: "dd_startup_lump", "dd_startup_tseeded", or "multispecies"
+        config: Configuration dict
+
+    Returns:
+        dict of numpy arrays {param_name: array}
+    """
+    analysis_type = str(analysis_type).strip()
+    if analysis_type not in ALLOWED_ANALYSIS_TYPES:
         raise ValueError(f"Unknown analysis type: {analysis_type}")
 
-    input_names = registry.get_input_names(normalized_analysis_type)
-    input_data: Dict[str, Optional[np.ndarray]] = {}
+    input_data: Dict[str, np.ndarray] = {}
+    for name in registry.get_input_names("multispecies"):
+        values = params[name][0]
+        arr = np.asarray(values)
+        if arr.ndim == 0:
+            arr = arr.reshape(1)
+        input_data[name] = arr
 
-    for name in input_names:
-        data = param_fields.get(name)
-        if data is None:
-            if registry.is_computed_when_null(name):
-                input_data[name] = None
-                continue
-            raise ValueError(f"Missing parameter '{name}' for {normalized_analysis_type}")
-
-        values = np.asarray(data[0], dtype=float)
-        if values.ndim == 0:
-            values = values.reshape(1)
-
-        if registry.is_computed_when_null(name) and np.all(np.isnan(values)):
-            input_data[name] = None
-        else:
-            input_data[name] = values
-
+    _apply_config_controlled_inputs(input_data, config)
+    _validate_and_normalize_input_data(input_data)
     return input_data
 
 
@@ -374,52 +244,43 @@ def print_configuration(
     config_file: Path,
 ) -> None:
     """Compact console overview for dry runs."""
-    normalized_analysis_type = _normalize_analysis_type(config.get("analysis_type"))
-    if _is_multispecies_analysis(normalized_analysis_type):
-        config_for_print = dict(config)
-        config_for_print["analysis_type"] = "multispecies"
-        _print_multispecies_configuration(
-            config_for_print,
-            param_fields,
-            input_data,
-            param_file,
-            config_file,
-        )
-        return
-
-    registry = get_registry()
-    years = config['max_simulation_time'] / 365 / 24 / 3600
-
-    print("\n" + "=" * 60)
-    print("DD STARTUP ANALYSIS CONFIGURATION")
-    print("=" * 60)
+    print("\n" + "=" * 72)
+    print("DDSTARTUP MULTISPECIES CONFIGURATION")
+    print("=" * 72)
     print(f"Parameter file: {param_file}")
     print(f"Config file:    {config_file}")
     print(f"Analysis type:  {config['analysis_type']}")
     print(f"Method:         {config['method']}")
     print(f"Vector length:  {config['vector_length']}")
-    print(f"Max sim time:   {years:.2f} years")
-    print(f"n_jobs:         {config['n_jobs'] or 'auto'}")
-    print(f"chunk_size:     {config['chunk_size'] or 'auto'}")
+    print(f"Max sim time:   {config['max_simulation_time'] / (365.25 * 24 * 3600):.2f} years")
+    print(f"Targets:        {config.get('targets', []) if config.get('targets') else 'none'}")
+    print(f"n_jobs:         {config['n_jobs']}")
+    print(f"chunk_size:     {config['chunk_size']}")
     print(f"batch_size:     {config['batch_size']}")
     if config.get("filter"):
         print(f"Filter:         {config['filter']}")
 
-    param_shapes = [arr.shape[0] for arr in input_data.values() if arr is not None]
+    param_shapes = [arr.shape[0] for arr in input_data.values()]
     n_combinations = int(np.prod(param_shapes)) if param_shapes else 0
 
-    print("\nInput parameters:")
-    for name in registry.get_input_names(config['analysis_type']):
-        arr = input_data.get(name)
-        label = registry.get_param_label(name, use_symbol=False)
-        if arr is None:
-            status = "computed during run"
+    print("\nInput fields:")
+    for name in registry.get_input_names(config["analysis_type"]):
+        arr = input_data[name]
+        if arr.dtype == object:
+            example = arr[0] if arr.size else ""
+            status = f"{arr.shape[0]} values, sample={example}"
+        elif arr.dtype == bool:
+            status = f"{arr.shape[0]} values, unique={sorted(set(arr.tolist()))}"
         else:
-            status = f"{arr.shape[0]} values, min={np.nanmin(arr):.3g}, max={np.nanmax(arr):.3g}"
-        print(f"  {label:20s}: {status}")
+            arr_float = np.asarray(arr, dtype=float)
+            if arr_float.size > 0 and np.all(np.isnan(arr_float)):
+                status = f"{arr.shape[0]} values, all=nan"
+            else:
+                status = f"{arr.shape[0]} values, min={np.nanmin(arr_float):.4g}, max={np.nanmax(arr_float):.4g}"
+        print(f"  {name:35s}: {status}")
 
     print(f"\nTotal parameter combinations: {n_combinations:,}")
-    print("=" * 60 + "\n")
+    print("=" * 72 + "\n")
 
 
 def generate_output_path(
@@ -431,7 +292,8 @@ def generate_output_path(
 ) -> Tuple[Path, str]:
     """Create output folder and filename."""
     if timestamp is None:
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        # Include milliseconds to avoid collisions when multiple analyses start within the same second.
+        timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{int((time.time() % 1) * 1000):03d}"
 
     output_dir = Path(base_dir) / f"{timestamp}_{analysis_method}_{analysis_type}"
     if not dry_run:
@@ -467,7 +329,7 @@ def latest_h5(outputs_dir: Path) -> Path | None:
     return h5s[0] if h5s else None
 
 
-def resolve_h5_inputs(spec: PathLike | List[PathLike], root: Path) -> Tuple[List[Path], Path | None]:
+def resolve_h5_inputs(spec: Union[str, Path] | List[Union[str, Path]], root: Path) -> Tuple[List[Path], Path | None]:
     """
     Resolve 'files' spec into a deduped, ordered list of .h5 paths.
     Returns (files, latest_folder_if_used_else_None).
@@ -684,34 +546,27 @@ def h5_to_df_core(
 
 
 # ============================================================================
-# MULTISPECIES HELPERS (merged from multispecies_io_functions.py)
+# MULTISPECIES HELPERS
 # ============================================================================
 
-_MS_SUPPORTED_ANALYSIS_TYPE = "multispecies"
-_MS_DD_STARTUP_METHODS = {"none", "T-seeded_old", "lump_old", "T-seeded", "lump"}
+_MS_SPECIES_INPUT_NAME_MAP = {
+    "f_0": "f_{species}_0",
+    "tau_p": "tau_p_{species}",
+    "lambda_decay": "lambda_decay_{species}",
+    "tau_ifc": "tau_ifc_{species}",
+    "tau_ofc": "tau_ofc_{species}",
+    "N_ofc_0": "N_ofc_0_{species}",
+    "N_ifc_0": "N_ifc_0_{species}",
+    "N_stor_0": "N_stor_0_{species}",
+    "N_stor_min": "N_stor_min_{species}",
+    "Ndot_max": "Ndot_max_{species}",
+    "inject_from_storage": "inject_from_storage_{species}",
+    "injection_control": "injection_control_{species}",
+    "enable_plasma_channel": "enable_plasma_channel_{species}",
+}
 
 
-def _ms_auto_parallel_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
-    cpu = os.cpu_count() or 2
-    n_jobs = config.get("n_jobs")
-    if n_jobs is None:
-        n_jobs = max(1, cpu - 1)
-
-    chunk_size = config.get("chunk_size")
-    if chunk_size is None:
-        chunk_size = max(64, 4 * n_jobs)
-
-    batch_size = config.get("batch_size")
-    if batch_size is None:
-        batch_size = max(128, 8 * n_jobs)
-
-    config["n_jobs"] = int(n_jobs)
-    config["chunk_size"] = int(chunk_size)
-    config["batch_size"] = int(batch_size)
-    return config
-
-
-def _ms_parse_float(value: Any) -> float:
+def _parse_float(value: Any) -> float:
     if isinstance(value, (int, float, np.floating, np.integer)):
         return float(value)
     if isinstance(value, str):
@@ -726,7 +581,7 @@ def _ms_parse_float(value: Any) -> float:
     raise ValueError(f"Cannot parse float from {value!r}")
 
 
-def _ms_parse_bool(value: Any) -> bool:
+def _parse_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, np.integer)):
@@ -740,7 +595,7 @@ def _ms_parse_bool(value: Any) -> bool:
     raise ValueError(f"Cannot parse bool from {value!r}")
 
 
-def _ms_parse_str(value: Any) -> str:
+def _parse_str(value: Any) -> str:
     if isinstance(value, bool):
         return "on" if value else "off"
     if isinstance(value, str):
@@ -748,28 +603,128 @@ def _ms_parse_str(value: Any) -> str:
     return str(value)
 
 
-def _ms_normalize_dd_startup_method(value: Any) -> str:
-    if value is None:
-        return "none"
-    raw = _ms_parse_str(value).strip()
-    if raw == "":
-        return "none"
+_CUSTOM_INJECTION_AST_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.BoolOp,
+    ast.Compare,
+    ast.IfExp,
+    ast.Call,
+    ast.Load,
+    ast.Name,
+    ast.Constant,
+    ast.Add,
+    ast.Sub,
+    ast.Mult,
+    ast.Div,
+    ast.Pow,
+    ast.Mod,
+    ast.UAdd,
+    ast.USub,
+    ast.And,
+    ast.Or,
+    ast.Not,
+    ast.Eq,
+    ast.NotEq,
+    ast.Lt,
+    ast.LtE,
+    ast.Gt,
+    ast.GtE,
+)
 
-    token = raw.lower().replace("_", "").replace("-", "")
-    alias_map = {
-        "none": "none",
-        "tseededold": "T-seeded_old",
-        "lumpold": "lump_old",
-        "tseeded": "T-seeded",
-        "lump": "lump",
-    }
-    if token not in alias_map:
-        allowed = ", ".join(sorted(_MS_DD_STARTUP_METHODS))
-        raise ValueError(f"Invalid dd_startup_method={value!r}. Allowed values: {allowed}")
-    return alias_map[token]
+_CUSTOM_INJECTION_FUNCTION_IMPL = {
+    "abs": abs,
+    "min": min,
+    "max": max,
+}
+for _fname in CUSTOM_INJECTION_ALLOWED_FUNCTIONS:
+    if _fname not in _CUSTOM_INJECTION_FUNCTION_IMPL:
+        raise ValueError(
+            f"tags_registry.custom_injection.allowed_functions contains unsupported function {_fname!r}"
+        )
 
 
-def _ms_parse_targets(value: Any) -> List[Dict[str, Any]]:
+def _normalize_injection_mode_token(value: Any) -> str:
+    return _parse_str(value).strip().lower().replace("-", "_")
+
+
+def _build_custom_injection_allowed_names(species: str) -> set[str]:
+    allowed_names = set(CUSTOM_INJECTION_ALLOWED_VARIABLES)
+    for tmpl in CUSTOM_INJECTION_STATE_TEMPLATES:
+        for sp in SPECIES:
+            allowed_names.add(tmpl.format(species=sp))
+    for tmpl in CUSTOM_INJECTION_PARAM_TEMPLATES:
+        allowed_names.add(tmpl.format(species=species))
+    for fn_name in CUSTOM_INJECTION_ALLOWED_FUNCTIONS:
+        allowed_names.add(fn_name)
+    return allowed_names
+
+
+def _compile_custom_injection_code(expr: str, *, species: str) -> Any:
+    text = str(expr).strip()
+    if text == "":
+        raise ValueError(
+            f"Empty injection_custom_function for species {species!r}. "
+            "Provide a valid expression."
+        )
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(
+            f"Invalid injection_custom_function syntax for species {species!r}: {exc.msg}"
+        ) from exc
+
+    allowed_names = _build_custom_injection_allowed_names(species)
+    for node in ast.walk(tree):
+        if not isinstance(node, _CUSTOM_INJECTION_AST_NODES):
+            raise ValueError(
+                f"Unsupported syntax in injection_custom_function for species {species!r}: "
+                f"{type(node).__name__}"
+            )
+        if isinstance(node, ast.Name):
+            if node.id not in allowed_names:
+                raise ValueError(
+                    f"Unexpected variable {node.id!r} in injection_custom_function for species {species!r}. "
+                    "Allowed variable templates are configured in registry/tags_registry.yaml."
+                )
+        if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name) or node.func.id not in CUSTOM_INJECTION_ALLOWED_FUNCTIONS:
+                raise ValueError(
+                    f"Unsupported function call in injection_custom_function for species {species!r}. "
+                    f"Allowed functions: {sorted(CUSTOM_INJECTION_ALLOWED_FUNCTIONS)}"
+                )
+            if node.keywords:
+                raise ValueError(
+                    f"Keyword arguments are not supported in injection_custom_function for species {species!r}"
+                )
+
+    return compile(tree, f"<injection_custom_function_{species}>", "eval")
+
+
+class CompiledInjectionExpression:
+    """Picklable callable wrapper for YAML-defined custom injection expressions."""
+
+    def __init__(self, expression: str, species: str):
+        self.expression = str(expression)
+        self.species = str(species)
+        self._code = _compile_custom_injection_code(self.expression, species=self.species)
+
+    def __call__(self, context: Mapping[str, Any]) -> float:
+        env = {name: _CUSTOM_INJECTION_FUNCTION_IMPL[name] for name in CUSTOM_INJECTION_ALLOWED_FUNCTIONS}
+        env.update(dict(context))
+        return float(eval(self._code, {"__builtins__": {}}, env))
+
+    def __getstate__(self) -> Dict[str, str]:
+        return {"expression": self.expression, "species": self.species}
+
+    def __setstate__(self, state: Mapping[str, Any]) -> None:
+        self.expression = str(state["expression"])
+        self.species = str(state["species"])
+        self._code = _compile_custom_injection_code(self.expression, species=self.species)
+
+
+def _parse_targets(value: Any) -> List[Dict[str, Any]]:
     if value is None:
         return []
     if not isinstance(value, (list, tuple)):
@@ -783,115 +738,50 @@ def _ms_parse_targets(value: Any) -> List[Dict[str, Any]]:
         sp = item.get("target_specie", None)
         if sp is None:
             raise ValueError(f"targets[{i}] must define 'target_specie'")
-        sp = _ms_parse_str(sp)
+        sp = _parse_str(sp)
         if sp not in allowed_species:
             raise ValueError(f"targets[{i}]['target_specie'] must be one of {sorted(allowed_species)}")
 
-        target_entry: Dict[str, Any] = {"target_specie": sp}
-        frac = item.get("target_fraction_in_plasma", None)
-        if frac is not None:
-            target_entry["target_fraction_in_plasma"] = float(_ms_parse_float(frac))
-        inv_ifc = item.get("target_inventory_ifc", None)
-        if inv_ifc is not None:
-            target_entry["target_inventory_ifc"] = float(_ms_parse_float(inv_ifc))
-        inv_ofc = item.get("target_inventory_ofc", None)
-        if inv_ofc is not None:
-            target_entry["target_inventory_ofc"] = float(_ms_parse_float(inv_ofc))
-        inv_st = item.get("target_inventory_storage", None)
-        if inv_st is not None:
-            target_entry["target_inventory_storage"] = float(_ms_parse_float(inv_st))
-
-        has_metric = any(
-            k in target_entry
-            for k in (
-                "target_fraction_in_plasma",
-                "target_inventory_ifc",
-                "target_inventory_ofc",
-                "target_inventory_storage",
+        metric_raw = item.get("metric", None)
+        if metric_raw is None:
+            raise ValueError(
+                f"targets[{i}] must define canonical fields "
+                "'metric' and 'value' (legacy target_* keys are no longer supported)"
             )
-        )
-        if has_metric:
-            parsed.append(target_entry)
+        metric = _parse_str(metric_raw).strip().lower()
+        if metric not in {"fraction", "ifc", "ofc", "stor"}:
+            raise ValueError(
+                f"targets[{i}]['metric'] must be one of ['fraction', 'ifc', 'ofc', 'stor'], "
+                f"got {metric!r}"
+            )
+        if "value" not in item:
+            raise ValueError(f"targets[{i}] must define 'value'")
+
+        target_entry: Dict[str, Any] = {
+            "target_specie": sp,
+            "metric": metric,
+            "value": float(_parse_float(item["value"])),
+        }
+        if "stop_on_target" in item:
+            target_entry["stop_on_target"] = bool(_parse_bool(item["stop_on_target"]))
+        if "use_for_control" in item:
+            target_entry["use_for_control"] = bool(_parse_bool(item["use_for_control"]))
+        parsed.append(target_entry)
 
     return parsed
 
 
-def _load_multispecies_config(yaml_path: Path) -> Dict[str, Any]:
-    with open(yaml_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    if not isinstance(config, dict):
-        raise ValueError(f"Config must be a mapping, got {type(config)!r}")
-
-    for field in ("analysis_type", "method"):
-        if field not in config:
-            raise ValueError(f"Missing required field in config: {field}")
-
-    analysis_type = _normalize_analysis_type(config["analysis_type"])
-    config["analysis_type"] = analysis_type
-    if analysis_type != _MS_SUPPORTED_ANALYSIS_TYPE:
-        raise ValueError(f"multispecies model supports only analysis_type='{_MS_SUPPORTED_ANALYSIS_TYPE}'")
-    if config["method"] != "parametric":
-        raise ValueError("multispecies model supports only method='parametric'")
-
-    defaults = {
-        "vector_length": 200,
-        "max_simulation_time": 10 * 365 * 24 * 3600,
-        "targets": [{"target_specie": "T", "target_fraction_in_plasma": 0.5}],
-        "enforce_constant_total_density": True,
-        "allow_negative_auto_injection": False,
-        "auto_injection_use_storage_limits": False,
-        "route_the3_ch3_to_he4": False,
-        "dd_startup_method": "none",
-        "verbose": False,
-        "output_dir": "outputs",
-        "filter": None,
-    }
-    for key, default in defaults.items():
-        config.setdefault(key, default)
-    config.setdefault("n_jobs", None)
-    config.setdefault("chunk_size", None)
-    config.setdefault("batch_size", None)
-
-    config["vector_length"] = int(round(_ms_parse_float(config["vector_length"])))
-    config["max_simulation_time"] = float(_ms_parse_float(config["max_simulation_time"]))
-    config["dd_startup_method"] = _ms_normalize_dd_startup_method(config.get("dd_startup_method"))
-    config["targets"] = _ms_parse_targets(config["targets"])
-
-    dd_method = config["dd_startup_method"]
-    if dd_method in {"T-seeded_old", "T-seeded"}:
-        config["targets"] = [{"target_specie": "T", "target_fraction_in_plasma": 0.5}]
-    elif dd_method in {"lump_old", "lump"}:
-        storage_targets = [t for t in config["targets"] if "target_inventory_storage" in t]
-        if not storage_targets:
-            raise ValueError(
-                "dd_startup_method 'lump'/'lump_old' requires at least one target with "
-                "'target_inventory_storage' in config.targets"
-            )
-        config["targets"] = storage_targets
-
-    for key in (
-        "enforce_constant_total_density",
-        "allow_negative_auto_injection",
-        "auto_injection_use_storage_limits",
-        "route_the3_ch3_to_he4",
-    ):
-        config[key] = _ms_parse_bool(config[key])
-
-    return _ms_auto_parallel_defaults(config)
-
-
-def _ms_values_from_definition(name: str, definition: Dict[str, Any], dtype: str) -> np.ndarray:
+def _values_from_definition(name: str, definition: Dict[str, Any], dtype: str) -> np.ndarray:
     kind = definition.get("type", "scalar")
     points = int(definition.get("points", 1))
     if points < 1:
         raise ValueError(f"'points' must be >= 1 for '{name}'")
 
     parser = {
-        "float": _ms_parse_float,
-        "int": lambda x: int(round(_ms_parse_float(x))),
-        "bool": _ms_parse_bool,
-        "str": _ms_parse_str,
+        "float": _parse_float,
+        "int": lambda x: int(round(_parse_float(x))),
+        "bool": _parse_bool,
+        "str": _parse_str,
     }[dtype]
 
     if kind == "scalar":
@@ -913,8 +803,8 @@ def _ms_values_from_definition(name: str, definition: Dict[str, Any], dtype: str
     if kind == "linear":
         if "min" not in definition or "max" not in definition:
             raise ValueError(f"Linear parameter '{name}' must have min/max")
-        vmin = _ms_parse_float(definition["min"])
-        vmax = _ms_parse_float(definition["max"])
+        vmin = _parse_float(definition["min"])
+        vmax = _parse_float(definition["max"])
         if points == 1:
             return np.array([(vmin + vmax) / 2.0], dtype=float)
         return np.linspace(vmin, vmax, points, dtype=float)
@@ -922,8 +812,8 @@ def _ms_values_from_definition(name: str, definition: Dict[str, Any], dtype: str
     if kind == "normal":
         if "mean" not in definition:
             raise ValueError(f"Normal parameter '{name}' must have mean")
-        mean = _ms_parse_float(definition["mean"])
-        std = _ms_parse_float(definition.get("std", 1.0))
+        mean = _parse_float(definition["mean"])
+        std = _parse_float(definition.get("std", 1.0))
         if points == 1:
             return np.array([mean], dtype=float)
         percentiles = np.linspace(0.0, 1.0, points + 2)[1:-1]
@@ -932,138 +822,226 @@ def _ms_values_from_definition(name: str, definition: Dict[str, Any], dtype: str
     raise ValueError(f"Unknown parameter type '{kind}' for '{name}'")
 
 
-def _ms_coerce_param_definition(raw_value: Any, field_name: str) -> Dict[str, Any]:
-    if isinstance(raw_value, dict):
-        return raw_value
-    return {"type": "scalar", "value": raw_value, "description": f"Auto-coerced scalar from '{field_name}'"}
+def _normalize_species_name(raw_species: Any) -> str:
+    token = str(raw_species).strip()
+    key = token.replace("_", "").replace("-", "").lower()
+    if key not in SPECIES_ALIASES:
+        raise ValueError(f"Unknown species '{raw_species}'. Allowed values: {list(SPECIES)}")
+    return SPECIES_ALIASES[key]
 
 
-def _ms_canonical_species_name(raw_species: Any) -> str:
-    if not isinstance(raw_species, str):
-        raise ValueError(f"Species key must be a string, got {type(raw_species)!r}")
-    normalized = raw_species.strip().replace("_", "").replace("-", "").lower()
-    aliases = {"d": "D", "t": "T", "he3": "He3", "he4": "He4"}
-    if normalized not in aliases:
-        raise ValueError(f"Unknown species '{raw_species}'. Expected one of: {', '.join(SPECIES)}")
-    return aliases[normalized]
+def _resolve_species_template(short_name: str) -> Optional[str]:
+    token = str(short_name).strip()
+    return _MS_SPECIES_INPUT_NAME_MAP.get(token)
 
 
-def _ms_detect_suffix_species(base_name: str) -> Optional[str]:
-    for sp in SPECIES:
-        if base_name.endswith(f"_{sp}"):
-            return sp
-    return None
+def _parse_species_params_block(
+    species_params: Any,
+) -> Dict[str, Dict[str, Any]]:
+    if species_params is None:
+        return {}
+    if not isinstance(species_params, Mapping):
+        raise ValueError("parameters.species_params must be a mapping keyed by species")
 
+    expanded: Dict[str, Dict[str, Any]] = {}
 
-def _ms_is_species_fraction_key(raw_param_name: str) -> bool:
-    name = raw_param_name.strip().replace("-", "_").lower()
-    return name in {"f0", "f_0", "f_init", "initial_fraction", "fraction_0"}
+    for raw_species, species_definitions in species_params.items():
+        species = _normalize_species_name(raw_species)
+        if not isinstance(species_definitions, Mapping):
+            raise ValueError(f"parameters.species_params.{species} must be a mapping")
 
+        for raw_field_name, definition in species_definitions.items():
+            short_name = str(raw_field_name).strip()
 
-def _ms_flatten_parameter_definitions(params_cfg: Dict[str, Any]) -> List[Tuple[str, Dict[str, Any]]]:
-    entries: List[Tuple[str, Dict[str, Any]]] = []
+            if short_name == "injection_control":
+                if not isinstance(definition, Mapping):
+                    raise ValueError(
+                        f"parameters.species_params.{species}.injection_control must be a mapping "
+                        "(for example {mode: custom, function: \"max(0.0, N_ifc / tau_ifc)\"})"
+                    )
 
-    for field_name, definition in params_cfg.items():
-        if field_name == "species_params":
-            if not isinstance(definition, dict):
-                raise ValueError("'species_params' must be a mapping from species to parameter mappings")
-            for raw_sp, sp_params in definition.items():
-                sp = _ms_canonical_species_name(raw_sp)
-                if not isinstance(sp_params, dict):
-                    raise ValueError(f"'species_params.{raw_sp}' must be a parameter mapping")
-                for raw_param_name, raw_param_def in sp_params.items():
-                    param_def = _ms_coerce_param_definition(raw_param_def, f"species_params.{raw_sp}.{raw_param_name}")
-                    if _ms_is_species_fraction_key(raw_param_name):
-                        entries.append((f"f_{sp}_0_field", param_def))
-                        continue
-                    base_name = raw_param_name[:-6] if raw_param_name.endswith("_field") else raw_param_name
-                    suffix_species = _ms_detect_suffix_species(base_name)
-                    if suffix_species is None:
-                        canonical_base = f"{base_name}_{sp}"
+                if "mode" not in definition:
+                    raise ValueError(
+                        f"parameters.species_params.{species}.injection_control must define 'mode'"
+                    )
+
+                mode_raw = definition["mode"]
+                if isinstance(mode_raw, Mapping):
+                    mode_def = dict(mode_raw)
+                else:
+                    mode_def = {"type": "scalar", "value": mode_raw}
+
+                mode_values = _values_from_definition(f"injection_mode_{species}", mode_def, "str")
+                mode_names = []
+                for raw_mode in mode_values:
+                    mode_name = _normalize_injection_mode_token(raw_mode)
+                    if mode_name not in INJECTION_MODES:
+                        raise ValueError(
+                            f"Invalid injection_control.mode for species {species!r}: {raw_mode!r}. "
+                            f"Allowed modes: {list(INJECTION_MODES)}"
+                        )
+                    mode_names.append(mode_name)
+
+                needs_function = any(mode_name == "custom" for mode_name in mode_names)
+                has_function = "function" in definition
+                if needs_function and not has_function:
+                    raise ValueError(
+                        f"parameters.species_params.{species}.injection_control requires 'function' "
+                        "when mode is custom"
+                    )
+                if has_function and not needs_function:
+                    raise ValueError(
+                        f"parameters.species_params.{species}.injection_control.function is only valid "
+                        "when mode includes custom"
+                    )
+
+                mode_field_name = f"injection_mode_{species}_field"
+                if mode_field_name in expanded:
+                    raise ValueError(
+                        f"Parameter 'injection_mode_{species}' is defined multiple times in species_params"
+                    )
+                if len(mode_names) == 1:
+                    expanded[mode_field_name] = {"type": "scalar", "value": mode_names[0]}
+                else:
+                    expanded[mode_field_name] = {"type": "vector", "values": mode_names}
+
+                if has_function:
+                    function_raw = definition["function"]
+                    if isinstance(function_raw, Mapping):
+                        function_def = dict(function_raw)
                     else:
-                        if suffix_species != sp:
-                            raise ValueError(
-                                f"Species mismatch for '{raw_param_name}' inside species_params.{raw_sp}: "
-                                f"suffix species is {suffix_species}"
-                            )
-                        canonical_base = base_name
-                    entries.append((f"{canonical_base}_field", param_def))
-            continue
+                        function_def = {"type": "scalar", "value": function_raw}
 
-        if field_name in {"initial_fractions", "fractions"}:
-            if not isinstance(definition, dict):
-                raise ValueError(f"'{field_name}' must be a mapping from species to fraction definitions")
-            for raw_sp, raw_fraction_def in definition.items():
-                sp = _ms_canonical_species_name(raw_sp)
-                frac_def = _ms_coerce_param_definition(raw_fraction_def, f"{field_name}.{raw_sp}")
-                entries.append((f"f_{sp}_0_field", frac_def))
-            continue
+                    function_field_name = f"injection_custom_function_{species}_field"
+                    if function_field_name in expanded:
+                        raise ValueError(
+                            f"Parameter 'injection_custom_function_{species}' is defined multiple times in species_params"
+                        )
+                    expanded[function_field_name] = function_def
+                continue
 
-        entries.append((field_name, _ms_coerce_param_definition(definition, field_name)))
+            canonical_template = _resolve_species_template(short_name)
+            if canonical_template is None:
+                allowed = sorted(list(_MS_SPECIES_INPUT_NAME_MAP.keys()))
+                raise ValueError(
+                    f"Unsupported species parameter '{short_name}' for '{species}'. "
+                    f"Allowed keys: {allowed}"
+                )
 
-    return entries
+            canonical_name = canonical_template.format(species=species)
+            field_name = f"{canonical_name}_field"
+            if field_name in expanded:
+                raise ValueError(
+                    f"Parameter '{canonical_name}' is defined multiple times in species_params"
+                )
+            if not isinstance(definition, Mapping):
+                raise ValueError(
+                    f"parameters.species_params.{species}.{short_name} must be a mapping "
+                    "(e.g. {type: scalar, value: ...})"
+                )
+            expanded[field_name] = dict(definition)
+
+    return expanded
 
 
-def _load_multispecies_params(yaml_path: Path, analysis_type: Optional[str] = None) -> Dict[str, Any]:
-    registry = get_multispecies_registry()
+def _register_parameter_definition(
+    result: Dict[str, Any],
+    registry: Any,
+    field_name: str,
+    definition: Any,
+) -> None:
+    if not isinstance(definition, Mapping):
+        raise ValueError(
+            f"Parameter '{field_name}' must be a mapping "
+            "(e.g. {type: scalar, value: ...})"
+        )
 
+    if not field_name.endswith("_field"):
+        raise ValueError(
+            f"Invalid parameter key '{field_name}'. Use '<parameter_name>_field'."
+        )
+    name = field_name[:-6]
+
+    if name not in PARAMETER_SCHEMA:
+        raise ValueError(f"Unknown parameter '{name}' in YAML")
+    if name in result:
+        prev_field = result[name][2].get("field", name)
+        raise ValueError(f"Parameter '{name}' is defined multiple times ('{prev_field}' and '{field_name}')")
+
+    dtype = registry.get_dtype(name)
+    source_unit = definition.get("unit")
+    if source_unit is None:
+        source_unit = registry.get_unit(name)
+
+    values = _values_from_definition(name, dict(definition), dtype)
+
+    if dtype == "float":
+        converted, final_unit = registry.convert_to_default_unit(
+            name,
+            np.asarray(values, dtype=float),
+            source_unit,
+        )
+    elif dtype == "int":
+        converted, final_unit = registry.convert_to_default_unit(
+            name,
+            np.asarray(values, dtype=float),
+            source_unit,
+        )
+        converted = np.rint(converted).astype(int)
+    elif dtype == "bool":
+        converted, final_unit = np.asarray(values, dtype=bool), source_unit
+    else:
+        converted, final_unit = np.asarray(values, dtype=object), source_unit
+
+    result[name] = (
+        converted,
+        final_unit,
+        {
+            "name": name,
+            "field": field_name,
+            "type": definition.get("type", "scalar"),
+            "description": definition.get("description", ""),
+            "dtype": dtype,
+        },
+    )
+
+
+def _load_registry_params(yaml_path: Path, analysis_type: Optional[str] = None) -> Dict[str, Any]:
     if not yaml_path.exists():
         raise FileNotFoundError(f"Parameter file not found: {yaml_path}")
+    if yaml_path.suffix.lower() not in {".yaml", ".yml"}:
+        raise ValueError(f"Parameter file must be YAML (.yaml/.yml), got: {yaml_path.suffix}")
 
-    with open(yaml_path, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
+    cfg = read_yaml_file(yaml_path, default={})
     if "parameters" not in cfg or not isinstance(cfg["parameters"], dict):
         raise ValueError("YAML file must contain top-level 'parameters' mapping")
 
     params_cfg = cfg["parameters"]
     result: Dict[str, Any] = {}
 
-    for field_name, definition in _ms_flatten_parameter_definitions(params_cfg):
-        base = field_name[:-6] if field_name.endswith("_field") else field_name
-        name = registry.resolve_alias(base)
+    top_level_items: Dict[str, Any] = {}
+    for field_name, definition in params_cfg.items():
+        if str(field_name) == "species_params":
+            continue
+        top_level_items[str(field_name)] = definition
 
-        if name not in MULTISPECIES_PARAMETER_SCHEMA:
-            raise ValueError(f"Unknown parameter '{base}' in YAML")
-        if name in result:
-            prev_field = result[name][2].get("field", name)
-            raise ValueError(f"Parameter '{name}' is defined multiple times ('{prev_field}' and '{field_name}')")
+    expanded_species_items = _parse_species_params_block(
+        params_cfg.get("species_params", None)
+    )
 
-        dtype = registry.get_dtype(name)
-        source_unit = definition.get("unit")
-        if source_unit is None:
-            source_unit = registry.get_unit(name)
+    for field_name, definition in top_level_items.items():
+        _register_parameter_definition(result, registry, field_name, definition)
+    for field_name, definition in expanded_species_items.items():
+        _register_parameter_definition(result, registry, field_name, definition)
 
-        values = _ms_values_from_definition(name, definition, dtype)
-
-        if dtype == "float":
-            converted, final_unit = registry.convert_to_default_unit(name, np.asarray(values, dtype=float), source_unit)
-        elif dtype == "int":
-            converted, final_unit = registry.convert_to_default_unit(name, np.asarray(values, dtype=float), source_unit)
-            converted = np.rint(converted).astype(int)
-        elif dtype == "bool":
-            converted, final_unit = np.asarray(values, dtype=bool), source_unit
-        else:
-            converted, final_unit = np.asarray(values, dtype=object), source_unit
-
-        result[name] = (
-            converted,
-            final_unit,
-            {
-                "name": name,
-                "field": field_name,
-                "type": definition.get("type", "scalar"),
-                "description": definition.get("description", ""),
-                "dtype": dtype,
-            },
-        )
+    if analysis_type is None:
+        return result
 
     for name in registry.get_input_names(analysis_type):
         if name in result:
             continue
         default = registry.get_default(name)
         dtype = registry.get_dtype(name)
-        if default is None and registry.is_required(name):
-            raise ValueError(f"Missing required parameter: {name}")
         if dtype == "float":
             arr = np.array([float(default)], dtype=float)
         elif dtype == "int":
@@ -1080,7 +1058,7 @@ def _load_multispecies_params(yaml_path: Path, analysis_type: Optional[str] = No
                 "name": name,
                 "field": f"{name}_field",
                 "type": "default",
-                "description": MULTISPECIES_PARAMETER_SCHEMA.get(name, {}).get("description", ""),
+                "description": PARAMETER_SCHEMA.get(name, {}).get("description", ""),
                 "dtype": dtype,
             },
         )
@@ -1088,80 +1066,70 @@ def _load_multispecies_params(yaml_path: Path, analysis_type: Optional[str] = No
     return result
 
 
-def _ms_apply_config_controlled_inputs(input_data: Dict[str, np.ndarray], config: Optional[Dict[str, Any]]) -> None:
+def _apply_config_controlled_inputs(input_data: Dict[str, np.ndarray], config: Optional[Dict[str, Any]]) -> None:
     if not config:
         return
     input_data["vector_length"] = np.array([int(config["vector_length"])], dtype=int)
     input_data["max_simulation_time"] = np.array([float(config["max_simulation_time"])], dtype=float)
-    for key in (
-        "enforce_constant_total_density",
-        "allow_negative_auto_injection",
-        "auto_injection_use_storage_limits",
-    ):
-        input_data[key] = np.array([bool(config[key])], dtype=bool)
 
 
-def _prepare_multispecies_input_data(
-    param_fields: Dict[str, Any],
-    analysis_type: str,
-    config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, np.ndarray]:
-    registry = get_multispecies_registry()
-    if _normalize_analysis_type(analysis_type) != _MS_SUPPORTED_ANALYSIS_TYPE:
-        raise ValueError(f"Unknown analysis type: {analysis_type}")
+def _validate_and_normalize_input_data(input_data: Dict[str, np.ndarray]) -> None:
+    for sp in SPECIES:
+        enable_key = f"enable_plasma_channel_{sp}"
+        if enable_key not in input_data:
+            raise ValueError(f"Missing required multispecies input: {enable_key}")
+        input_data[enable_key] = np.asarray(input_data[enable_key], dtype=bool).reshape(-1)
 
-    input_data: Dict[str, np.ndarray] = {}
-    for name in registry.get_input_names(analysis_type):
-        values = param_fields[name][0]
-        arr = np.asarray(values)
-        if arr.ndim == 0:
-            arr = arr.reshape(1)
-        input_data[name] = arr
+        inject_key = f"inject_from_storage_{sp}"
+        if inject_key not in input_data:
+            raise ValueError(f"Missing required multispecies input: {inject_key}")
+        input_data[inject_key] = np.asarray(input_data[inject_key], dtype=bool).reshape(-1)
 
-    _ms_apply_config_controlled_inputs(input_data, config)
-    return input_data
+        for key_prefix in ("f", "tau_p", "lambda_decay", "tau_ifc", "tau_ofc", "N_stor_min", "Ndot_max"):
+            species_key = f"{key_prefix}_{sp}_0" if key_prefix == "f" else f"{key_prefix}_{sp}"
+            if species_key not in input_data:
+                raise ValueError(f"Missing required multispecies input: {species_key}")
+            input_data[species_key] = np.asarray(input_data[species_key], dtype=float).reshape(-1)
 
+        mode_key = f"injection_mode_{sp}"
+        if mode_key not in input_data:
+            raise ValueError(f"Missing required multispecies input: {mode_key}")
+        mode_raw_arr = np.asarray(input_data[mode_key], dtype=object).reshape(-1)
+        mode_norm_arr = np.empty(mode_raw_arr.size, dtype=object)
+        for j, raw_mode in enumerate(mode_raw_arr):
+            mode_name = _normalize_injection_mode_token(raw_mode)
+            if mode_name not in INJECTION_MODES:
+                raise ValueError(
+                    f"Invalid {mode_key}[{j}]={raw_mode!r}. "
+                    f"Allowed modes: {list(INJECTION_MODES)}"
+                )
+            mode_norm_arr[j] = mode_name
+        input_data[mode_key] = mode_norm_arr
 
-def _print_multispecies_configuration(
-    config: Dict[str, Any],
-    param_fields: Dict[str, Any],
-    input_data: Dict[str, np.ndarray],
-    param_file: Path,
-    config_file: Path,
-) -> None:
-    registry = get_multispecies_registry()
+        fn_key = f"injection_custom_function_{sp}"
+        if fn_key not in input_data:
+            raise ValueError(f"Missing required multispecies input: {fn_key}")
+        fn_raw_arr = np.asarray(input_data[fn_key], dtype=object).reshape(-1)
+        fn_compiled_arr = np.empty(fn_raw_arr.size, dtype=object)
+        for j, raw_expr in enumerate(fn_raw_arr):
+            if callable(raw_expr):
+                fn_compiled_arr[j] = raw_expr
+            else:
+                try:
+                    fn_compiled_arr[j] = CompiledInjectionExpression(_parse_str(raw_expr), sp)
+                except Exception as exc:
+                    raise ValueError(
+                        f"Invalid {fn_key}[{j}] for species {sp!r}: {exc}"
+                    ) from exc
+        input_data[fn_key] = fn_compiled_arr
+        for key_prefix in ("N_ofc_0", "N_ifc_0", "N_stor_0"):
+            species_key = f"{key_prefix}_{sp}"
+            if species_key not in input_data:
+                raise ValueError(f"Missing required multispecies input: {species_key}")
+            input_data[species_key] = np.asarray(input_data[species_key], dtype=float).reshape(-1)
 
-    print("\n" + "=" * 72)
-    print("DDSTARTUP MULTISPECIES CONFIGURATION")
-    print("=" * 72)
-    print(f"Parameter file: {param_file}")
-    print(f"Config file:    {config_file}")
-    print(f"Analysis type:  {config['analysis_type']}")
-    print(f"Method:         {config['method']}")
-    print(f"dd_startup_method: {config.get('dd_startup_method', 'none')}")
-    print(f"Vector length:  {config['vector_length']}")
-    print(f"Max sim time:   {config['max_simulation_time'] / (365.25 * 24 * 3600):.2f} years")
-    print(f"Targets:        {config.get('targets', []) if config.get('targets') else 'none'}")
-    print(f"n_jobs:         {config['n_jobs']}")
-    print(f"chunk_size:     {config['chunk_size']}")
-    print(f"batch_size:     {config['batch_size']}")
-    if config.get("filter"):
-        print(f"Filter:         {config['filter']}")
-
-    param_shapes = [arr.shape[0] for arr in input_data.values()]
-    n_combinations = int(np.prod(param_shapes)) if param_shapes else 0
-
-    print("\nInput fields:")
-    for name in registry.get_input_names(config["analysis_type"]):
-        arr = input_data[name]
-        if arr.dtype == object:
-            example = arr[0] if arr.size else ""
-            status = f"{arr.shape[0]} values, sample={example}"
-        elif arr.dtype == bool:
-            status = f"{arr.shape[0]} values, unique={sorted(set(arr.tolist()))}"
-        else:
-            status = f"{arr.shape[0]} values, min={np.nanmin(arr):.4g}, max={np.nanmax(arr):.4g}"
-        print(f"  {name:35s}: {status}")
-
-    print(f"\nTotal parameter combinations: {n_combinations:,}")
-    print("=" * 72 + "\n")
+    for key in ("V_plasma", "T_i", "n_tot", "TBR_DT", "TBR_DDn", "max_simulation_time"):
+        if key in input_data:
+            input_data[key] = np.asarray(input_data[key], dtype=float).reshape(-1)
+    if "vector_length" in input_data:
+        input_data["vector_length"] = np.asarray(input_data["vector_length"], dtype=int).reshape(-1)

@@ -107,23 +107,27 @@ class TestReactivities:
         for calc_DHe3, expected_DHe3_val in zip(DHe3_results, expected_DHe3):
             assert np.isclose(calc_DHe3, expected_DHe3_val, rtol=0.1), "Vectorized DHe3 reactivity deviates from expected values"
 
-    def test_placeholder_channels_return_zeros(self):
-        """Placeholder TT/He3He3/THe3 channels should be structurally available and zero-valued."""
+    def test_CF88_channels_return_positive_values(self):
+        """CF88 TT/He3He3/THe3 channels should return positive non-zero values."""
         T_scalar = 20.0
         T_array = np.array([10.0, 20.0, 50.0], dtype=float)
 
         # Scalar behavior
-        assert float(sigmav_TT_placeholder(T_scalar)) == 0.0
-        assert float(sigmav_He3He3_placeholder(T_scalar)) == 0.0
-        t1_s, t2_s, t3_s = sigmav_THe3_placeholder(T_scalar)
-        assert float(t1_s) == 0.0
-        assert float(t2_s) == 0.0
-        assert float(t3_s) == 0.0
+        tt_s = float(sigmav_TT_CF88(T_scalar))
+        he3he3_s = float(sigmav_He3He3_CF88(T_scalar))
+        t1_s, t2_s, t3_s = sigmav_THe3_CF88(T_scalar)
+        
+        assert tt_s > 0.0, "TT CF88 reactivity should be positive"
+        assert he3he3_s > 0.0, "He3He3 CF88 reactivity should be positive"
+        assert float(t1_s) > 0.0, "THe3 channel 1 CF88 reactivity should be positive"
+        assert float(t2_s) > 0.0, "THe3 channel 2 CF88 reactivity should be positive"
+        # Note: channel 3 (He5p) is a placeholder and returns zero
+        assert float(t3_s) == 0.0, "THe3 channel 3 (He5p) should be zero (placeholder)"
 
         # Vectorized behavior
-        tt_arr = np.asarray(sigmav_TT_placeholder(T_array), dtype=float)
-        he3he3_arr = np.asarray(sigmav_He3He3_placeholder(T_array), dtype=float)
-        t1_arr, t2_arr, t3_arr = sigmav_THe3_placeholder(T_array)
+        tt_arr = np.asarray(sigmav_TT_CF88(T_array), dtype=float)
+        he3he3_arr = np.asarray(sigmav_He3He3_CF88(T_array), dtype=float)
+        t1_arr, t2_arr, t3_arr = sigmav_THe3_CF88(T_array)
         t1_arr = np.asarray(t1_arr, dtype=float)
         t2_arr = np.asarray(t2_arr, dtype=float)
         t3_arr = np.asarray(t3_arr, dtype=float)
@@ -134,11 +138,11 @@ class TestReactivities:
         assert t2_arr.shape == T_array.shape
         assert t3_arr.shape == T_array.shape
 
-        assert np.all(tt_arr == 0.0)
-        assert np.all(he3he3_arr == 0.0)
-        assert np.all(t1_arr == 0.0)
-        assert np.all(t2_arr == 0.0)
-        assert np.all(t3_arr == 0.0)
+        assert np.all(tt_arr > 0.0), "TT CF88 reactivity array should be positive"
+        assert np.all(he3he3_arr > 0.0), "He3He3 CF88 reactivity array should be positive"
+        assert np.all(t1_arr > 0.0), "THe3 channel 1 CF88 reactivity array should be positive"
+        assert np.all(t2_arr > 0.0), "THe3 channel 2 CF88 reactivity array should be positive"
+        assert np.all(t3_arr == 0.0), "THe3 channel 3 (He5p) array should be zero (placeholder)"
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

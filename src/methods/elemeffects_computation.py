@@ -24,56 +24,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
 
-# Module-level wrapper functions for pickling
-def _evaluate_lump_point(params_dict: Dict[str, float], config: Dict[str, Any], reactivity_lookup: Dict = None) -> Dict[str, Any]:
-    """Evaluate lump model at a single point with optional reactivity lookup."""
-    from src.methods.parametric_computation import _compute_lump
-    
-    # Use the exact parameter order expected by _compute_lump
-    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'tau_p_He3', 'P_aux', 'P_aux_DT_eq',
-                   'TBR_DT', 'TBR_DDn', 'I_target', 'eta_th', 'capacity_factor', 'price_of_electricity']
-    
-    param_vector = [params_dict[name] for name in param_names]
-    temp_arrays = [np.array([val]) for val in param_vector]
-    param_shapes = np.array([1] * len(param_names), dtype=np.int64)
-    
-    result = _compute_lump(
-        linear_index=0,
-        input_arrays_flat=temp_arrays,
-        param_shapes_array=param_shapes,
-        reactivity_lookup=reactivity_lookup
-    )
-    return result
-
-
-def _evaluate_tseeded_point(params_dict: Dict[str, float], config: Dict[str, Any], reactivity_lookup: Dict = None) -> Dict[str, Any]:
-    """Evaluate T-seeded model at a single point with optional reactivity lookup."""
-    from src.methods.parametric_computation import _compute_tseeded
-    
-    # Use the exact parameter order expected by _compute_tseeded
-    # Note: T-seeded does NOT use tau_p_He3 or I_target (those are for lump model)
-    param_names = ['V_plasma', 'T_i', 'n_tot', 'tau_p_T', 'P_aux', 'P_aux_DT_eq',
-                   'TBR_DT', 'TBR_DDn', 'tau_ifc', 'tau_ofc', 'eta_th', 'capacity_factor', 'price_of_electricity']
-    
-    param_vector = [params_dict[name] for name in param_names]
-    temp_arrays = [np.array([val]) for val in param_vector]
-    param_shapes = np.array([1] * len(param_names), dtype=np.int64)
-    
-    # Get simulation parameters from config
-    max_simulation_time = config.get('max_simulation_time', 315360000)  # Default: 10 years
-    vector_length = config.get('vector_length', 200)
-    
-    result = _compute_tseeded(
-        linear_index=0,
-        input_arrays_flat=temp_arrays,
-        param_shapes_array=param_shapes,
-        max_simulation_time=max_simulation_time,
-        vector_length=vector_length,
-        reactivity_lookup=reactivity_lookup
-    )
-    return result
-
-
 def generate_trajectory(
     param_ranges: Dict[str, Tuple[float, float]],
     perturbation_perc = 0.7,
@@ -148,7 +98,7 @@ def compute_trajectory_worker(
             - points: List of parameter vectors in trajectory
             - param_order: Order of parameter perturbations
             - param_names: List of all parameter names
-            - analysis_type: 'lump' or 'T_seeded'
+            - analysis_type: 'dd_startup_lump' or 'dd_startup_tseeded'
             - config: Configuration dictionary with simulation parameters
             - param_ranges: Dictionary of parameter ranges {name: (min, max)}
             - reactivity_lookup: Pre-computed reactivity table
@@ -157,12 +107,8 @@ def compute_trajectory_worker(
         Dictionary with elementary effects for each parameter
     """
     traj_id, points, param_order, param_names, analysis_type, config, param_ranges, reactivity_lookup = args
-    
-    # Select appropriate evaluation function
-    if analysis_type == 'lump':
-        evaluate_func = _evaluate_lump_point
-    else:  # T_seeded
-        evaluate_func = _evaluate_tseeded_point
+
+    from src.methods.parametric_computation import _compute_combination
     
     # Dictionary to store elementary effects for this trajectory
     ee_dict = {name: [] for name in param_names}
@@ -170,11 +116,32 @@ def compute_trajectory_worker(
     # Convert numpy array to parameter dictionary
     def point_to_dict(point_array):
         return {name: float(val) for name, val in zip(param_names, point_array)}
+
+    def evaluate_point(point_array: np.ndarray) -> Dict[str, Any]:
+        from src.registry.parameter_registry import ALLOWED_ANALYSIS_TYPES
+        if analysis_type not in ALLOWED_ANALYSIS_TYPES:
+            raise ValueError(f"Unsupported analysis_type for point evaluation: {analysis_type}")
+        params_dict = point_to_dict(point_array)
+        input_arrays_by_name = {
+            name: np.array([float(value)], dtype=float)
+            for name, value in params_dict.items()
+        }
+        input_arrays_flat = [input_arrays_by_name[name] for name in param_names]
+        shapes = np.ones(len(param_names), dtype=np.int64)
+        return _compute_combination(
+            linear_index=0,
+            input_arrays_flat=input_arrays_flat,
+            param_names=param_names,
+            param_shapes_array=shapes,
+            output_vector_length=int(config["vector_length"]),
+            targets=config.get("targets"),
+            reactivity_lookup=reactivity_lookup,
+            analysis_type=analysis_type,
+        )
     
     # Evaluate base point
     try:
-        base_params_dict = point_to_dict(points[0])
-        base_result = evaluate_func(base_params_dict, config, reactivity_lookup)
+        base_result = evaluate_point(points[0])
         # Check if computation was successful
         if not base_result.get('sol_success', False):
             return {'success': False, 'traj_id': traj_id, 'error': 'Base point failed'}
@@ -192,8 +159,7 @@ def compute_trajectory_worker(
         param_idx = param_names.index(param_name)
         
         try:
-            perturbed_params_dict = point_to_dict(perturbed_point)
-            perturbed_result = evaluate_func(perturbed_params_dict, config, reactivity_lookup)
+            perturbed_result = evaluate_point(perturbed_point)
             # Check if computation was successful
             if not perturbed_result.get('sol_success', False):
                 continue
@@ -242,7 +208,7 @@ def run_elementary_effects_analysis(
             - num_trajectories: Number of trajectories (default: 10)
             - p_levels: Grid levels (default: 4)
             - n_jobs: Number of parallel workers
-            - analysis_type: 'T_seeded' or 'lump'
+            - analysis_type: 'dd_startup_tseeded' or 'dd_startup_lump'
             - output_metrics: List of metrics to analyze (e.g., ['t_startup', 'unrealized_gains'])
         verbose: Whether to print progress
         
@@ -257,7 +223,8 @@ def run_elementary_effects_analysis(
     output_metrics = config.get('output_metrics', ['t_startup', 'unrealized_gains'])
     
     # Validate analysis type
-    if analysis_type not in ['lump', 'T_seeded']:
+    from src.registry.parameter_registry import ALLOWED_ANALYSIS_TYPES
+    if analysis_type not in ALLOWED_ANALYSIS_TYPES:
         raise ValueError(f"Unknown analysis type: {analysis_type}")
     
     # Prepare parameter names and ranges
@@ -309,12 +276,10 @@ def run_elementary_effects_analysis(
             all_Ti_values.add(point[T_i_idx])
     
     unique_Ti = np.array(sorted(all_Ti_values))
-    include_DHe3 = (analysis_type == 'lump')
-    reactivity_table = ReactivityLookupTable(unique_Ti, include_DHe3=include_DHe3)
-    reactivity_lookup = reactivity_table.to_dict()
+    reactivity_lookup = ReactivityLookupTable(unique_Ti).to_dict()
     
     if verbose:
-        print(f"✅ Reactivity lookup table created ({len(reactivity_table)} temperatures)")
+        print(f"✅ Reactivity lookup table created ({len(unique_Ti)} temperatures)")
     # ================================================================
     
     # Generate all trajectories

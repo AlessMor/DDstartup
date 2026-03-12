@@ -8,8 +8,8 @@ from scipy.interpolate import griddata
 # Keep Plotly import local so environments without it still work for other plots
 import plotly.graph_objects as go
 
-from src.postprocessing.plot_utils_functions import select_scalar_numeric
-from src.utils.parameter_registry import get_registry
+from src.postprocessing.plot_utils_functions import get_param_label, select_scalar_numeric
+from src.registry import parameter_registry as registry_api
 
 
 def _numeric_scalar_cols(df: pd.DataFrame, cols: Iterable[str]) -> list[str]:
@@ -55,7 +55,7 @@ def generate_surface3d_plot(
     Saves an HTML (interactive) plot.
     """
     settings = surface3d_settings or {}
-    reg = registry or get_registry()
+    reg = registry or registry_api
 
     # Resolve axes
     axes_cfg = settings.get("axes")
@@ -161,9 +161,13 @@ def generate_surface3d_plot(
 
     # Labels - use renderer='plotly' for HTML-compatible formatting
     def _label(name: str) -> str:
-        return reg.get_param_label(name, use_symbol=True, renderer='plotly') if reg else name
+        return get_param_label(name, registry=reg, use_symbol=True, renderer='plotly') if reg else name
 
-    t_label = reg.get_param_label(target, unit=target_unit, use_symbol=True, renderer='plotly') if reg else target
+    t_label = (
+        get_param_label(target, registry=reg, unit=target_unit, use_symbol=True, renderer='plotly')
+        if reg
+        else target
+    )
     axis_labels = [_label(ax) for ax in axes]
 
     colorscale = settings.get("colorscale", "Viridis")
