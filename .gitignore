@@ -195,3 +195,8 @@ outputs/
 *.pkl
 *.html
 *.csv
+
+# Agent knowledge: keep durable entry points trackable; ignore working/archive areas.
+.agents/tasks/
+.agents/memory/candidates/
+.agents/memory/archive/
