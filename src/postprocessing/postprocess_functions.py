@@ -562,7 +562,7 @@ def load_h5_to_df(
 
     # Column wish-list (keep vectors intact for future plots)
     wanted = (
-        set(schema_inputs)
+        set(input_params)
         | set(targets)
         | additional_base_deps
         | filter_deps
@@ -574,7 +574,7 @@ def load_h5_to_df(
     read_cols = sorted(wanted & file_keys)
     if verbose:
         print(f"   Columns selected to read: {len(read_cols)} "
-              f"(inputs={len(schema_inputs)}, targets={len(set(targets))}, "
+              f"(inputs={len(input_params)}, targets={len(set(targets))}, "
               f"deps={len((additional_base_deps|filter_deps) & file_keys)})")
 
     # Helpers for additional + filters (chunk-local)
@@ -802,12 +802,11 @@ def load_h5_to_df(
             df_chunk.loc[~df_chunk["sol_success"].astype(bool), "_is_failed"] = True
 
         # Keep only needed columns (chunk-local)
-        if keep == "slim":
-            if cached_order is None:
-                cached_order = _order_columns(df_chunk)
-            ordered_cols = [c for c in cached_order if c in df_chunk.columns]
-            df_chunk = df_chunk.loc[:, ordered_cols]
-            inner = {k: v for k, v in inner.items() if k in df_chunk.columns}
+        if cached_order is None:
+            cached_order = _order_columns(df_chunk)
+        ordered_cols = [c for c in cached_order if c in df_chunk.columns]
+        df_chunk = df_chunk.loc[:, ordered_cols]
+        inner = {k: v for k, v in inner.items() if k in df_chunk.columns}
 
         df_chunk.attrs["_inner_dims"] = inner
         for k, v in inner.items():
