@@ -519,7 +519,6 @@ verbose: false
         power["E_aux_startup"],
         power["E_aux_DT_eq"],
         0.35,
-        0.75,
         6.944444e-8,
     )
 

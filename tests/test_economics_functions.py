@@ -24,7 +24,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=1e8,         # 100 MJ aux
             E_aux_DT_eq=5e7,      # 50 MJ aux
             eta_th=0.4,
-            capacity_factor=0.8,
             price_of_electricity=5e-8  # $/J
         )
         
@@ -39,7 +38,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=0.0,  # No auxiliary
             E_aux_DT_eq=0.0,
             eta_th=0.4,
-            capacity_factor=0.8,
             price_of_electricity=5e-8
         )
         
@@ -47,9 +45,8 @@ class TestEconomicsCorrectness:
         assert result['Q_DT_eq'] == np.inf
     
     def test_net_electrical_energy(self):
-        """Net electrical = capacity_factor * (eta_th * fusion - aux)."""
+        """Net electrical = eta_th * fusion - aux (full-power energies, no capacity factor)."""
         eta_th = 0.4
-        capacity_factor = 0.8
         E_fusion = 1e10  # 10 GJ
         E_aux = 1e9      # 1 GJ
         
@@ -59,11 +56,10 @@ class TestEconomicsCorrectness:
             E_aux_DD=E_aux,
             E_aux_DT_eq=E_aux,
             eta_th=eta_th,
-            capacity_factor=capacity_factor,
             price_of_electricity=5e-8
         )
         
-        expected_net = capacity_factor * (eta_th * E_fusion - E_aux)
+        expected_net = eta_th * E_fusion - E_aux
         assert result['E_e_net_DD'] == pytest.approx(expected_net)
         assert result['E_e_net_DT_eq'] == pytest.approx(expected_net)
     
@@ -75,7 +71,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=5e8,
             E_aux_DT_eq=2e8,
             eta_th=0.35,
-            capacity_factor=0.75,
             price_of_electricity=1e-7
         )
         
@@ -93,7 +88,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=1e9,
             E_aux_DT_eq=5e8,
             eta_th=0.4,
-            capacity_factor=0.8,
             price_of_electricity=price
         )
         
@@ -108,7 +102,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=1e9,
             E_aux_DT_eq=1e9,
             eta_th=0.3,
-            capacity_factor=1.0,
             price_of_electricity=1e-7
         )
         
@@ -118,7 +111,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=1e9,
             E_aux_DT_eq=1e9,
             eta_th=0.6,  # Double efficiency
-            capacity_factor=1.0,
             price_of_electricity=1e-7
         )
         
@@ -128,30 +120,21 @@ class TestEconomicsCorrectness:
         # At eta_th=0.6: 0.6*1e10 - 1e9 = 5e9 (2.5x increase, not 2x due to aux term)
         assert double_eff_result['E_e_net_DD'] > base_result['E_e_net_DD']
     
-    def test_capacity_factor_scaling(self):
-        """Net energy should scale linearly with capacity factor."""
-        result_half = compute_economics_from_energies(
-            E_fusion_DD=1e10,
-            E_fusion_DT_eq=1e10,
-            E_aux_DD=1e9,
+    def test_unrealized_profits_not_scaled_by_capacity_factor(self):
+        """Energies are full-power integrals, so profits use them unscaled."""
+        price = 1e-7
+        result = compute_economics_from_energies(
+            E_fusion_DD=2e10,
+            E_fusion_DT_eq=1e11,
+            E_aux_DD=2e9,
             E_aux_DT_eq=1e9,
             eta_th=0.4,
-            capacity_factor=0.5,
-            price_of_electricity=1e-7
+            price_of_electricity=price
         )
         
-        result_full = compute_economics_from_energies(
-            E_fusion_DD=1e10,
-            E_fusion_DT_eq=1e10,
-            E_aux_DD=1e9,
-            E_aux_DT_eq=1e9,
-            eta_th=0.4,
-            capacity_factor=1.0,
-            price_of_electricity=1e-7
-        )
-        
-        assert result_full['E_e_net_DD'] == pytest.approx(2 * result_half['E_e_net_DD'])
-        assert result_full['unrealized_profits'] == pytest.approx(2 * result_half['unrealized_profits'])
+        expected_E_lost = (0.4 * 1e11 - 1e9) - (0.4 * 2e10 - 2e9)
+        assert result['E_lost'] == pytest.approx(expected_E_lost)
+        assert result['unrealized_profits'] == pytest.approx(expected_E_lost * price)
     
     def test_realistic_scenario(self):
         """Test with realistic DEMO-like parameters."""
@@ -176,7 +159,6 @@ class TestEconomicsCorrectness:
             E_aux_DD=E_aux_DD,
             E_aux_DT_eq=E_aux_DT_eq,
             eta_th=0.35,
-            capacity_factor=0.8,
             price_of_electricity=6.944e-8  # $0.25/kWh
         )
         

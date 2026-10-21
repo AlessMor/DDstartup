@@ -329,13 +329,12 @@ def _compute_combination(
                 from src.economics.economics_functions import compute_economics_from_energies
                 from src.registry.parameter_registry import get_default as _get_default
                 eta_th = float(combo.get("eta_th", _get_default("eta_th")))
-                capacity_factor = float(combo.get("capacity_factor", _get_default("capacity_factor")))
                 price_el = float(combo.get("price_of_electricity", _get_default("price_of_electricity")))
 
                 econ = compute_economics_from_energies(
                     E_fusion_startup, E_fusion_DT_eq,
                     E_aux_startup, E_aux_DT_eq,
-                    eta_th, capacity_factor, price_el,
+                    eta_th, price_el,
                 )
                 result["Q_DD"] = float(econ["Q_DD"])
                 result["Q_DT_eq"] = float(econ["Q_DT_eq"])

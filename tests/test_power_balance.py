@@ -466,11 +466,10 @@ def _run_power_steps(**kwargs):
     E_fusion_DT_eq = float(fusion["P_DT_eq"]) * duration if np.isfinite(duration) else np.nan
     E_aux_DT_eq = float(P_aux_DT_eq_scalar) * duration if np.isfinite(duration) else np.nan
     eta_th = float(kwargs.get("eta_th", np.nan))
-    capacity_factor = float(kwargs.get("capacity_factor", np.nan))
     price_of_electricity = float(kwargs.get("price_of_electricity", np.nan))
     if (
         np.all(np.isfinite([E_fusion_startup, E_fusion_DT_eq, E_aux_startup, E_aux_DT_eq]))
-        and np.all(np.isfinite([eta_th, capacity_factor, price_of_electricity]))
+        and np.all(np.isfinite([eta_th, price_of_electricity]))
     ):
         econ = compute_economics_from_energies(
             float(E_fusion_startup),
@@ -478,7 +477,6 @@ def _run_power_steps(**kwargs):
             max(float(E_aux_startup), 1e-30),
             max(float(E_aux_DT_eq), 1e-30),
             eta_th,
-            capacity_factor,
             price_of_electricity,
         )
         Q_DD = float(econ["Q_DD"])

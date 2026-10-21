@@ -13,11 +13,14 @@ from numba import njit
 def compute_economics_from_energies(
     E_fusion_DD, E_fusion_DT_eq, 
     E_aux_DD, E_aux_DT_eq,
-    eta_th, capacity_factor, price_of_electricity
+    eta_th, price_of_electricity
 ):
     """
     Compute economic metrics from energy values (unified for lump and T-seeded).
-    
+
+    All energies are integrated over full-power operating time (the solver
+    clock), so no capacity factor is applied: it would double-count downtime.
+
     This function computes:
     - Q factors for DD and DT equilibrium
     - Net electrical energies
@@ -30,7 +33,6 @@ def compute_economics_from_energies(
         E_aux_DD: Auxiliary energy during DD startup (J)
         E_aux_DT_eq: Auxiliary energy for DT equilibrium (J)
         eta_th: Thermal conversion efficiency (0-1)
-        capacity_factor: Plant capacity factor (0-1)
         price_of_electricity: Electricity price ($/J)
         
     Returns:
@@ -47,8 +49,8 @@ def compute_economics_from_energies(
     Q_DT_eq = E_fusion_DT_eq / E_aux_DT_eq if E_aux_DT_eq > 0 else np.inf
     
     # Net electrical energy
-    E_e_net_DD = capacity_factor * (eta_th * E_fusion_DD - E_aux_DD)
-    E_e_net_DT_eq = capacity_factor * (eta_th * E_fusion_DT_eq - E_aux_DT_eq)
+    E_e_net_DD = eta_th * E_fusion_DD - E_aux_DD
+    E_e_net_DT_eq = eta_th * E_fusion_DT_eq - E_aux_DT_eq
     
     # Energy lost and profits
     E_lost = E_e_net_DT_eq - E_e_net_DD

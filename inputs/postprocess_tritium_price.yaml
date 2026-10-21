@@ -38,7 +38,7 @@ files:
 # Note: For LaTeX symbols, just use the string directly (no Python r"..." syntax needed in YAML)
 additional_variables:
   K_el:
-    expr: unrealized_profits / (capacity_factor*(eta_th*P_DT_eq - P_aux_DT_eq))
+    expr: unrealized_profits / (eta_th*P_DT_eq - P_aux_DT_eq)
     unit: "$/W"            # optional override
     symbol: "$K_{el}$"     # LaTeX symbol for plots
 
@@ -78,12 +78,12 @@ additional_variables:
     symbol: "$t_{min}$"
 
   N_T_burn_eq: #tritium burning rate
-    expr: capacity_factor * (P_DT_eq/2.819832048E-12)
+    expr: P_DT_eq/2.819832048E-12
     unit: "1/s"
     symbol: "$\\dot{N}_T$"
 
   I_st_eq:
-    expr: 5.0082676595352744e-27*(-N_T_burn_eq*(TBR_DT-1)*t_min - N_T_burn_eq * TBR_DT * tau_ifc**2/(tau_ofc-tau_ifc)*(1-exp(-t_min/tau_ifc)) + N_T_burn_eq * TBR_DT * tau_ofc**2/(tau_ofc-tau_ifc)*(1-exp(-t_min/tau_ofc)) + N_T_burn_eq * (1-TBE)/(TBE)*(1-exp(-t_min/tau_ifc)))
+    expr: 5.0082676595352744e-27*(-N_T_burn_eq*(TBR_DT-1)*t_min - N_T_burn_eq * TBR_DT * tau_ifc**2/(tau_ofc-tau_ifc)*(1-exp(-t_min/tau_ifc)) + N_T_burn_eq * TBR_DT * tau_ofc**2/(tau_ofc-tau_ifc)*(1-exp(-t_min/tau_ofc)) + N_T_burn_eq * (1-TBE)/(TBE) * tau_ifc * (1-exp(-t_min/tau_ifc)))
     unit: "kg"
     symbol: "$I_{st}$"
 

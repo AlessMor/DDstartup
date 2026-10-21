@@ -37,7 +37,7 @@ files:
 # Note: For LaTeX symbols, just use the string directly (no Python r"..." syntax needed in YAML)
 additional_variables:
   K_el:
-    expr: unrealized_profits / (capacity_factor*(eta_th*P_DT_eq - P_aux_DT_eq))
+    expr: unrealized_profits / (eta_th*P_DT_eq - P_aux_DT_eq)
     unit: "$/W"            # optional override
     symbol: "$K_{el}$"     # LaTeX symbol for plots
 
