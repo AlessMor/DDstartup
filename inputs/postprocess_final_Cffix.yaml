@@ -26,8 +26,8 @@
 #       and outputs are saved back to the same folder automatically.
 
 files: 
-- 'paper_parametric_T_seeded'  # Folder name (relative to outputs/)
-- 'paper_parametric_lump'  # Default: process files in the latest folder
+- 'paper_T_seeded'  # Folder name (relative to outputs/)
+- 'paper_lump'  # Default: process files in the latest folder
 
 # Alternative examples:
 # files: "20251008_081422_parametric_T_seeded"  # Specific folder
@@ -207,7 +207,7 @@ plots:
   # ==========================================================================
   # PAIRWISE CONTOUR PLOT SETTINGS - ENHANCED WITH MACHINE LEARNING
   # ==========================================================================
-  ml_pairwise: true      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
+  ml_pairwise: false      # ML-based pairwise partial dependence plots - DISABLED (memory intensive)
   
   ml_pairwise_settings:
     pairs: all          # Pairs to plot: 'auto' (top 5x5), 'all', or list like [[0,1], [2,3]]

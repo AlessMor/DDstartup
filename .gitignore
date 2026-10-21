@@ -191,7 +191,7 @@ outputs/**/*.html
 # (Optional) Ignore all .h5 and .html files anywhere in the repo
 *.h5
 *.html
-outputs/
+# outputs/
 *.pkl
 *.html
 *.csv
