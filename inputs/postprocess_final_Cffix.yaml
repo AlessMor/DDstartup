@@ -43,6 +43,16 @@ files:
 # These can be used as target variables or in plots.
 # Note: For LaTeX symbols, just use the string directly (no Python r"..." syntax needed in YAML)
 additional_variables:
+  tau_ifc:
+    expr: ""  # Legacy HDF5 field, before species-specific residence times.
+    unit: "s"
+    symbol: '$\tau_{\mathrm{ifc}}$'
+
+  tau_ofc:
+    expr: ""
+    unit: "s"
+    symbol: '$\tau_{\mathrm{ofc}}$'
+
   I_target:
     expr: ""  # Load the legacy target inventory directly from HDF5.
     unit: "kg"
