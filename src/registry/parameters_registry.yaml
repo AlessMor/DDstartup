@@ -1,6 +1,7 @@
 params:
 # REACTOR PARAMETERS
   V_plasma:
+    symbol: '$V_{\mathrm{plasma}}$'
     dtype: float
     unit: m^3
     default: 2000.0
@@ -10,6 +11,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   T_i:
+    symbol: '$T_i$'
     dtype: float
     unit: keV
     default: 20.0
@@ -19,6 +21,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   n_tot:
+    symbol: '$n_{\mathrm{tot}}$'
     dtype: float
     unit: 1/m^3
     default: 7.0e+19
@@ -28,6 +31,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   TBR_DT:
+    symbol: '$\mathrm{TBR}_{\mathrm{DT}}$'
     dtype: float
     unit: dimensionless
     default: 1.3
@@ -37,6 +41,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   TBR_DDn:
+    symbol: '$\mathrm{TBR}_{\mathrm{DD}_n}$'
     dtype: float
     unit: dimensionless
     default: 1.0
@@ -46,6 +51,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   P_aux:
+    symbol: '$P_{\mathrm{aux}}$'
     dtype: float
     unit: W
     default: .nan
@@ -57,6 +63,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   P_aux_DT_eq:
+    symbol: '$P_{\mathrm{aux,DT}}$'
     dtype: float
     unit: W
     default: .nan
@@ -68,6 +75,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   eta_th:
+    symbol: '$\eta_{\mathrm{th}}$'
     dtype: float
     unit: dimensionless
     default: 0.35
@@ -77,6 +85,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   capacity_factor:
+    symbol: '$C_{\mathrm{f}}$'
     dtype: float
     unit: dimensionless
     default: 0.75
@@ -86,6 +95,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   price_of_electricity:
+    symbol: '$C_{\mathrm{kWh}}$'
     dtype: float
     unit: 1/J
     default: 6.944444e-08
@@ -104,6 +114,7 @@ params:
     - dd_startup_lump
     - dd_startup_tseeded
   tau_p_{species}:
+    symbol: '$\tau_{p,\mathrm{{species}}}$'
     dtype: float
     unit: s
     description: Particle confinement time for {species}
@@ -208,6 +219,7 @@ params:
     - dd_startup_lump
     - dd_startup_tseeded
   n_{species}:
+    symbol: '$n_{\mathrm{{species}}}$'
     dtype: float
     unit: 1/m^3
     description: Plasma density of {species}
@@ -273,6 +285,7 @@ params:
     - dd_startup_tseeded
 # OUTPUT METRICS
   t_startup:
+    symbol: '$t_{\mathrm{startup}}$'
     dtype: float
     unit: s
     description: Time required to reach startup criterion
@@ -306,6 +319,7 @@ params:
     - dd_startup_lump
     - dd_startup_tseeded
   P_DDn:
+    symbol: '$P_{\mathrm{DD}_n}$'
     dtype: float
     unit: W
     description: DDn fusion power profile
@@ -315,6 +329,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   P_DDp:
+    symbol: '$P_{\mathrm{DD}_p}$'
     dtype: float
     unit: W
     description: DDp fusion power profile
@@ -324,6 +339,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   P_DT:
+    symbol: '$P_{\mathrm{DT}}$'
     dtype: float
     unit: W
     description: DT fusion power profile
@@ -396,6 +412,7 @@ params:
     - dd_startup_lump
     - dd_startup_tseeded
   P_DT_eq:
+    symbol: '$P_{\mathrm{DT,eq}}$'
     dtype: float
     unit: W
     description: DT-equilibrium reference fusion power
@@ -404,6 +421,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   TBE:
+    symbol: '$\mathrm{TBE}$'
     dtype: float
     unit: dimensionless
     description: Tritium breeding efficiency profile
@@ -412,6 +430,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   Q_DD:
+    symbol: '$Q_{\mathrm{DD}}$'
     dtype: float
     unit: dimensionless
     description: DD startup gain factor
@@ -420,6 +439,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   Q_DT_eq:
+    symbol: '$Q_{\mathrm{DT,eq}}$'
     dtype: float
     unit: dimensionless
     description: DT-equilibrium gain factor
@@ -428,6 +448,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   E_lost:
+    symbol: '$E_{\mathrm{lost}}$'
     dtype: float
     unit: J
     description: Net electrical energy lost during startup versus DT-equilibrium reference
@@ -436,6 +457,7 @@ params:
     - dd_startup_tseeded
     - multispecies
   unrealized_profits:
+    symbol: '$G$'
     dtype: float
     unit: USD
     description: Startup unrealized profits relative to DT-equilibrium reference

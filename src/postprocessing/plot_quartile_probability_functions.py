@@ -30,7 +30,7 @@ except Exception:
     pass
 
 # ---- robust “per Joule” detector (matches 1/J, J^-1, per J, etc.; case-insensitive) ----
-PER_J_RE = re.compile(r'(?i)(?:^|[^a-z])(?:1\s*/\s*j|j\s*(?:\^|-)?\s*-?1|per\s*j)(?:$|[^a-z])')
+PER_J_RE = re.compile(r'(?i)(?:^|[^a-z])(?:1?\s*/\s*j|j\s*(?:\^|-)?\s*-?1|per\s*j)(?:$|[^a-z])')
 
 
 def _norm_unit(u: str) -> str:
@@ -212,20 +212,6 @@ def quartile_probability_plot(
         x_all,  unit_override = _x_transform(param, unit0, label0, x_all)
         x_succ, _             = _x_transform(param, unit0, label0, x_succ)
 
-        # FORCE $/kWh for electricity price (by name/label/unit/value scale)
-        name_l  = (param or "").lower()
-        label_l = (label0 or "").lower()
-        unit_l  = _norm_unit(unit0)
-        looks_kwh   = ("kwh" in name_l) or ("kwh" in label_l)
-        looks_per_j = PER_J_RE.search(unit_l) is not None or ("[1/j]" in label_l.replace(" ", "")) or ("1/j" in unit_l)
-        must_be_kwh = looks_kwh or looks_per_j or (name_l in FORCE_KWH_NAMES)
-        if must_be_kwh:
-            need_scale = looks_per_j or (np.nanmedian(np.abs(x_all)) < 1e-3 and np.nanmax(np.abs(x_all)) < 1.0)
-            if need_scale:
-                x_all  = x_all  * 3.6e6
-                x_succ = x_succ * 3.6e6
-            unit_override = "$/kWh"
-
         # compute after any scaling
         finite_all = np.isfinite(x_all)
         xa = x_all[finite_all]
@@ -281,6 +267,7 @@ def quartile_probability_plot(
         # Bin failed data separately
         if include_failed_in_count and df_failed is not None and param in df_failed.columns:
             x_failed = pd.to_numeric(df_failed[param], errors="coerce").values
+            x_failed, _ = _x_transform(param, unit0, label0, x_failed)
             finite_failed = np.isfinite(x_failed)
             xf = x_failed[finite_failed]
             idx_fail = np.digitize(xf, edges, right=True) - 1
